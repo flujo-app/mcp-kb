@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ruff lints the whole checkout, tests and scripts included, with the rule set selenium-flow uses.
 
 ### Fixed
+- `resources/list` answers in milliseconds instead of ~5 seconds: pack-level files are scanned once at startup rather than on every call, which also stops the listing from freezing every other request, health probes included, while it ran.
+- Pack-level files are no longer hidden when the skills directory itself sits under a dot-directory such as `~/.cache`.
 - `list_resources` and `read_resource` are annotated read-only; unannotated, MCP's defaults advertised them as destructive.
 - `X-Skill-Pack` now scopes resources, not just tools. It filtered roots once at boot, so a pinned client could read any pack whose URI it could guess — and every URI here is guessable by design.
 - Skill names no longer collide across packs: URIs are pack-qualified, where `SkillsDirectoryProvider` keyed on the folder name and silently dropped the loser entirely.

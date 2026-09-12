@@ -8,6 +8,7 @@ of repeated in every handler.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -102,35 +103,60 @@ class PackResources:
 
     def __init__(self, base: Path, skills: list[Skill]):
         self._base = base
-        self._skill_dirs = {s.path.resolve() for s in skills}
+        self._skill_dirs = frozenset(s.path.resolve() for s in skills)
         # Derived from the skills actually loaded, so SKILL_PACKS scopes this
         # too. Reading it off disk instead would let a scoped instance serve a
         # pack whose skills it deliberately does not index.
         self._packs = {s.pack for s in skills}
+        # Scanned once. The packs are baked into the image and never change
+        # while the server runs, and walking them per request cost ~5s on every
+        # resources/list -- synchronously, so it froze the whole event loop.
+        self._files = {pack: self._scan(pack) for pack in self._packs}
 
-    def _is_resource(self, path: Path) -> bool:
+    def _in_skill(self, resolved: Path) -> bool:
+        """Whether a resolved path is a skill directory or lies inside one."""
+        return resolved in self._skill_dirs or any(
+            parent in self._skill_dirs for parent in resolved.parents
+        )
+
+    def _is_resource(self, path: Path, root: Path) -> bool:
         # Dotfiles are never material a skill references -- grafana's only
         # pack-level files are two .gitkeep placeholders, and listing them wins
-        # the pack an index row advertising nothing worth reading.
-        if any(part.startswith(".") for part in path.parts):
+        # the pack an index row advertising nothing worth reading. Checked
+        # inside the pack only: a dot higher up, as in ~/.cache/skills, is
+        # where the catalogue lives, not something it ships.
+        if any(part.startswith(".") for part in path.relative_to(root).parts):
             return False
-        resolved = path.resolve()
-        return not any(
-            resolved == d or d in resolved.parents for d in self._skill_dirs
-        )
+        return not self._in_skill(path.resolve())
+
+    def _scan(self, pack: str) -> tuple[str, ...]:
+        """Every pack-level file, walking only the directories that can hold one.
+
+        Skill and dot directories are pruned rather than walked and filtered:
+        they hold nearly every file in a pack, and none of them is pack-level.
+        """
+        root = self._base / pack
+        if not root.is_dir():
+            return ()
+        found: list[str] = []
+        for dirpath, dirnames, filenames in os.walk(root):
+            here = Path(dirpath)
+            dirnames[:] = [
+                d
+                for d in dirnames
+                if not d.startswith(".")
+                and (here / d).resolve() not in self._skill_dirs
+            ]
+            found += [
+                (here / name).relative_to(root).as_posix()
+                for name in filenames
+                if self._is_resource(here / name, root)
+            ]
+        return tuple(sorted(found))
 
     def files(self, pack: str) -> list[str]:
         """Every pack-level file, as paths relative to the pack directory."""
-        if pack not in self._packs:
-            return []
-        root = self._base / pack
-        if not root.is_dir():
-            return []
-        return sorted(
-            str(p.relative_to(root))
-            for p in root.rglob("*")
-            if p.is_file() and self._is_resource(p)
-        )
+        return list(self._files.get(pack, ()))
 
     def read(self, pack: str, rel: str) -> str | None:
         """Read one pack-level file, or None when it is absent or off-limits.
@@ -145,7 +171,7 @@ class PackResources:
         target = (root / rel).resolve()
         if not target.is_relative_to(root) or not target.is_file():
             return None
-        if not self._is_resource(target):
+        if not self._is_resource(target, root):
             return None
         return target.read_text(encoding="utf-8", errors="replace")
 

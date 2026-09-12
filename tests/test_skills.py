@@ -6,7 +6,7 @@ rather than only through the tools that call it.
 
 import pytest
 
-from kubed.skills_mcp.skills import SkillIndex, load_skills
+from kubed.skills_mcp.skills import PackResources, SkillIndex, load_skills
 
 
 @pytest.fixture
@@ -111,3 +111,40 @@ def test_read_refuses_skill_files(resources):
 def test_read_refuses_traversal(resources):
     assert resources.read("deepsource", "../flatsource/alpha/SKILL.md") is None
     assert resources.read("deepsource", "../../etc/passwd") is None
+
+
+@pytest.mark.unit
+def test_listing_never_walks_the_disk_after_startup(skills_dir, monkeypatch):
+    """The catalogue is baked into the image; walking it per request froze the
+    event loop for ~5s on every resources/list against the real packs."""
+    import os
+    import pathlib
+
+    from kubed.skills_mcp.uris import Catalogue
+
+    skills = load_skills(skills_dir)
+    resources = PackResources(skills_dir, skills)
+    catalogue = Catalogue(SkillIndex(skills), resources)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("listing walked the filesystem")
+
+    monkeypatch.setattr(os, "walk", forbidden)
+    monkeypatch.setattr(pathlib.Path, "rglob", forbidden)
+    monkeypatch.setattr(pathlib.Path, "iterdir", forbidden)
+
+    assert "shared/guide.md" in resources.files("deepsource")
+    assert any(e.uri == "skill://deepsource/_files" for e in catalogue.entries())
+
+
+@pytest.mark.unit
+def test_a_dot_directory_above_the_catalogue_hides_nothing(tmp_path):
+    """A skills root under ~/.cache is where the catalogue lives, not a dotfile."""
+    from tests.conftest import _build_tree
+
+    root = tmp_path / ".cache" / "skills"
+    root.mkdir(parents=True)
+    _build_tree(root)
+    resources = PackResources(root, load_skills(root))
+    assert "shared/guide.md" in resources.files("deepsource")
+    assert resources.read("deepsource", "shared/guide.md") == "shared guidance\n"
