@@ -37,3 +37,9 @@ path = "skills"
 # This kit factors shared material up to the repo root and references it from
 # 190 places across its skills. Without these the pack is full of dead links.
 extras = ["shared", "workflows"]
+
+[[source]]
+name = "superpowers"
+repo = "https://github.com/obra/superpowers.git"
+ref = "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
+path = "skills"

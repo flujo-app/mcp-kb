@@ -1,8 +1,9 @@
 """The skill catalogue: reading skills off disk and querying them.
 
-Pure domain logic -- nothing here imports FastMCP or knows what MCP is. The
-tools in ``tools.py`` are thin wrappers over ``SkillIndex``, which keeps the
-scoping rules in one testable place instead of repeated in every handler.
+Pure domain logic -- nothing here imports FastMCP or knows what MCP is.
+``uris.py`` wraps this into the ``skill://`` address space that both halves of
+the server project, which keeps the scoping rules in one testable place instead
+of repeated in every handler.
 """
 
 from __future__ import annotations
@@ -32,21 +33,6 @@ class Skill:
     def in_pack(self, selector: str) -> bool:
         """Match a selector against either the source or the group."""
         return selector in (self.pack, self.group)
-
-
-def discover_roots(base: Path) -> list[Path]:
-    """Find every directory that *directly contains* skill folders.
-
-    ``SkillsDirectoryProvider`` does not recurse: a root must be the parent of
-    the skill folders, not an ancestor. Sources nest differently -- n8n is
-    ``<pack>/<skill>/SKILL.md`` while grafana is
-    ``<pack>/<group>/<skill>/SKILL.md`` -- so pointing at one shared parent
-    silently yields zero skills. Walking for ``SKILL.md`` and collecting each
-    one's grandparent handles any depth without hard-coding either layout.
-    """
-    if not base.is_dir():
-        return []
-    return sorted({p.parent.parent for p in base.rglob(MAIN_FILE)})
 
 
 def _frontmatter(skill_md: Path) -> dict:
@@ -123,6 +109,11 @@ class PackResources:
         self._packs = {s.pack for s in skills}
 
     def _is_resource(self, path: Path) -> bool:
+        # Dotfiles are never material a skill references -- grafana's only
+        # pack-level files are two .gitkeep placeholders, and listing them wins
+        # the pack an index row advertising nothing worth reading.
+        if any(part.startswith(".") for part in path.parts):
+            return False
         resolved = path.resolve()
         return not any(
             resolved == d or d in resolved.parents for d in self._skill_dirs
@@ -145,8 +136,8 @@ class PackResources:
         """Read one pack-level file, or None when it is absent or off-limits.
 
         Resolves before comparing so ``../`` and symlinks cannot walk out of the
-        pack, and refuses anything inside a skill directory -- those belong to
-        ``read_skill``, which applies its own scoping.
+        pack, and refuses anything inside a skill directory -- a skill's own
+        files are served as part of that skill, which applies its own scoping.
         """
         if pack not in self._packs:
             return None

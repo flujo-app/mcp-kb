@@ -20,6 +20,9 @@ def _build_tree(root):
     (shared / "guide.md").write_text("shared guidance\n")
     (shared / "nested").mkdir(exist_ok=True)
     (shared / "nested" / "schema.json").write_text("{}\n")
+    # A dotfile, which is the only pack-level "file" grafana actually ships.
+    # It must not earn the pack an index row pointing at nothing readable.
+    (root / "flatsource" / ".gitkeep").write_text("")
     return root
 
 

@@ -10,83 +10,71 @@ time. Nothing is fetched at runtime.
 docker run -p 8000:8000 kubed/skills-mcp:latest
 ```
 
-Point a client at `http://localhost:8000/mcp` and it gets **four tools — never one per
-skill**. Skills are data behind `read_skill`, not entries in the tool list.
+## One address space
 
-| tool | returns | cost |
-| --- | --- | --- |
-| `list_packs()` | every pack and its groups, with counts | ~75 tokens |
-| `list_skills(pack)` | `name: description` for that pack or group | ~1–2k tokens |
-| `read_skill(skill, file)` | one skill's instructions, manifest, or a file | one skill |
-| `read_pack_file(pack, file)` | a file the pack ships outside any skill | one file |
-
-Each layer is cheap enough to call speculatively and narrow enough that the next one
-stays small:
+Everything this server serves is a `skill://` URI, and reading one is the only
+operation there is:
 
 ```
-list_packs()                        →  grafana (50), n8n (14), penpot (12), and grafana's 7 groups
-list_skills(pack="grafana-lgtm")    →  6 skills, ~945 tokens
-read_skill(skill="loki")            →  the instructions to follow
-read_skill(skill="loki", file="_manifest")  →  what else it ships
+skill://<pack>                      an index: every skill in a pack
+skill://<group>                     an index: every skill in a group
+skill://<pack>/<skill>              that skill's instructions
+skill://<pack>/<skill>/_manifest    what else it ships
+skill://<pack>/<skill>/<path>       one of those files
+skill://<pack>/_files               files the pack ships outside its skills
+skill://<pack>/<path>               one of those
 ```
 
-## Pack-level files
+One segment is an index, two or more is content. That is the whole grammar.
 
-The Agent Skills spec keeps a skill self-contained: references are "relative paths from
-the skill root". Some kits ignore that. Penpot's twelve skills point at `shared/*` from
-190 places, so served on their own they are a maze of dead links.
+Progressive disclosure lives in the address space rather than in a tool list, so the
+listing stays small no matter how many skills are installed:
 
-A source can declare those directories in `skills.toml`, and they are served by
-`read_pack_file` — never as skills:
-
-```toml
-extras = ["shared", "workflows"]
+```
+list                                  →  12 indexes, ~1.9 KB
+read skill://grafana-lgtm             →  6 skills, as URIs
+read skill://grafana/loki             →  the instructions to follow
 ```
 
-Nothing about a skill changes. `read_skill` still serves each skill's own directory
-completely, and the two spaces do not overlap: a skill's files are unreachable through
-`read_pack_file`, and pack files are absent from any skill's `_manifest`.
+Currently served: **90 skills** across four packs.
+
+## Resources first, tools as a mirror
+
+MCP has a primitive for material an agent reads, and it is the resource. So resources
+are the interface, and a client that speaks them sees **no tools at all**.
+
+Many clients only implement tools — n8n's MCP Client Tool is one — and to those a
+resource-only server looks empty. They get the same interface as two tools:
+
+| tool | mirrors |
+| --- | --- |
+| `list_resources()` | `resources/list` — the same `uri`/`name`/`description`/`mimeType` rows |
+| `read_resource(uri)` | `resources/read` — the same URI |
+
+Turn the mirror on with `?resources=off` on the MCP URL, or an `X-MCP-Resources: off`
+header:
+
+```
+http://skills-mcp.flow.svc.cluster.local:8000/mcp?resources=off
+```
+
+The two tools are hidden from clients that read resources, because advertising both
+shapes is two ways to ask one question. They stay callable either way.
 
 ## Filtering to one pack
 
-`pack` accepts either a source (`n8n`, `grafana`, `penpot`) or one of its groups
-(`grafana-core`, `grafana-lgtm`). That is the soft filter, chosen per call.
-
-For a **hard** scope there are two levers, and both are ceilings the model
-cannot widen past.
-
-**Per client — the `X-Skill-Pack` header.** Set it once in the client's
-connection config and that client sees one pack, whatever it asks for. This is
-how one deployment serves several single-pack agents:
+`X-Skill-Pack` pins a client to one pack or group, and it is a ceiling the model cannot
+widen past — enforced on resources and tools alike:
 
 ```
 X-Skill-Pack: penpot
 ```
 
-In n8n that is a Header Auth credential on the MCP Client Tool node — a plumbed
-constant on the node, not something the model fills in.
+Set it once in the client's connection config. In n8n that is a Header Auth credential
+on the MCP Client Tool node — a plumbed constant, not something the model fills in.
 
-**Per deployment — `SKILL_PACKS`.** Scopes the whole instance; the rest of the
-catalogue is not loaded at all:
-
-```
-SKILL_PACKS=n8n
-```
-
-They compose: the header narrows within whatever `SKILL_PACKS` already allows.
-
-## Why three tools and not resources
-
-MCP has three primitives — tools, resources and prompts. Skills map naturally onto
-resources, and `SkillsDirectoryProvider` still publishes them that way for clients that
-speak the resource half of the protocol. But many clients only implement tools — n8n's
-MCP Client Tool is one — and to those a resource-only server looks empty.
-
-FastMCP ships a generic `ResourcesAsTools` bridge for exactly that, but it is too
-expensive here: it lists three entries per skill (`SKILL.md`, `_manifest`, and a file
-template), each repeating the skill's full description. For 64 skills that is 192
-entries and **~16k tokens on every listing call** — the opposite of what skills are for.
-The three tools above are hand-rolled to give the same access for a fraction of it.
+`SKILL_PACKS` does the same per deployment; the rest of the catalogue is not loaded at
+all. They compose: the header narrows within whatever `SKILL_PACKS` allows.
 
 ## Skills as dependencies
 
@@ -94,9 +82,9 @@ The three tools above are hand-rolled to give the same access for a fraction of 
 
 ```toml
 [[source]]
-name = "n8n"
-repo = "https://github.com/n8n-io/skills.git"
-ref  = "180b8415e3b73f78828cfa01e908e67f89f2a139"
+name = "superpowers"
+repo = "https://github.com/obra/superpowers.git"
+ref  = "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
 path = "skills"
 ```
 
@@ -104,8 +92,9 @@ path = "skills"
 skill folders — not the repo root. `skills/` is gitignored; upstream markdown is never
 vendored into this repo, so a skill bump reviews as a one-line ref change.
 
-Currently served: **64 skills** from [n8n-io/skills](https://github.com/n8n-io/skills)
-and [grafana/skills](https://github.com/grafana/skills).
+A pack that factors shared material up out of its skills — penpot references `shared/*`
+from 190 places — declares those directories as `extras`, and they are served at
+`skill://<pack>/<path>` alongside the skills that cite them.
 
 Fetch them locally:
 
@@ -116,12 +105,6 @@ python scripts/fetch_skills.py --update   # repin everything to upstream HEAD
 
 The **Update Skills** workflow runs that weekly and opens a PR.
 
-## Adding a source
-
-Add a `[[source]]` block, then one `COPY` line in the Dockerfile's `skills` stage.
-A source may nest its skills at any depth — the server discovers roots by walking for
-`SKILL.md`, because `SkillsDirectoryProvider` itself does not recurse.
-
 ## Configuration
 
 | variable | default | meaning |
@@ -131,6 +114,9 @@ A source may nest its skills at any depth — the server discovers roots by walk
 | `TRANSPORT` | `http` | `http` or `stdio` |
 | `HOST` | `0.0.0.0` | bind address |
 | `PORT` | `8000` | port |
+
+Per request: `?resources=off` reveals the tool mirror, `?skills=full` enumerates every
+skill in the listing (for clients that sync skills to disk), `X-Skill-Pack` pins a pack.
 
 `GET /health` reports status, the packs served, and the skill count.
 

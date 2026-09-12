@@ -12,7 +12,10 @@ into the image; nothing is fetched at runtime.
 | `skills.toml` | the pack manifest — the source of truth for what gets served |
 | `scripts/fetch_skills.py` | clones each pinned source at build time; stdlib only |
 | `kubed/skills_mcp/skills.py` | the catalogue — `Skill`, loading, and `SkillIndex` |
-| `kubed/skills_mcp/tools.py` | the three MCP tools, and the request-scope header |
+| `kubed/skills_mcp/uris.py` | the `skill://` address space — `Catalogue`, the grammar |
+| `kubed/skills_mcp/resources.py` | the resources, and the mirror-hiding middleware |
+| `kubed/skills_mcp/tools.py` | the two mirror tools |
+| `kubed/skills_mcp/request.py` | what the current request says about itself |
 | `kubed/skills_mcp/routes.py` | plain HTTP endpoints (`/health`) |
 | `kubed/skills_mcp/server.py` | `SkillsMCP` — wiring only, no tool bodies |
 | `kubed/skills_mcp/main.py` | CLI and env parsing; the only file reading `os.environ` |
@@ -48,11 +51,11 @@ SKILLS_DIR=/tmp/skills python -m pytest -q         # 14 tests
 SKILLS_DIR=/tmp/skills skills-mcp --transport stdio
 ```
 
-Nesting depth does **not** matter. `discover_roots` walks for `SKILL.md` and
-takes each one's grandparent, so a flat source (`<pack>/<skill>/SKILL.md`, n8n)
-and a nested one (`<pack>/<group>/<skill>/SKILL.md`, grafana) both work. This is
-load-bearing: `SkillsDirectoryProvider` does not recurse, so pointing it at a
-shared ancestor yields zero skills with no error.
+Nesting depth does **not** matter. `load_skills` walks for `SKILL.md`, so a flat
+source (`<pack>/<skill>/SKILL.md`, n8n) and a nested one
+(`<pack>/<group>/<skill>/SKILL.md`, grafana) both work. The directory that
+*contains* a skill becomes its `group`, which is why grafana has seven
+selectable groups and n8n has none worth naming.
 
 Bumping existing packs is the `🧠 Update Skills` workflow — Mondays 09:00 UTC,
 or dispatch it. It repins every source to upstream HEAD and opens a PR, because
@@ -62,17 +65,20 @@ a bump is new upstream *instruction* content and deserves a read before it ships
 
 Two workflows, in this order. Neither runs on a push to main.
 
-**1. `🧬 Publish Version`** (`workflow_dispatch`) — three jobs:
+**1. `🧬 Publish Version`** (`workflow_dispatch`) — five jobs:
 
 ```
+test    → the full 3.10 → 3.14 matrix; gates everything below
 version → pins kustomization.yaml newTag, rolls CHANGELOG, commits + tags main
 image   → checks out that tag, builds and pushes kubed/skills-mcp:vX.Y.Z
-release → cuts the GitHub Release
+package → checks out that tag, builds the sdist + wheel as a GHA artifact
+release → downloads that artifact and cuts the GitHub Release
 ```
 
-Run it once with **`push: false`** first. That is a real dry run: it computes
-the next version and builds the image without pushing either. Then run with
-`push: true`.
+Run it once with **`push: false`** first. That is a real dry run: it runs the
+tests, computes the next version, and builds both the image and the package
+without pushing any of them. Then run with `push: true`. The dry run is what
+stops a successful tag from stranding on a failed build.
 
 The pin happens *before* the tag, so the tag's tree already references its own
 image. This is the only workflow that writes `newTag`, and it only ever writes a
@@ -125,11 +131,12 @@ deploy` will not work, and is not meant to.
 - **`imagePullPolicy: Always` pairs with a floating tag.** While `newTag` is
   `latest`, `IfNotPresent` pins a node to whatever layer it cached first. Once
   `publish.yml` pins a semver this is just a cheap registry check.
-- **Do not reach for `ResourcesAsTools`.** FastMCP's generic bridge lists three
-  entries per skill (`SKILL.md`, `_manifest`, a file template), each repeating
-  the full description — 192 entries and ~16k tokens per listing call for 64
-  skills, paid every time. The three hand-rolled tools exist for that reason.
-  Skills stay data behind `read_skill`; they are never tools themselves.
+- **Do not reach for `ResourcesAsTools`, or back for `SkillsDirectoryProvider`.**
+  Both enumerate every skill on every listing call — `resources/list` was 77KB
+  for this catalogue before `Catalogue` replaced it with a dozen indexes.
+  `SkillsDirectoryProvider` also keys a skill on its folder name alone, so two
+  packs shipping a `testing/` collapse into one and the loser vanishes from the
+  server entirely. Neither failure raises anything.
 
 ## Where code goes
 
@@ -140,15 +147,24 @@ closed unanswered), so each module exposes a `register(mcp, index)` that the
 server calls. Mounting sub-servers is the other option and is wrong here: it
 namespaces tool names with a prefix, and these three names are the agent's API.
 
-- **Adding a tool** → `tools.py`. Never `server.py`.
+- **Adding a tool** → `tools.py`. Never `server.py`. But think first: the tools
+  are a *mirror* of the resources, and a third tool that is not one breaks the
+  promise that drives the whole design — that a client which knows how to read
+  MCP resources already knows how to drive this server.
+- **Changing the URI grammar, or what a URI resolves to** → `uris.py`. Both
+  halves project from `Catalogue`, so a change there lands on both at once,
+  which is the point.
 - **Adding an endpoint** → `routes.py`.
 - **A pack references files outside its skills** → add them to that source's `extras`
-  in `skills.toml`. They are served by `read_pack_file`, never indexed as skills. The
-  spec says a skill is self-contained, so most sources need none — grep the SKILL.md
-  files for `shared/`-style paths before reaching for it.
-- **Changing what counts as a skill, or who may see one** → `skills.py`.
-  `SkillIndex` is the single place the request scope is enforced; a handler that
-  reimplemented that filter is how a pinned client ends up seeing another pack.
+  in `skills.toml`. They are served at `skill://<pack>/<path>` and listed under
+  `skill://<pack>/_files`, never indexed as skills. The spec says a skill is
+  self-contained, so most sources need none — grep the SKILL.md files for
+  `shared/`-style paths before reaching for it.
+- **Changing what counts as a skill, or who may see one** → `skills.py` for the
+  rule, `uris.py` for where it is applied. Every `Catalogue` method takes
+  `pinned`, so there is no method that can be called without deciding about the
+  scope — a handler that reimplemented that filter is how a pinned client ends
+  up seeing another pack.
 - **A new flag or env var** → `main.py`, which is the whole configuration
   surface. Nothing else in the package reads `os.environ`.
 
@@ -156,19 +172,30 @@ namespaces tool names with a prefix, and these three names are the agent's API.
 without an MCP client, and `tests/test_skills.py` exercises the scoping rules
 directly rather than only through the tools.
 
-## The tool surface, and why it is three tools
+## The surface, and why it is two tools
 
-Progressive disclosure, cheapest layer first. Adding packs must not add tools.
+Resources are the interface. The tools are a mirror of them and nothing else:
+`list_resources()` returns the rows `resources/list` returns, `read_resource(uri)`
+takes the URI `resources/read` takes. An agent that can drive MCP resources can
+drive this server without learning anything, which is the whole design.
 
-| tool | returns | cost |
+Progressive disclosure moved into the address space, so adding packs adds
+neither tools nor listing rows:
+
+| call | returns | cost |
 | --- | --- | --- |
-| `list_packs()` | packs and their groups, with counts | ~75 tokens |
-| `list_skills(pack)` | `name: description` for one pack or group | ~1–2k tokens |
-| `read_skill(skill, file)` | one skill's body, `_manifest`, or one file | one file |
+| list | one index per pack and per group | ~1.9 KB for 90 skills |
+| read `skill://grafana-lgtm` | that group's skills, as URIs | ~4k chars |
+| read `skill://grafana/loki` | the instructions to follow | one file |
 
-`read_skill` returns **only** what was asked for. A skill body may cite
+Reads return **only** what was asked for. A skill body may cite
 `references/FOO.md`; citing it does not fetch it. That laziness is the point —
 keep it when changing this code.
+
+A client declares it cannot read resources with `?resources=off` or
+`X-MCP-Resources: off`, and only then is the mirror listed. It stays callable
+either way: hiding a tool from a listing is presentation, refusing to run one
+would be a different and worse contract.
 
 Two ways to hard-scope, both ceilings the model cannot widen past:
 
@@ -198,7 +225,14 @@ which image a pod is actually running.
 ## House rules that apply here
 
 - Every PR needs a `CHANGELOG.md` entry under `[Unreleased]`; `pr.yml` enforces
-  it. Dependabot PRs carry the `no changelog` label instead.
+  it. Dependabot PRs carry the `no changelog` label, and `pr.yml` also skips the
+  gate for them unconditionally — a label is repository state anyone can delete,
+  and Dependabot silently drops a label that does not exist.
+- The gates on a PR are `Test (3.14)`, `Package`, and the four `quality.yml`
+  jobs. The image is deliberately not built on a PR; `quality.yml` lints the
+  Dockerfile and `package.yml` builds the wheel it wraps.
+- `.github/zizmor.yml` and `.hadolint.yaml` record *why* each relaxed rule is
+  relaxed. An ignore without a reason does not belong in either.
 - No `Makefile`. Everything is `pyproject.toml` plus the two scripts.
 - No auth on this server, by design: every skill it serves is public markdown
   that is already on GitHub. Do not add a token without a reason to.

@@ -1,33 +1,16 @@
-"""Tests for skill discovery, pack filtering and the tool surface."""
+"""The MCP surface: what a client sees, as resources and as the tool mirror."""
+
+import json
 
 import pytest
 from fastmcp import Client
 
-from kubed.skills_mcp import SkillsMCP, discover_roots, load_skills
+from kubed.skills_mcp import SkillsMCP, load_skills
 
 
 async def call(client, name, **args):
     result = await client.call_tool(name, args)
     return result.content[0].text
-
-
-@pytest.mark.unit
-def test_discover_roots_handles_both_depths(skills_dir):
-    """A root must be the PARENT of skill folders, at whatever depth it sits."""
-    roots = discover_roots(skills_dir)
-    assert set(roots) == {
-        skills_dir / "flatsource",
-        skills_dir / "deepsource" / "plugin-a",
-        skills_dir / "deepsource" / "plugin-b",
-    }
-    # The shared ancestor is NOT a root -- SkillsDirectoryProvider does not
-    # recurse, so returning it here would yield zero skills.
-    assert skills_dir / "deepsource" not in roots
-
-
-@pytest.mark.unit
-def test_discover_roots_missing_dir_is_empty(tmp_path):
-    assert discover_roots(tmp_path / "nope") == []
 
 
 @pytest.mark.unit
@@ -45,112 +28,122 @@ def test_load_skills_can_hard_scope_to_packs(skills_dir):
 
 
 @pytest.mark.unit
-async def test_tool_surface_stays_fixed(skills_dir):
-    """Three disclosure layers plus pack-level files -- never one tool per skill."""
-    async with Client(SkillsMCP(skills_dir).mcp) as client:
-        names = sorted(t.name for t in await client.list_tools())
-    assert names == ["list_packs", "list_skills", "read_pack_file", "read_skill"]
+def test_skills_at_any_depth_are_loaded(skills_dir):
+    """n8n nests one level, grafana two; neither layout is hard-coded."""
+    assert {s.name for s in load_skills(skills_dir)} == {
+        "alpha",
+        "beta",
+        "gamma",
+        "delta",
+    }
+
+
+# -- resources ----------------------------------------------------------------
 
 
 @pytest.mark.unit
-async def test_list_packs_shows_sources_and_nested_groups(skills_dir):
+async def test_resources_are_indexes_not_one_per_skill(skills_dir):
+    """The listing is the cheap layer; it must not grow with the catalogue."""
     async with Client(SkillsMCP(skills_dir).mcp) as client:
-        out = await call(client, "list_packs")
-    assert "flatsource (2 skills)" in out
-    assert "deepsource (2 skills)" in out
-    assert "plugin-a (1)" in out
-    # A flat source has no sub-group worth listing.
-    assert "  flatsource" not in out
+        uris = [str(r.uri) for r in await client.list_resources()]
+    assert "skill://flatsource" in uris
+    assert "skill://plugin-a" in uris
+    assert not any("SKILL.md" in u for u in uris)
 
 
 @pytest.mark.unit
-async def test_list_skills_filters_by_pack_or_group(skills_dir):
+async def test_reading_an_index_then_a_skill(skills_dir):
+    """The whole interface: list addresses, read one, read the next."""
     async with Client(SkillsMCP(skills_dir).mcp) as client:
-        everything = await call(client, "list_skills")
-        by_pack = await call(client, "list_skills", pack="flatsource")
-        by_group = await call(client, "list_skills", pack="plugin-a")
-
-    assert all(n in everything for n in ("alpha", "beta", "gamma", "delta"))
-    assert "alpha" in by_pack and "gamma" not in by_pack
-    assert "gamma" in by_group and "delta" not in by_group
-    # Filtering has to actually pay for itself.
-    assert len(by_group) < len(everything)
+        index = (await client.read_resource("skill://plugin-a"))[0].text
+        assert "skill://deepsource/gamma" in index
+        body = (await client.read_resource("skill://deepsource/gamma"))[0].text
+    assert "Third skill." in body
 
 
 @pytest.mark.unit
-async def test_unknown_pack_names_the_valid_selectors(skills_dir):
+async def test_reading_a_manifest_then_one_of_its_files(skills_dir):
     async with Client(SkillsMCP(skills_dir).mcp) as client:
-        out = await call(client, "list_skills", pack="nope")
-    assert "plugin-a" in out and "flatsource" in out
+        manifest = (
+            await client.read_resource("skill://flatsource/alpha/_manifest")
+        )[0].text
+        paths = [f["path"] for f in json.loads(manifest)["files"]]
+        assert "SKILL.md" in paths
+        body = (
+            await client.read_resource("skill://flatsource/alpha/SKILL.md")
+        )[0].text
+    assert "First skill." in body
 
 
 @pytest.mark.unit
-async def test_read_skill_returns_the_body(skills_dir):
+async def test_an_unknown_uri_is_an_error_not_an_empty_read(skills_dir):
     async with Client(SkillsMCP(skills_dir).mcp) as client:
-        assert "Third skill." in await call(client, "read_skill", skill="gamma")
-
-
-@pytest.mark.unit
-async def test_read_skill_manifest_lists_files(skills_dir):
-    async with Client(SkillsMCP(skills_dir).mcp) as client:
-        out = await call(client, "read_skill", skill="alpha", file="_manifest")
-    assert "SKILL.md" in out
-
-
-@pytest.mark.unit
-async def test_read_skill_rejects_traversal(skills_dir):
-    """A model-supplied path must never escape the skill directory."""
-    async with Client(SkillsMCP(skills_dir).mcp) as client:
-        out = await call(
-            client, "read_skill", skill="alpha", file="../../deepsource/README.md"
-        )
-    assert out.startswith("No file")
-
-
-@pytest.mark.unit
-async def test_read_skill_rejects_unknown_name(skills_dir):
-    async with Client(SkillsMCP(skills_dir).mcp) as client:
-        out = await call(client, "read_skill", skill="nope")
-    assert out.startswith("Unknown skill")
+        with pytest.raises(Exception, match="nope|[Uu]nknown|not found"):
+            await client.read_resource("skill://flatsource/nope")
 
 
 @pytest.mark.unit
 async def test_server_scoped_to_packs_hides_the_rest(skills_dir):
     """SKILL_PACKS is the hard scope: the other pack is not reachable at all."""
     async with Client(SkillsMCP(skills_dir, packs=["flatsource"]).mcp) as client:
-        assert "deepsource" not in await call(client, "list_packs")
-        assert (await call(client, "read_skill", skill="gamma")).startswith("Unknown")
+        uris = [str(r.uri) for r in await client.list_resources()]
+        assert "skill://deepsource" not in uris
+        with pytest.raises(Exception):
+            await client.read_resource("skill://deepsource/gamma")
 
 
 @pytest.mark.unit
 async def test_empty_skills_dir_still_serves(tmp_path):
     """No skills mounted must not crash the server -- it just serves nothing."""
     async with Client(SkillsMCP(tmp_path).mcp) as client:
-        assert "No skills" in await call(client, "list_packs")
+        assert await client.list_resources() == []
+
+
+# -- the tool mirror ----------------------------------------------------------
 
 
 @pytest.mark.unit
-async def test_read_pack_file_serves_pack_level_material(skills_dir):
-    """Kit-level files a skill references must be reachable somehow."""
+async def test_the_mirror_is_two_tools_whatever_the_catalogue_holds(skills_dir):
+    """Adding packs must never add tools; the address space absorbs them."""
+    server = SkillsMCP(skills_dir)
+    # Skip the middleware, which is the thing that hides these. What is
+    # registered is what an ?resources=off client is shown; what a resource
+    # client sees is covered over real HTTP in test_header_scope.
+    registered = await server.mcp.list_tools(run_middleware=False)
+    assert sorted(t.name for t in registered) == ["list_resources", "read_resource"]
+
+
+@pytest.mark.unit
+async def test_the_mirror_returns_the_same_rows_as_the_resource_listing(skills_dir):
+    """If these drift, the tool is no longer the resource interface."""
     async with Client(SkillsMCP(skills_dir).mcp) as client:
-        manifest = await call(client, "read_pack_file", pack="deepsource")
-        body = await call(
-            client, "read_pack_file", pack="deepsource", file="shared/guide.md"
-        )
-    assert "shared/guide.md" in manifest
-    assert body == "shared guidance\n"
+        resources = {str(r.uri) for r in await client.list_resources()}
+        rows = json.loads(await call(client, "list_resources"))
+    assert {row["uri"] for row in rows} == resources
+    assert set(rows[0]) == {"uri", "name", "description", "mimeType"}
 
 
 @pytest.mark.unit
-async def test_read_pack_file_explains_when_a_pack_has_none(skills_dir):
+async def test_read_resource_returns_what_reading_the_uri_returns(skills_dir):
     async with Client(SkillsMCP(skills_dir).mcp) as client:
-        out = await call(client, "read_pack_file", pack="flatsource")
-    assert "no pack-level files" in out
+        through_tool = await call(client, "read_resource", uri="skill://deepsource/gamma")
+        through_resource = (
+            await client.read_resource("skill://deepsource/gamma")
+        )[0].text
+    assert through_tool == through_resource
 
 
 @pytest.mark.unit
-async def test_read_pack_file_honours_the_request_scope(skills_dir):
-    """A scoped instance must not read an unindexed pack's shared material."""
+async def test_read_resource_explains_an_unknown_uri(skills_dir):
+    """A tool answers with prose; only the resource half raises."""
+    async with Client(SkillsMCP(skills_dir).mcp) as client:
+        out = await call(client, "read_resource", uri="skill://nope/nope")
+    assert "No resource" in out and "list_resources" in out
+
+
+@pytest.mark.unit
+async def test_the_mirror_honours_the_hard_pack_scope(skills_dir):
+    """A tool call must not reach past SKILL_PACKS any more than a read does."""
     async with Client(SkillsMCP(skills_dir, packs=["flatsource"]).mcp) as client:
-        out = await call(client, "read_pack_file", pack="deepsource")
-    assert out.startswith("Unknown pack")
+        out = await call(client, "read_resource", uri="skill://deepsource/gamma")
+    assert "No resource" in out

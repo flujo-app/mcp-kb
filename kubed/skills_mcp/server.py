@@ -1,9 +1,10 @@
 """The MCP server itself: wiring, and nothing else.
 
-Assembles a FastMCP instance from the skill catalogue -- the resource provider,
-the tools, the routes -- and runs it on a transport. The catalogue lives in
-``skills.py``, the tool bodies in ``tools.py``, the endpoints in ``routes.py``;
-this module only connects them, so a new tool never means editing the server.
+Assembles a FastMCP instance from the skill catalogue -- the address space, the
+resources, the mirror tools, the routes -- and runs it on a transport. The
+catalogue lives in ``skills.py``, the URI space in ``uris.py``, the tool bodies
+in ``tools.py``, the endpoints in ``routes.py``; this module only connects them,
+so a new tool never means editing the server.
 """
 
 from __future__ import annotations
@@ -11,35 +12,40 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastmcp import FastMCP
-from fastmcp.server.providers.skills import SkillsDirectoryProvider
 
-from . import routes, tools
-from .skills import PackResources, SkillIndex, discover_roots, load_skills
+from . import resources, routes, tools
+from .skills import PackResources, SkillIndex, load_skills
+from .uris import Catalogue
 
 DEFAULT_SKILLS_DIR = Path("/skills")
 
 INSTRUCTIONS = """\
 This server hosts Agent Skills: instruction packages that teach you how to \
-perform a specific task.
+perform a specific task. Everything it serves is a `skill://` URI, and reading \
+one is the only operation there is.
 
-Work down the layers, cheapest first. `list_packs` shows which families of \
-skills exist. `list_skills` gives the index for one pack -- always pass `pack` \
-if you know which one you need, since the unfiltered index is much larger. \
-`read_skill` returns a skill's full instructions, which you then follow.
+Work down the address space, cheapest first. Listing gives you indexes -- one \
+per pack, one per group within a pack. Reading an index URI \
+(`skill://grafana-lgtm`) gives you the skills in it, as URIs. Reading a skill \
+URI (`skill://grafana/loki`) gives you the instructions to follow.
 
-Skills may ship supporting files. `read_skill` with `file="_manifest"` lists \
-them; pass a path to read one. Do not read files you have no use for.
+A skill may ship supporting files. Append `/_manifest` to its URI to list them, \
+then read one by its path under the same URI. Do not read files you have no use \
+for -- a skill citing one is not a reason to fetch it.
 """
 
 
 class SkillsMCP:
     """An MCP server over a directory of Agent Skills.
 
-    Skills are exposed twice, because MCP clients are not all alike. As
-    ``skill://`` **resources** via FastMCP's ``SkillsDirectoryProvider``, for
-    clients that speak the resource half of the protocol; and as three
-    **tools**, for the many that only implement tools -- n8n among them, to
-    which a resource-only server looks empty.
+    The catalogue is served twice, because MCP clients are not all alike. As
+    ``skill://`` **resources**, which is what it is; and as two **tools** that
+    mirror those resources exactly, for the many clients that only implement
+    tools -- n8n among them, to which a resource-only server looks empty.
+
+    The mirror is hidden from clients that read resources, so each client sees
+    one way to ask, not two. A client declares it cannot read resources with
+    ``?resources=off`` on the MCP URL or an ``X-MCP-Resources: off`` header.
     """
 
     def __init__(
@@ -52,28 +58,13 @@ class SkillsMCP:
         skills = load_skills(skills_dir, packs)
         self.index = SkillIndex(skills)
         self.resources = PackResources(skills_dir, skills)
+        self.catalogue = Catalogue(self.index, self.resources)
         self.mcp = FastMCP("Skills", instructions=INSTRUCTIONS)
 
-        self._add_resource_provider()
-        tools.register(self.mcp, self.index, self.resources)
+        resources.register(self.mcp, self.catalogue)
+        mirrors = tools.register(self.mcp, self.catalogue)
+        self.mcp.add_middleware(resources.HideMirrorTools(mirrors))
         routes.register(self.mcp, self.index)
-
-    def _add_resource_provider(self) -> None:
-        """Publish the skills as ``skill://`` resources.
-
-        Roots are filtered the same way the index is, so ``packs`` scopes both
-        halves of the server; otherwise a resource-capable client could read
-        past a scope the tools enforce.
-        """
-        roots = discover_roots(self.skills_dir)
-        if self.packs:
-            roots = [
-                r
-                for r in roots
-                if r.relative_to(self.skills_dir).parts[0] in self.packs
-            ]
-        if roots:
-            self.mcp.add_provider(SkillsDirectoryProvider(roots=roots))
 
     def run(
         self, transport: str = "http", host: str = "0.0.0.0", port: int = 8000
