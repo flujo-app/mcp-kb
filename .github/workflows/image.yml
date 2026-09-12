@@ -36,7 +36,12 @@ on:
     - .github/workflows/image.yml
     - kubed/**
     - skills.toml
-    - scripts/fetch_skills.py
+    # Not in the wheel, but the Dockerfile COPYs both: fetch_skills.py decides
+    # which packs are baked in, requirements.py decides which dependencies the
+    # venv gets. A change to either changes the image without changing anything
+    # else in this list. tests/test_packaging.py derives this from the
+    # Dockerfile's own COPY lines rather than trusting the list.
+    - scripts/**
   workflow_dispatch:
     inputs:
       push:
