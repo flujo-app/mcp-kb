@@ -45,6 +45,9 @@ test = [
   "pytest-asyncio",
   "ruff",
   "uvicorn",
+  # tests/test_packaging.py reads pyproject.toml, and tomllib is 3.11+. It
+  # arrives with pytest today; declared because a test that imports it should.
+  "tomli; python_version < '3.11'",
 ]
 
 [build-system]
@@ -76,4 +79,25 @@ markers = [
 ]
 
 [tool.ruff]
-exclude = ["tests/*"]
+# The oldest interpreter supported, so ruff flags what would break there.
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+  "E", "W",   # pycodestyle
+  "F",        # pyflakes
+  "I",        # import sorting
+  "UP",       # constructs a newer supported Python does better
+  "B",        # bugbear
+  "SIM",      # simplifications
+  "C4",       # comprehensions
+  "PIE",      # small dead weight
+  "PTH",      # pathlib over os.path
+  "RET",      # return-flow noise
+  "RUF",      # ruff's own, incl. RUF100 for noqas that stopped applying
+  "BLE",      # blind except: each one must carry a noqa saying why
+]
+
+[tool.ruff.lint.per-file-ignores]
+# A long, specific assertion message is the point of a test.
+"tests/*" = ["E501"]

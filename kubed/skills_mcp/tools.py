@@ -34,11 +34,21 @@ LIST_TOOL = "list_resources"
 READ_TOOL = "read_resource"
 MIRROR_TOOLS = {LIST_TOOL, READ_TOOL}
 
+# Both only read files baked into the image: nothing changes, a repeat call gives
+# the same answer, and nothing outside this package is reached. Left off, MCP's
+# defaults advertise a tool as destructive, and a client may confirm every read.
+READ_ONLY = {
+    "read_only_hint": True,
+    "destructive_hint": False,
+    "idempotent_hint": True,
+    "open_world_hint": False,
+}
+
 
 def register(mcp: FastMCP, catalogue: Catalogue) -> set[str]:
     """Register the mirror tools; return their names for the listing filter."""
 
-    @mcp.tool
+    @mcp.tool(annotations={"title": "List skill resources", **READ_ONLY})
     def list_resources() -> list[dict]:
         """List the skill resources available, as `uri`/`name`/`description`.
 
@@ -52,7 +62,7 @@ def register(mcp: FastMCP, catalogue: Catalogue) -> set[str]:
         """
         return [entry.as_dict() for entry in catalogue.entries(requested_pack())]
 
-    @mcp.tool
+    @mcp.tool(annotations={"title": "Read a skill resource", **READ_ONLY})
     def read_resource(uri: str) -> str:
         """Read one `skill://` URI: an index, a skill, or a file inside one.
 

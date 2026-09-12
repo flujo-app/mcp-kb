@@ -33,6 +33,45 @@ def _write(path, name, description):
     )
 
 
+def _build_prompts(root):
+    """One prompt per pack, plus a file that is not in a pack folder at all."""
+    _prompt(
+        root / "flatsource" / "hello.md",
+        "description: Say hello.\n"
+        "arguments:\n"
+        "- name: who\n"
+        "  required: true\n"
+        "- name: greeting\n"
+        "  default: Hello\n",
+        "{{ greeting }}, {{ who }}.\n",
+    )
+    # LogQL uses single braces, which is why placeholders are double ones.
+    _prompt(
+        root / "deepsource" / "check.md",
+        "description: Check a service.\narguments:\n- name: service\n",
+        '{app="{{ service }}"} |= "error"\n',
+    )
+    (root / "loose.md").write_text("---\ndescription: not in a pack\n---\nnope\n")
+    return root
+
+
+def _prompt(path, frontmatter, body):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"---\n{frontmatter}---\n{body}")
+
+
+@pytest.fixture
+def prompts_dir(tmp_path_factory):
+    """A prompts root: ``<pack>/<name>.md``, for the packs ``skills_dir`` holds."""
+    return _build_prompts(tmp_path_factory.mktemp("prompts"))
+
+
+@pytest.fixture(scope="module")
+def prompts_dir_module(tmp_path_factory):
+    """Module-scoped twin of ``prompts_dir``, for the HTTP server fixture."""
+    return _build_prompts(tmp_path_factory.mktemp("prompts"))
+
+
 @pytest.fixture
 def skills_dir(tmp_path):
     """A skills root holding one flat source and one two-level source.

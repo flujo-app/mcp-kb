@@ -40,7 +40,6 @@ DOCKERFILE = REPO / "Dockerfile"
 sys.path.insert(0, str(REPO / "scripts"))
 import requirements  # noqa: E402 - needs the path above
 
-
 # --------------------------------------------------------------------------
 # Readers
 # --------------------------------------------------------------------------
@@ -98,12 +97,15 @@ def image_trigger_paths() -> list[set[str]]:
 def covered(path: str, patterns: set[str]) -> bool:
     """Whether a `paths:` filter would fire for ``path``.
 
-    Only the two forms this repo uses: an exact path, and a `dir/**` prefix.
+    Only the two forms this repo uses: an exact path, and a `dir/**` prefix,
+    which also covers a COPY of the directory itself.
     """
     for pattern in patterns:
         if pattern == path:
             return True
-        if pattern.endswith("/**") and path.startswith(pattern[:-2]):
+        if pattern.endswith("/**") and (
+            path == pattern[:-3] or path.startswith(pattern[:-2])
+        ):
             return True
     return False
 
@@ -139,22 +141,23 @@ def test_the_packaged_source_rebuilds_the_image():
             )
 
 
-def test_every_script_the_dockerfile_copies_rebuilds_the_image():
+def test_everything_the_dockerfile_copies_rebuilds_the_image():
     """The drift this file exists for.
 
-    `scripts/` is not in the wheel, so nothing about the package points at it —
-    but the Dockerfile COPYs two files out of it, and both decide what the image
-    contains: fetch_skills.py which packs are baked in, requirements.py which
-    dependencies the venv gets. Watching one and not the other is how a change
-    to the second builds nothing at all.
+    None of `scripts/`, `prompts/` or `skills.toml` is in the wheel, so nothing
+    about the package points at them — but the Dockerfile COPYs each, and each
+    decides what the image contains. Watching some and not others is how a
+    change to the rest builds nothing at all.
     """
-    scripts = {p for p in copied_paths() if p.startswith("scripts/")}
-    assert scripts, "the Dockerfile copies no scripts — this test proves nothing"
+    copied = copied_paths()
+    assert {"prompts", "scripts/requirements.py"} <= copied, (
+        "the Dockerfile no longer copies what this test expects — revisit it"
+    )
     for filters in image_trigger_paths():
-        for script in scripts:
-            assert covered(script, filters), (
-                f"the Dockerfile copies {script}, but image.yml will not"
-                " rebuild when it changes"
+        for path in copied:
+            assert covered(path, filters), (
+                f"the Dockerfile copies {path}, but image.yml will not rebuild"
+                " when it changes"
             )
 
 
@@ -191,10 +194,11 @@ def test_the_runner_receives_a_venv_and_installs_nothing():
     assert "COPY . ." not in runner, "the source has no business in the runner"
 
 
-def test_the_runner_still_gets_the_skills():
-    """The image is the wheel AND the packs; a venv-only runner serves nothing."""
+def test_the_runner_still_gets_the_skills_and_prompts():
+    """The image is the wheel AND the content; a venv-only runner serves nothing."""
     runner = dockerfile_stages()["runner"]
     assert "COPY --from=skills /skills /skills" in runner
+    assert "COPY prompts /prompts" in runner
 
 
 def test_pip_is_removed_before_the_venv_is_copied():

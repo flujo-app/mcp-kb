@@ -78,7 +78,7 @@ async def test_reading_a_manifest_then_one_of_its_files(skills_dir):
 @pytest.mark.unit
 async def test_an_unknown_uri_is_an_error_not_an_empty_read(skills_dir):
     async with Client(SkillsMCP(skills_dir).mcp) as client:
-        with pytest.raises(Exception, match="nope|[Uu]nknown|not found"):
+        with pytest.raises(Exception, match=r"nope|[Uu]nknown|not found"):
             await client.read_resource("skill://flatsource/nope")
 
 
@@ -88,7 +88,7 @@ async def test_server_scoped_to_packs_hides_the_rest(skills_dir):
     async with Client(SkillsMCP(skills_dir, packs=["flatsource"]).mcp) as client:
         uris = [str(r.uri) for r in await client.list_resources()]
         assert "skill://deepsource" not in uris
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match=r"nknown|not found"):
             await client.read_resource("skill://deepsource/gamma")
 
 
@@ -111,6 +111,21 @@ async def test_the_mirror_is_two_tools_whatever_the_catalogue_holds(skills_dir):
     # client sees is covered over real HTTP in test_header_scope.
     registered = await server.mcp.list_tools(run_middleware=False)
     assert sorted(t.name for t in registered) == ["list_resources", "read_resource"]
+
+
+@pytest.mark.unit
+async def test_the_mirror_tools_are_advertised_as_read_only(skills_dir):
+    """Unannotated, MCP's defaults advertise a tool as destructive."""
+    registered = await SkillsMCP(skills_dir).mcp.list_tools(run_middleware=False)
+    assert registered
+    for tool in registered:
+        hints = tool.to_mcp_tool().annotations
+        assert hints is not None, f"{tool.name} has no annotations"
+        assert hints.read_only_hint is True
+        assert hints.destructive_hint is False
+        assert hints.idempotent_hint is True
+        assert hints.open_world_hint is False
+        assert hints.title
 
 
 @pytest.mark.unit

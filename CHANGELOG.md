@@ -25,14 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Resources are the interface and the tools are a mirror of them, so a client that reads resources is now shown no tools at all; declare `?resources=off` on the MCP URL (or `X-MCP-Resources: off`) to reveal the two, as n8n must.
 - Everything is addressed by one `skill://` grammar — an index is one segment, content is two or more — so a skill, a file it references and a file its pack references are all fetched the same way.
 - The image build hands a venv from builder to runner and installs dependencies before the source, so the runner no longer reinstalls every dependency out of the wheel and a source-only commit reuses the cached dependency layer.
+- The image runs Python 3.14, matching the version CI gates pull requests on.
+- Ruff lints the whole checkout, tests and scripts included, with the rule set selenium-flow uses.
 
 ### Fixed
+- `list_resources` and `read_resource` are annotated read-only; unannotated, MCP's defaults advertised them as destructive.
 - `X-Skill-Pack` now scopes resources, not just tools. It filtered roots once at boot, so a pinned client could read any pack whose URI it could guess — and every URI here is guessable by design.
 - Skill names no longer collide across packs: URIs are pack-qualified, where `SkillsDirectoryProvider` keyed on the folder name and silently dropped the loser entirely.
 - `resources/list` is ~1.9 KB instead of 77 KB — it lists a dozen indexes rather than every skill and manifest, which is the expense this server already rejected `ResourcesAsTools` for.
 - Pack-level dotfiles no longer earn a pack an index row pointing at nothing readable; grafana's only such files are two `.gitkeep` placeholders.
 
 ### Added
+- MCP prompts, served from `prompts/<pack>/<name>.md` with declared arguments and scoped by `SKILL_PACKS` and `X-Skill-Pack` like skills — starting with `grafana_debug-logs`, which walks the Grafana MCP server through debugging a workload's Loki logs.
 - `superpowers` skill pack from `obra/superpowers` (14 skills) — brainstorming, TDD, systematic debugging, writing plans and the rest of the workflow discipline set.
 - `?skills=full` (or `X-Skill-Listing: full`) enumerates every skill in the listing, for clients that sync skills to disk and can only find them by scanning for `/SKILL.md`.
 - `X-Skill-Pack` request header pins a client to one pack — a ceiling the model cannot widen past, so one deployment can serve several single-pack agents.

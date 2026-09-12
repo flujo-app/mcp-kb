@@ -14,6 +14,7 @@ import pytest
 import uvicorn
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
+from fastmcp.utilities.skills import download_skill, get_skill_manifest, list_skills
 
 from kubed.skills_mcp import SkillsMCP
 
@@ -25,10 +26,10 @@ def _free_port() -> int:
 
 
 @pytest.fixture(scope="module")
-def server_url(skills_dir_module):
+def server_url(skills_dir_module, prompts_dir_module):
     """Serve the skills app on a loopback port for the duration of the module."""
     port = _free_port()
-    app = SkillsMCP(skills_dir_module).mcp.http_app()
+    app = SkillsMCP(skills_dir_module, prompts_dir=prompts_dir_module).mcp.http_app()
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
@@ -132,7 +133,7 @@ async def test_the_pin_blocks_reading_another_packs_resource(server_url):
     """The hole this closes: filtering a listing leaves guessable URIs readable,
     and every URI here is guessable by design."""
     async with _client(server_url, {"X-Skill-Pack": "flatsource"}) as client:
-        with pytest.raises(Exception, match="nknown|not found|deepsource"):
+        with pytest.raises(Exception, match=r"nknown|not found|deepsource"):
             await client.read_resource("skill://deepsource/gamma")
 
 
@@ -174,7 +175,7 @@ async def test_a_group_pin_cannot_widen_to_the_whole_pack(server_url):
         assert "Third skill." in (
             await client.read_resource("skill://deepsource/gamma")
         )[0].text
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match=r"nknown|not found"):
             await client.read_resource("skill://deepsource/delta")
 
 
@@ -183,3 +184,59 @@ async def test_the_listing_does_not_leak_other_pack_names(server_url):
     """A pinned client must not learn the other packs exist from a listing."""
     uris = await resource_uris(server_url, headers={"X-Skill-Pack": "plugin-a"})
     assert not any("plugin-b" in u or "flatsource" in u for u in uris)
+
+
+# -- prompts ------------------------------------------------------------------
+
+
+async def prompt_names(url, headers=None):
+    async with _client(url, headers) as client:
+        return sorted(p.name for p in await client.list_prompts())
+
+
+@pytest.mark.integration
+async def test_the_pin_scopes_prompts_too(server_url):
+    """Out of the pinned pack, a prompt is neither listed nor renderable."""
+    pinned = {"X-Skill-Pack": "flatsource"}
+    assert await prompt_names(server_url, pinned) == ["flatsource_hello"]
+    async with _client(server_url, pinned) as client:
+        with pytest.raises(Exception, match="deepsource_check"):
+            await client.get_prompt("deepsource_check", {"service": "api"})
+
+
+@pytest.mark.integration
+async def test_a_group_pin_sees_its_packs_prompts(server_url):
+    """A prompt belongs to a pack, as pack-level files do."""
+    assert await prompt_names(server_url, {"X-Skill-Pack": "plugin-a"}) == [
+        "deepsource_check"
+    ]
+
+
+# -- syncing skills to disk ---------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_fastmcp_syncs_skills_from_the_full_listing(
+    server_url, skills_dir_module, tmp_path
+):
+    """The promise ?skills=full exists to keep, checked with FastMCP's own helpers."""
+    async with _client(f"{server_url}?skills=full") as client:
+        found = {s.name for s in await list_skills(client)}
+        manifest = await get_skill_manifest(client, "flatsource/alpha")
+        downloaded = await download_skill(client, "flatsource/alpha", tmp_path)
+    assert found == {
+        "flatsource/alpha",
+        "flatsource/beta",
+        "deepsource/gamma",
+        "deepsource/delta",
+    }
+    assert "SKILL.md" in [f.path for f in manifest.files]
+    source = skills_dir_module / "flatsource" / "alpha" / "SKILL.md"
+    assert (downloaded / "SKILL.md").read_text() == source.read_text()
+
+
+@pytest.mark.integration
+async def test_the_default_listing_gives_sync_helpers_nothing(server_url):
+    """Why the flag exists: the cheap listing has no /SKILL.md rows to find."""
+    async with _client(server_url) as client:
+        assert await list_skills(client) == []

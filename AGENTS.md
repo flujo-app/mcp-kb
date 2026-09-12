@@ -10,6 +10,7 @@ into the image; nothing is fetched at runtime.
 | Path | What it is |
 | --- | --- |
 | `skills.toml` | the pack manifest — the source of truth for what gets served |
+| `prompts/<pack>/<name>.md` | prompts, committed here — served as `<pack>_<name>` |
 | `scripts/fetch_skills.py` | clones each pinned source at build time; stdlib only |
 | `scripts/requirements.py` | prints the dependency list out of `pyproject.toml` for the image build |
 | `kubed/skills_mcp/skills.py` | the catalogue — `Skill`, loading, and `SkillIndex` |
@@ -17,6 +18,7 @@ into the image; nothing is fetched at runtime.
 | `kubed/skills_mcp/resources.py` | the resources, and the mirror-hiding middleware |
 | `kubed/skills_mcp/tools.py` | the two mirror tools |
 | `kubed/skills_mcp/request.py` | what the current request says about itself |
+| `kubed/skills_mcp/prompts.py` | loads, renders and scopes the prompts |
 | `kubed/skills_mcp/routes.py` | plain HTTP endpoints (`/health`) |
 | `kubed/skills_mcp/server.py` | `SkillsMCP` — wiring only, no tool bodies |
 | `kubed/skills_mcp/main.py` | CLI and env parsing; the only file reading `os.environ` |
@@ -166,6 +168,10 @@ namespaces tool names with a prefix, and these three names are the agent's API.
   halves project from `Catalogue`, so a change there lands on both at once,
   which is the point.
 - **Adding an endpoint** → `routes.py`.
+- **Adding a prompt** → a file at `prompts/<pack>/<name>.md`, where `<pack>` is a
+  `skills.toml` source. No code. Every placeholder must be a declared argument and a
+  required argument cannot have a default; the server skips a file that breaks either
+  rule, so `tests/test_prompts.py` loads every shipped prompt strictly to catch it.
 - **A pack references files outside its skills** → add them to that source's `extras`
   in `skills.toml`. They are served at `skill://<pack>/<path>` and listed under
   `skill://<pack>/_files`, never indexed as skills. The spec says a skill is

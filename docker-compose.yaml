@@ -8,7 +8,7 @@ services:
       context: .
       target: runner
       args:
-        PY_VERSION: ${PY_VERSION:-3.13}
+        PY_VERSION: ${PY_VERSION:-3.14}
       tags:
       - *image
       - kubed/skills-mcp:${GIT_SHA:-latest}
