@@ -11,6 +11,7 @@ into the image; nothing is fetched at runtime.
 | --- | --- |
 | `skills.toml` | the pack manifest — the source of truth for what gets served |
 | `scripts/fetch_skills.py` | clones each pinned source at build time; stdlib only |
+| `scripts/requirements.py` | prints the dependency list out of `pyproject.toml` for the image build |
 | `kubed/skills_mcp/skills.py` | the catalogue — `Skill`, loading, and `SkillIndex` |
 | `kubed/skills_mcp/uris.py` | the `skill://` address space — `Catalogue`, the grammar |
 | `kubed/skills_mcp/resources.py` | the resources, and the mirror-hiding middleware |
@@ -131,6 +132,16 @@ deploy` will not work, and is not meant to.
 - **`imagePullPolicy: Always` pairs with a floating tag.** While `newTag` is
   `latest`, `IfNotPresent` pins a node to whatever layer it cached first. Once
   `publish.yml` pins a semver this is just a cheap registry check.
+- **The image build hands a venv between stages, and it has two rules.**
+  `/opt/venv` must be copied to the *same absolute path* it was created at — a
+  venv records that path in `pyvenv.cfg` and in every console script's shebang,
+  so landing it elsewhere points it at an interpreter that is not there. And
+  `COPY . .` must stay *after* the dependency install: `.git` is in the build
+  context for setuptools_scm, so copying the source first invalidates the
+  dependency layer on every commit, docs-only ones included. Both are asserted
+  in `tests/test_packaging.py`, because the shape they replaced — builder builds
+  a wheel, runner installs it and every dependency a second time — reads as
+  perfectly ordinary Dockerfile.
 - **Do not reach for `ResourcesAsTools`, or back for `SkillsDirectoryProvider`.**
   Both enumerate every skill on every listing call — `resources/list` was 77KB
   for this catalogue before `Catalogue` replaced it with a dozen indexes.
