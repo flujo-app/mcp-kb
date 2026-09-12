@@ -181,7 +181,7 @@ jobs:
     # No checkout: this job is pure artifact plus secrets. What it publishes is
     # the distribution the package job already built and tested, byte for byte.
     - name: Download Package
-      uses: actions/download-artifact@v7
+      uses: actions/download-artifact@v8
       with:
         name: ${{ needs.package.outputs.package }}
         path: dist
