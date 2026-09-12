@@ -53,7 +53,7 @@ jobs:
     - name: Setup Python
       uses: actions/setup-python@v7
       with:
-        python-version: '3.13'
+        python-version: '3.14'
 
     # --no-fetch: only the pins need rewriting here. image.yml does the real
     # fetch, and it is the thing that proves the new pins actually resolve.

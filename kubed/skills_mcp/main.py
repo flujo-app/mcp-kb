@@ -11,7 +11,7 @@ import argparse
 import os
 from pathlib import Path
 
-from .server import DEFAULT_SKILLS_DIR, SkillsMCP
+from .server import DEFAULT_PROMPTS_DIR, DEFAULT_SKILLS_DIR, SkillsMCP
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -23,6 +23,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path(os.environ.get("SKILLS_DIR", DEFAULT_SKILLS_DIR)),
         help="directory to scan for skills (env: SKILLS_DIR)",
+    )
+    parser.add_argument(
+        "--prompts-dir",
+        type=Path,
+        default=Path(os.environ.get("PROMPTS_DIR", DEFAULT_PROMPTS_DIR)),
+        help="directory holding <pack>/<name>.md prompts (env: PROMPTS_DIR)",
     )
     parser.add_argument(
         "--packs",
@@ -53,7 +59,7 @@ def main(argv: list[str] | None = None) -> None:
     """Entry point for the ``skills-mcp`` console script."""
     args = build_parser().parse_args(argv)
     packs = [p.strip() for p in args.packs.split(",") if p.strip()] or None
-    server = SkillsMCP(args.skills_dir, packs)
+    server = SkillsMCP(args.skills_dir, packs, args.prompts_dir)
     server.run(transport=args.transport, host=args.host, port=args.port)
 
 

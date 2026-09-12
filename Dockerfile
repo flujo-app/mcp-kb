@@ -25,7 +25,7 @@
 # worked when buildx was run from a plain shell step — the runner does not hand
 # one ACTIONS_RUNTIME_TOKEN — and that is fixed in the action, so this repo gets
 # the cache it had been configuring all along.
-ARG PY_VERSION=3.13
+ARG PY_VERSION=3.14
 
 # ---- skills: the packs, fetched at their pinned refs.
 #      Isolated so it only re-runs when skills.toml or the fetch script changes,
@@ -92,7 +92,7 @@ pip install --no-cache-dir .
 pip uninstall --yes pip
 SHELL
 
-# ---- runner: slim, and it receives two directories.
+# ---- runner: slim, and it receives three directories.
 #      No git, no toolchain, no source, and no second dependency install.
 FROM python:${PY_VERSION}-slim AS runner
 
@@ -100,6 +100,8 @@ COPY --from=builder /opt/venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 
 COPY --from=skills /skills /skills
+# Prompts live in this repo rather than upstream, so they come from the context.
+COPY prompts /prompts
 
 # The venv is copied to the SAME path it was created at, which is the one rule.
 # It is this project's node_modules — one self-contained directory you move
@@ -117,6 +119,7 @@ COPY --from=skills /skills /skills
 RUN python -c "from kubed.skills_mcp.server import SkillsMCP"
 
 ENV SKILLS_DIR=/skills \
+    PROMPTS_DIR=/prompts \
     TRANSPORT=http \
     HOST=0.0.0.0 \
     PORT=8000

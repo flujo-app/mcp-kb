@@ -36,6 +36,7 @@ on:
     - .github/workflows/image.yml
     - kubed/**
     - skills.toml
+    - prompts/**
     # Not in the wheel, but the Dockerfile COPYs both: fetch_skills.py decides
     # which packs are baked in, requirements.py decides which dependencies the
     # venv gets. A change to either changes the image without changing anything

@@ -75,7 +75,7 @@ jobs:
       run: pip install .[test]
 
     - name: Lint
-      run: ruff check kubed
+      run: ruff check .
 
     - name: Test
       run: pytest

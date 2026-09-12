@@ -76,6 +76,32 @@ on the MCP Client Tool node — a plumbed constant, not something the model fill
 `SKILL_PACKS` does the same per deployment; the rest of the catalogue is not loaded at
 all. They compose: the header narrows within whatever `SKILL_PACKS` allows.
 
+## Prompts
+
+A prompt is a template a person picks and fills in before the model sees anything —
+Claude Code lists them as slash commands. They live in this repo, one folder per pack:
+
+```
+prompts/grafana/debug-logs.md    →  prompt grafana_debug-logs
+```
+
+Each is YAML frontmatter declaring its arguments, then a body with `{{ placeholders }}`:
+
+```markdown
+---
+description: Debug a workload's recent logs in Loki with the Grafana MCP server.
+arguments:
+- name: app
+  required: true
+- name: since
+  default: 1h
+---
+Investigate the logs of **{{ app }}** over the last {{ since }}.
+```
+
+Double braces, because prompt bodies are full of LogQL and JSON. `X-Skill-Pack` and
+`SKILL_PACKS` scope prompts exactly as they scope skills.
+
 ## Skills as dependencies
 
 `skills.toml` is the source of truth:
@@ -111,6 +137,7 @@ The **Update Skills** workflow runs that weekly and opens a PR.
 | --- | --- | --- |
 | `SKILLS_DIR` | `/skills` | directory to scan |
 | `SKILL_PACKS` | *(all)* | comma-separated packs to serve; hard scope |
+| `PROMPTS_DIR` | `/prompts` | directory holding `<pack>/<name>.md` prompts |
 | `TRANSPORT` | `http` | `http` or `stdio` |
 | `HOST` | `0.0.0.0` | bind address |
 | `PORT` | `8000` | port |
@@ -118,7 +145,7 @@ The **Update Skills** workflow runs that weekly and opens a PR.
 Per request: `?resources=off` reveals the tool mirror, `?skills=full` enumerates every
 skill in the listing (for clients that sync skills to disk), `X-Skill-Pack` pins a pack.
 
-`GET /health` reports status, the packs served, and the skill count.
+`GET /health` reports status, the packs served, and the skill and prompt counts.
 
 ## Deploying
 

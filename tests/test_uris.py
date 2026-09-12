@@ -60,7 +60,7 @@ def test_entries_are_indexes_not_skills(catalogue):
     assert "skill://flatsource" in uris
     assert "skill://deepsource" in uris
     assert "skill://plugin-a" in uris
-    assert not any(u.endswith("/alpha") or u.endswith("SKILL.md") for u in uris)
+    assert not any(u.endswith(("/alpha", "SKILL.md")) for u in uris)
 
 
 @pytest.mark.unit

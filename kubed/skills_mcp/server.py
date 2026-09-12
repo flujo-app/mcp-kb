@@ -3,8 +3,8 @@
 Assembles a FastMCP instance from the skill catalogue -- the address space, the
 resources, the mirror tools, the routes -- and runs it on a transport. The
 catalogue lives in ``skills.py``, the URI space in ``uris.py``, the tool bodies
-in ``tools.py``, the endpoints in ``routes.py``; this module only connects them,
-so a new tool never means editing the server.
+in ``tools.py``, the prompts in ``prompts.py``, the endpoints in ``routes.py``;
+this module only connects them, so a new tool never means editing the server.
 """
 
 from __future__ import annotations
@@ -13,11 +13,13 @@ from pathlib import Path
 
 from fastmcp import FastMCP
 
-from . import resources, routes, tools
+from . import prompts, resources, routes, tools
+from .prompts import load_prompts
 from .skills import PackResources, SkillIndex, load_skills
 from .uris import Catalogue
 
 DEFAULT_SKILLS_DIR = Path("/skills")
+DEFAULT_PROMPTS_DIR = Path("/prompts")
 
 INSTRUCTIONS = """\
 This server hosts Agent Skills: instruction packages that teach you how to \
@@ -52,6 +54,7 @@ class SkillsMCP:
         self,
         skills_dir: Path = DEFAULT_SKILLS_DIR,
         packs: list[str] | None = None,
+        prompts_dir: Path = DEFAULT_PROMPTS_DIR,
     ):
         self.skills_dir = skills_dir
         self.packs = packs
@@ -59,12 +62,14 @@ class SkillsMCP:
         self.index = SkillIndex(skills)
         self.resources = PackResources(skills_dir, skills)
         self.catalogue = Catalogue(self.index, self.resources)
+        self.prompts = load_prompts(prompts_dir, packs)
         self.mcp = FastMCP("Skills", instructions=INSTRUCTIONS)
 
         resources.register(self.mcp, self.catalogue)
         mirrors = tools.register(self.mcp, self.catalogue)
         self.mcp.add_middleware(resources.HideMirrorTools(mirrors))
-        routes.register(self.mcp, self.index)
+        prompts.register(self.mcp, self.prompts, self.index)
+        routes.register(self.mcp, self.index, self.prompts)
 
     def run(
         self, transport: str = "http", host: str = "0.0.0.0", port: int = 8000

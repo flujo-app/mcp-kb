@@ -121,7 +121,7 @@ def _manifest_json(skill: Skill) -> str:
     files = []
     for path in sorted(p for p in skill.path.rglob("*") if p.is_file()):
         digest = hashlib.sha256()
-        with open(path, "rb") as handle:
+        with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(8192), b""):
                 digest.update(chunk)
         files.append(
@@ -187,7 +187,12 @@ class Catalogue:
             if groups:
                 summary += f" in {len(groups)} groups: {', '.join(groups)}"
             entries.append(
-                Entry(f"{SCHEME}{pack}", pack, f"The {pack} pack — {summary}.", "text/markdown")
+                Entry(
+                    f"{SCHEME}{pack}",
+                    pack,
+                    f"The {pack} pack — {summary}.",
+                    "text/markdown",
+                )
             )
             entries += [
                 Entry(
