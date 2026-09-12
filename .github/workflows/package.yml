@@ -1,0 +1,163 @@
+name: 🗿 Package
+
+# Builds the Python distribution (sdist + wheel) and NOTHING else, then saves it
+# as a GHA artifact. Packaging only — it never bumps versions, tags, commits, or
+# publishes anywhere. Four entry points:
+#
+#   pull_request       the gate. Since image.yml no longer runs on a PR, this is
+#                      what proves the thing still builds — and it checks the
+#                      half that is actually ours: the wheel. Seconds, against
+#                      the image build's several minutes.
+#   push: main         same, so the badge tracks trunk
+#   workflow_dispatch  manual — package an arbitrary ref
+#   workflow_call      publish.yml calls this with the freshly-created release
+#                      tag, so the distribution is built from the exact released
+#                      commit; its release job then attaches the artifact to the
+#                      GitHub Release
+#
+# The artifact is the handoff, and it is deliberately the ONLY output. Nothing
+# here talks to a package index: the release job downloads what this produced and
+# publishes it, so there is exactly one build and the file a user downloads is
+# byte-for-byte the file that was tested. A PyPI job would slot in the same way —
+# `needs: package`, download the artifact, upload it — without this file changing.
+#
+# The skills are NOT in the wheel. They are fetched at image build time into
+# /skills, so the wheel is the server alone and installs the same whatever the
+# pack manifest says — which is why there is no package-data check here.
+#
+# The version is not an input: setuptools_scm derives it from git, so whatever
+# ref is checked out already carries its own version.
+
+on:
+  # No `paths` filter on pull_request, deliberately. This job is a REQUIRED
+  # status check, and a path-filtered required check never reports on a PR that
+  # misses the filter — GitHub then waits for it forever and the PR can never
+  # merge.
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+  workflow_call:
+    inputs:
+      tag:
+        description: Git tag to check out and build — optional; empty = the caller's context ref. publish.yml passes the release tag.
+        type: string
+        required: false
+        default: ''
+    outputs:
+      version:
+        description: Version built, as setuptools_scm resolved it from git
+        value: ${{ jobs.package.outputs.version }}
+      package:
+        description: Name of the uploaded artifact holding the sdist + wheel
+        value: ${{ jobs.package.outputs.package }}
+      sdist:
+        description: sdist file name
+        value: ${{ jobs.package.outputs.sdist }}
+      wheel:
+        description: wheel file name
+        value: ${{ jobs.package.outputs.wheel }}
+
+permissions:
+  contents: read
+
+jobs:
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      package: ${{ steps.version.outputs.package }}
+      sdist: ${{ steps.files.outputs.sdist }}
+      wheel: ${{ steps.files.outputs.wheel }}
+    steps:
+
+    - name: Checkout
+      uses: actions/checkout@v7
+      with:
+        # empty = the ref this workflow runs on; publish.yml passes the release tag
+        ref: ${{ inputs.tag }}
+        # setuptools_scm derives the version from git history, not just HEAD — a
+        # shallow clone silently yields a 0.1.devN version instead of the tag.
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Setup Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: '3.14'
+        cache: pip
+        cache-dependency-path: pyproject.toml
+
+    - name: Install Build Dependencies
+      run: pip install .[build]
+
+    # Resolve the version BEFORE building, so a wrong one (a shallow clone, an
+    # untagged ref) is caught here rather than being discovered as a
+    # confusingly-named file three steps later.
+    - name: Resolve Version
+      id: version
+      run: |
+        version="$(python -m setuptools_scm)"
+        echo "Building version: $version"
+        {
+          echo "version=$version"
+          echo "package=kubed_skills_mcp-${version}"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Build
+      run: python -m build
+
+    # Names are derived from the files on disk rather than composed from the
+    # version string: a wheel carries a Python tag (`-py3-none-any`) that the
+    # version does not, so guessing it produces a release asset reference that
+    # points at nothing.
+    - name: Resolve Artifact Names
+      id: files
+      run: |
+        {
+          echo "sdist=$(basename dist/*.tar.gz)"
+          echo "wheel=$(basename dist/*.whl)"
+        } >> "$GITHUB_OUTPUT"
+        ls -l dist
+
+    # Catches a malformed README or metadata before it becomes a rejected upload
+    # to a package index — the failure mode that only shows up at publish time,
+    # which is exactly when it is most expensive.
+    - name: Check Distribution Metadata
+      run: twine check --strict dist/*
+
+    # Install the built wheel into a clean environment and run it. `python -m
+    # build` succeeding only proves the metadata is well-formed; it says nothing
+    # about whether the console script resolves or the package imports.
+    - name: Verify the Wheel Installs
+      run: |
+        python -m venv /tmp/verify
+        /tmp/verify/bin/pip install --quiet "$(echo dist/*.whl)"
+        /tmp/verify/bin/python -c "import kubed.skills_mcp as m; print('imported', m.__file__)"
+        /tmp/verify/bin/skills-mcp --help
+
+    - name: Upload Package
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ steps.version.outputs.package }}
+        path: dist/
+        if-no-files-found: error
+
+    - name: Summary
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+        SDIST: ${{ steps.files.outputs.sdist }}
+        WHEEL: ${{ steps.files.outputs.wheel }}
+      run: |
+        cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+        ## Package
+
+        - **Version**: \`${VERSION}\`
+        - **sdist**: \`${SDIST}\`
+        - **wheel**: \`${WHEEL}\`
+        EOF

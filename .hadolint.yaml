@@ -1,0 +1,28 @@
+# hadolint configuration — the Dockerfile linter run by quality.yml.
+#
+# quality.yml fails on `warning` and above, so an ignore here is a deliberate
+# decision to accept a rule's risk, not a way to quiet a nuisance. Two of them,
+# both about version pinning, both because the pin already exists somewhere this
+# linter cannot see.
+ignored:
+
+# DL3008 — "pin versions in apt-get install".
+#
+# The one apt package is `git`, installed in the two BUILD stages only — the
+# `skills` stage clones the pinned skill sources, and `setup` needs it because
+# setuptools_scm reads .git to resolve a version. It never reaches the runner
+# stage and so is not in the shipped image at all. Pinning it to a Debian point
+# release would mean a build that breaks the day that exact version leaves the
+# archive — a real, recurring failure traded for a risk that stops at the build
+# stage boundary.
+- DL3008
+
+# DL3013 — "pin versions in pip install".
+#
+# The pins are in pyproject.toml, which is the whole point of `pip install
+# .[build]` and of installing the built wheel rather than a package list. Naming
+# versions in the Dockerfile too would create a second place to update and a new
+# way for the two to disagree silently.
+- DL3013
+
+failure-threshold: warning

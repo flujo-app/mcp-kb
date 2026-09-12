@@ -1,0 +1,70 @@
+name: Copilot Setup Steps
+
+# Provisions the environment the Copilot coding agent works in, so it starts with
+# the package installed and the tools it needs already on PATH instead of
+# discovering them one failed command at a time.
+#
+# The job MUST be named `copilot-setup-steps` — that exact name is how GitHub
+# finds it. The push/pull_request triggers exist only so a change to this file is
+# validated like any other workflow.
+
+on:
+  workflow_dispatch:
+  # `branches` as well as `paths` on the push trigger: without it, pushing the
+  # branch behind a pull request fires this a second time for the same commit,
+  # so every PR that touches this file reports two identical runs.
+  push:
+    branches: [main]
+    paths:
+    - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    branches: [main]
+    paths:
+    - .github/workflows/copilot-setup-steps.yml
+
+permissions:
+  contents: read
+
+jobs:
+
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+
+    - name: Checkout
+      uses: actions/checkout@v7
+      with:
+        # setuptools_scm resolves the version from history at install time.
+        fetch-depth: 0
+        persist-credentials: false
+
+    # 3.14 is the baseline everywhere — the image, the package build, and the
+    # single leg a pull request runs. The agent should be on the same one.
+    - name: Setup Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: '3.14'
+        cache: pip
+        cache-dependency-path: pyproject.toml
+
+    # Editable, so an edit the agent makes is live without a reinstall. [test]
+    # brings ruff and pytest; [build] brings the packaging tools so the agent can
+    # check that a change still produces a valid wheel.
+    - name: Install
+      run: pip install --editable .[test,build]
+
+    # The tests run against a synthetic tree from conftest.py, but anything the
+    # agent wants to try by hand needs real packs, and they are fetched not
+    # vendored. Cheap, and it is the one step whose absence is confusing.
+    - name: Fetch Skills
+      run: python scripts/fetch_skills.py --out /tmp/skills
+
+    # A cheap proof the environment is actually usable, so a broken setup fails
+    # here rather than halfway through the agent's first task.
+    - name: Verify
+      run: |
+        ruff --version
+        pytest --version
+        skills-mcp --help

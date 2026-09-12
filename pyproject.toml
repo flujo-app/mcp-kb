@@ -6,10 +6,22 @@ dynamic = ["version"]
 requires-python = ">=3.10.0"
 keywords = ["mcp", "skills", "agent-skills", "fastmcp", "ai"]
 license-files = ["LICENSE"]
+# One entry per interpreter CI actually sweeps, so the metadata and
+# .github/workflows/test.yml make the same claim. A bare "Python :: 3" tells an
+# installer nothing it can act on.
 classifiers = [
-  "Programming Language :: Python :: 3",
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
 authors = [{ name = "Kelly", email = "admin@kellyferrone.com" }]
 maintainers = [{ name = "Kelly", email = "admin@kellyferrone.com" }]
@@ -23,6 +35,10 @@ build = [
   "setuptools_scm",
   "build",
   "wheel",
+  # Validates the built distribution's metadata before it can become a rejected
+  # upload to a package index — the failure that otherwise only appears at
+  # publish time. Used by .github/workflows/package.yml.
+  "twine",
 ]
 test = [
   "pytest",

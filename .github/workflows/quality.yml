@@ -1,0 +1,170 @@
+name: 🛡️ Quality
+
+# The static-analysis and audit gates, kept out of test.yml so a red here names
+# the thing that is wrong instead of burying it in a test run. Four independent
+# jobs, all fast, all parallel:
+#
+#   CodeQL            the code scanner — Python source AND the workflows here
+#   Dependency Audit  pip-audit over the resolved RUNTIME dependency set
+#   Workflow Audit    zizmor over .github — CI supply chain and token hygiene
+#   Dockerfile Lint   hadolint over the image that actually ships
+#
+# CodeQL supports Python natively, so it IS the code-scanning engine here. The
+# other three cover what a code scanner does not look at — dependencies, CI
+# configuration, and the image.
+#
+# There is no spec job, unlike the selenium-flow sibling: this server publishes
+# no OpenAPI contract. Its contract is the `skill://` grammar, and that is
+# asserted in tests/test_uris.py rather than linted as a document.
+#
+# Runs on pull requests and on pushes to main, so the badge tracks trunk and a
+# direct push is gated the same way a PR is.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # The code scanner. `actions` is in the language list on purpose: this repo's
+  # CI handles a Docker Hub credential and a GitHub App key, so the workflows
+  # are as much attack surface as the Python is.
+  # ---------------------------------------------------------------------------
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Publish findings to Security → Code scanning, and onto the PR.
+      security-events: write
+    steps:
+
+    - name: Checkout
+      uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    # Both languages are interpreted, so there is nothing to build and CodeQL
+    # extracts them directly.
+    #
+    # Deliberately NO `build-mode: none` here. That input is only valid when a
+    # job analyses ONE language — the action rejects it alongside a list — and
+    # setting it would trade a correct two-language job for a matrix, two check
+    # names, and a required-status-check list that has to name both.
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4
+      with:
+        languages: python,actions
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v4
+
+  # ---------------------------------------------------------------------------
+  # Known-vulnerability audit of what the IMAGE actually installs.
+  # ---------------------------------------------------------------------------
+  deps:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+
+    - name: Checkout
+      uses: actions/checkout@v7
+      with:
+        # setuptools_scm resolves the version from history at install time.
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Setup Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: '3.14'
+        cache: pip
+        cache-dependency-path: pyproject.toml
+
+    # Runtime only. The test extra is deliberately NOT installed here: ruff and
+    # pytest never reach a user, and an advisory against a test-only tool that
+    # stops a release is noise, not security.
+    - name: Install Runtime Dependencies
+      run: pip install --editable .
+
+    # --exclude-editable drops kubed-skills-mcp itself. It is not on PyPI, so
+    # leaving it in makes pip-audit fail to resolve the very package being
+    # audited — which reads like a broken audit rather than a missing release.
+    - name: Freeze Runtime Dependencies
+      run: pip freeze --exclude-editable > requirements.txt
+
+    - name: Audit Dependencies
+      uses: pypa/gh-action-pip-audit@v1.1.0
+      with:
+        inputs: requirements.txt
+        summary: true
+
+    - name: Upload Resolved Dependencies
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: requirements-lock
+        path: requirements.txt
+        if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # zizmor audits the CI itself — template injection, over-broad tokens,
+  # credential persistence, unreviewed third-party actions. Config and the
+  # reasoning behind each relaxation live in .github/zizmor.yml.
+  # ---------------------------------------------------------------------------
+  actions:
+    name: Workflow Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+
+    - name: Checkout
+      uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    # A pull request from a FORK gets a read-only token, so the SARIF upload
+    # would 403 and fail an otherwise-passing audit. zizmor's own exit code is
+    # the gate either way — only the Security-tab enrichment is skipped, and the
+    # inline annotations still land on the PR.
+    - name: Audit Workflows
+      uses: zizmorcore/zizmor-action@v0.6.4
+      with:
+        inputs: .github/
+        persona: regular
+        advanced-security: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+
+  # ---------------------------------------------------------------------------
+  # The image is what this repo deploys, so its Dockerfile gets a linter. Rule
+  # exclusions and their reasons live in .hadolint.yaml.
+  # ---------------------------------------------------------------------------
+  docker:
+    name: Dockerfile Lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+
+    - name: Checkout
+      uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    # `info` and `style` findings are advice; `warning` and above are the ones
+    # worth failing a merge over.
+    - name: Lint Dockerfile
+      uses: hadolint/hadolint-action@v3.5.0
+      with:
+        dockerfile: Dockerfile
+        failure-threshold: warning

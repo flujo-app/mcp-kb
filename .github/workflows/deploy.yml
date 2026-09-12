@@ -17,6 +17,9 @@ jobs:
 
     - name: Checkout
       uses: actions/checkout@v7
+      with:
+        # Nothing here pushes — the deploy talks to the cluster, not to git.
+        persist-credentials: false
 
     - name: KRM Setup
       uses: kubed-io/actions/krm-setup@main

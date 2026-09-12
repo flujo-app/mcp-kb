@@ -6,12 +6,17 @@ name: 📸 Image Builder
 #   workflow_call       called by publish.yml with a version tag — checks out
 #                       that tag and pushes :vX.Y.Z (stable, pin this to deploy)
 #
-# Deliberately NOT run on pull_request. A PR is gated on the test workflow, which
-# installs the package and runs lint + unit tests; a ~7-minute two-arch image
-# build on every push to a branch buys little on top of that. The trade-off is
-# real and accepted: a change that breaks only the Dockerfile or the skill fetch
-# is caught on merge to main, not in review. Build it by hand first
-# (`docker compose build`, or dispatch this workflow) when touching either.
+# Deliberately NOT run on pull_request. A ~7-minute two-arch build is most of a
+# pull request's total wait, for a signal that almost never differs from what the
+# merge build gives — and the merge build is the one whose output anyone actually
+# pulls. The Dockerfile is not unguarded on a PR: quality.yml lints it with
+# hadolint, package.yml builds and installs the wheel the image wraps, and
+# test.yml runs lint + unit tests, so a break in the part that is ours is caught
+# in seconds instead of minutes.
+#
+# What remains uncovered is the skill fetch: a bad `ref` or `path` in skills.toml
+# only fails here, on merge to main. Run `python scripts/fetch_skills.py` by hand
+# when touching the manifest.
 #
 # There is deliberately NO `push: tags` trigger. Releases don't rely on a tag
 # push triggering a build; publish.yml calls this workflow (workflow_call) so the

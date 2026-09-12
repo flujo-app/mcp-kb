@@ -1,0 +1,63 @@
+# zizmor configuration — the CI supply-chain auditor run by quality.yml.
+#
+# Everything zizmor reports is on by default. This file records the places where
+# the default disagrees with a deliberate decision in this repo, and why. A
+# finding that is simply inconvenient does not belong here — it belongs fixed.
+#
+# Docs: https://docs.zizmor.sh/configuration/
+rules:
+
+  # zizmor's blanket policy wants every `uses:` pinned to a commit hash. This
+  # repo pins to release TAGS instead, and that is a considered trade, not
+  # laziness:
+  #
+  # - Dependabot keeps tags current on a weekly cadence (.github/dependabot.yml),
+  #   and its PRs are readable — `v7.0.0 → v7.0.1` says what changed. A hash bump
+  #   says nothing, so it gets rubber-stamped, which is the failure hash-pinning
+  #   was supposed to prevent.
+  # - Every action used here is from a publisher whose tags are protected:
+  #   actions/, github/, pypa/, google-github-actions/, plus the two org accounts
+  #   that own the release path. The tag-mutation attack hash-pinning defends
+  #   against needs the publisher's own account.
+  #
+  # `ref-pin` still fails anything floating — a bare branch like `@main` or an
+  # unpinned `@master` — which is the part that actually bites.
+  unpinned-uses:
+    config:
+      policies:
+        # kubed-io/actions and duplocloud/version-bump are both referenced at
+        # @main and are first-party to this release path, so they are named
+        # rather than covered by the blanket rule.
+        kubed-io/*: ref-pin
+        duplocloud/*: ref-pin
+        "*": ref-pin
+
+  # `uses: ./.github/workflows/x.yml` is already the local-path form. zizmor
+  # reads the call as a same-repository reference it would rather see written
+  # another way; there is no other way to write it that keeps a called workflow
+  # in this repo, so the advice has nothing to act on here.
+  self-repository:
+    ignore:
+    - publish.yml
+
+  # Two checkouts here MUST keep their credentials, because both push through
+  # the remote that checkout configured:
+  #
+  #   publish.yml       duplocloud/version-bump commits the rolled changelog and
+  #                     pushes the tag — the only thing the job exists for.
+  #   update-skills.yml peter-evans/create-pull-request pushes the repin branch.
+  #
+  # Neither uploads an artifact, so the credential has nowhere to leak to.
+  artipacked:
+    ignore:
+    - publish.yml
+    - update-skills.yml
+
+  # `gh release create` in a script step would work, but softprops/action-gh-release
+  # is the house standard across every kubed-io repo's publish.yml, and a release
+  # body this long is far more legible as a YAML block than as a heredoc inside a
+  # shell script. Consistency across the sibling repos is worth more here than
+  # dropping one dependency.
+  superfluous-actions:
+    ignore:
+    - publish.yml

@@ -4,9 +4,9 @@
 # House rules:
 # - Weekly cadence: enough to stay current without spamming the queue.
 # - Grouped minor + patch per ecosystem; majors stay separate for review.
-# - Short cooldown so yanked releases get pulled before they reach us.
+# - A one-week cooldown so a release that gets yanked, or has its first
+#   post-publish advisory filed against it, is pulled before it reaches us.
 # - Commit prefix is distinct per ecosystem so the merge queue reads cleanly.
-# - `no changelog` skips the pr.yml changelog gate.
 #
 # Docs: https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference
 version: 2
@@ -22,11 +22,14 @@ updates:
   labels:
   - dependencies
   - github-actions
+  # skips the pr.yml changelog gate — dependency bumps still land in release
+  # notes via version-bump's PR-based generation.
   - no changelog
   commit-message:
     prefix: ci(deps)
   cooldown:
-    default-days: 3
+    # github-actions is not semver-versioned, so only default-days is valid here.
+    default-days: 7
   groups:
     actions-minor-patch:
       update-types:
@@ -44,10 +47,11 @@ updates:
   labels:
   - dependencies
   - python
+  - no changelog
   commit-message:
     prefix: deps(pip)
   cooldown:
-    default-days: 3
+    default-days: 7
   groups:
     pip-minor-patch:
       update-types:
@@ -68,7 +72,7 @@ updates:
   commit-message:
     prefix: deps(docker)
   cooldown:
-    default-days: 3
+    default-days: 7
   groups:
     docker-minor-patch:
       update-types:

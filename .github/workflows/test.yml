@@ -1,7 +1,22 @@
 name: 🧪 Test
 
 # Unit tests only — they use a synthetic skills tree from conftest.py and never
-# touch the submodules, so this stays fast and independent of upstream skill repos.
+# clone an upstream skill repo, so this stays fast and independent of what the
+# pinned sources happen to be doing today.
+#
+# The matrix is event-shaped, and that is the whole design of this file:
+#
+#   pull_request     3.14 only — the fast gate a contributor waits on
+#   push: main       3.10 → 3.14 — the compatibility sweep, run once the change
+#                    has already landed, because that is where a break in an old
+#                    interpreter is cheap to find and nobody is blocked on it
+#   workflow_call    full matrix too (the caller's event is not pull_request) —
+#                    publish.yml runs this before it cuts a version, so a release
+#                    never ships an interpreter it has not been tested on
+#
+# pyproject declares requires-python >=3.10. Testing only the newest interpreter
+# would leave four of those five claims unverified, and a release is exactly the
+# moment that matters.
 
 on:
   # No `paths` filter on pull_request, deliberately. This job is a REQUIRED
@@ -15,16 +30,31 @@ on:
     paths:
     - kubed/**
     - tests/**
+    - scripts/**
     - pyproject.toml
     - .github/workflows/test.yml
   workflow_dispatch:
+  workflow_call: {}
+
+permissions:
+  contents: read
 
 jobs:
+
   test:
     name: Test
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      # One interpreter failing should not hide the others — on a main-branch
+      # sweep the useful answer is "which versions broke", not "the first one to".
+      fail-fast: false
+      matrix:
+        # A pull request pays for one leg; everything else sweeps the supported
+        # range. Keep 3.14 last-listed and present in BOTH arms: `Test (3.14)` is
+        # the required status check, so it has to report on every pull request.
+        python-version: ${{ github.event_name == 'pull_request' && fromJSON('["3.14"]') || fromJSON('["3.10", "3.11", "3.12", "3.13", "3.14"]') }}
     steps:
 
     - name: Checkout
@@ -32,11 +62,14 @@ jobs:
       with:
         # setuptools_scm needs history to resolve a version at install time.
         fetch-depth: 0
+        persist-credentials: false
 
     - name: Setup Python
       uses: actions/setup-python@v7
       with:
-        python-version: '3.13'
+        python-version: ${{ matrix.python-version }}
+        cache: pip
+        cache-dependency-path: pyproject.toml
 
     - name: Install
       run: pip install .[test]

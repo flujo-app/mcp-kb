@@ -1,12 +1,21 @@
 name: 🧬 Publish Version
 
-# Manual, intentional release — three jobs so the image is on Docker Hub BEFORE
-# the GitHub Release is cut:
+# Manual, intentional release. Each job owns exactly one thing and hands the next
+# a clean input, ordered so nothing outward-facing happens until every artifact
+# it refers to already exists:
 #
+#   test    → the full 3.10 → 3.14 matrix. A release is the one moment the
+#             compatibility sweep has to be green, so it gates everything below.
 #   version → pin kustomization.yaml to the version we're about to cut, roll
 #             CHANGELOG [Unreleased], commit + tag on main
 #   image   → check out that tag and build+push kubed/skills-mcp:<tag>
-#   release → create the GitHub Release for the tag
+#   package → check out that tag and build the sdist + wheel → GHA artifact
+#   release → download the package artifact and cut the GitHub Release
+#
+# `release` runs last and needs no source checkout: it is pure artifact plus
+# secrets. That ordering is the point — the image is on Docker Hub and the
+# distribution is built BEFORE the Release exists, so the Release never links to
+# a tarball or an image tag that was never produced.
 #
 # The deploy pin happens in `version`, before the tag is created, so the tag's
 # tree already points at its own image — check out vX.Y.Z and the manifest says
@@ -17,8 +26,10 @@ name: 🧬 Publish Version
 # a semver — so main always sits on a stable, deployable version. image.yml just
 # builds images. To run something unreleased, point newTag at :main or :latest.
 #
-# Run once with push=false (dry run — computes the next version and builds the
-# image without pushing, changes nothing) then push=true to release.
+# Run once with push=false (dry run: runs the tests, computes the next version,
+# and builds both the image and the package without pushing anything) then
+# push=true to actually cut the release. A failed build after a successful tag
+# strands a tag on a nonexistent image, which is exactly what the dry run buys.
 #
 # Auth for the version job: tokenless WIF → GCP Secret Manager → the kubed.io
 # GitHub App creds. The App token is what lets version-bump commit to protected
@@ -52,8 +63,16 @@ permissions:
 
 jobs:
 
+  # The compatibility sweep. Gates everything: a release is the one moment every
+  # interpreter pyproject claims has to be verified, and the cheapest place to
+  # find out otherwise is before a tag exists.
+  test:
+    name: Test
+    uses: ./.github/workflows/test.yml
+
   version:
     name: Version
+    needs: test
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.bump.outputs.tag }}
@@ -137,16 +156,35 @@ jobs:
       tag: ${{ inputs.push && needs.version.outputs.tag || '' }}
       push: ${{ inputs.push }}
 
+  # Build the distribution at the freshly tagged commit, so the artifact the
+  # Release carries was built from exactly the released tree. On a dry run there
+  # is no tag, so it packages the current ref — which still proves it builds.
+  package:
+    name: Package
+    needs: version
+    uses: ./.github/workflows/package.yml
+    with:
+      tag: ${{ inputs.push && needs.version.outputs.tag || '' }}
+
   release:
     name: Release
     needs:
     - version
     - image
+    - package
     if: inputs.push
     runs-on: ubuntu-latest
     permissions:
       contents: write   # create the GitHub Release on the existing tag
     steps:
+
+    # No checkout: this job is pure artifact plus secrets. What it publishes is
+    # the distribution the package job already built and tested, byte for byte.
+    - name: Download Package
+      uses: actions/download-artifact@v7
+      with:
+        name: ${{ needs.package.outputs.package }}
+        path: dist
 
     - name: Create Release
       uses: softprops/action-gh-release@v3.0.3
@@ -154,6 +192,9 @@ jobs:
         name: ${{ needs.version.outputs.tag }}
         tag_name: ${{ needs.version.outputs.tag }}
         prerelease: ${{ contains(needs.version.outputs.tag, '-') }}
+        files: |
+          dist/${{ needs.package.outputs.sdist }}
+          dist/${{ needs.package.outputs.wheel }}
         body: |
           [![Image Builder](${{ github.server_url }}/${{ github.repository }}/actions/workflows/image.yml/badge.svg)](${{ github.server_url }}/${{ github.repository }}/actions/workflows/image.yml)
 
