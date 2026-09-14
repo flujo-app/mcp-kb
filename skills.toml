@@ -26,13 +26,13 @@ path = "skills"
 [[source]]
 name = "grafana"
 repo = "https://github.com/grafana/skills.git"
-ref = "51d33e71e191b409bbd25fc7be2684c610d18166"
+ref = "ac17a41c81649195d516509cf0194b5637fec44a"
 path = "skills"
 
 [[source]]
 name = "penpot"
 repo = "https://github.com/penpot/penpot-ai-kit.git"
-ref = "c63d8e3717323fad859e794848e5a602b155a7ec"
+ref = "efbefc935ee43804502976aa5ec9659a8bb7e207"
 path = "skills"
 # This kit factors shared material up to the repo root and references it from
 # 190 places across its skills. Without these the pack is full of dead links.
