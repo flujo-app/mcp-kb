@@ -1,4 +1,4 @@
-# Working on skills-mcp
+# Working on mcp-school
 
 An MCP server that serves Agent Skills — `SKILL.md` packages — over HTTP so
 clients that cannot read a filesystem (n8n agents, above all) can still use
@@ -13,15 +13,15 @@ into the image; nothing is fetched at runtime.
 | `prompts/<pack>/<name>.md` | prompts, committed here — served as `<pack>_<name>` |
 | `scripts/fetch_skills.py` | clones each pinned source at build time; stdlib only |
 | `scripts/requirements.py` | prints the dependency list out of `pyproject.toml` for the image build |
-| `kubed/skills_mcp/skills.py` | the catalogue — `Skill`, loading, and `SkillIndex` |
-| `kubed/skills_mcp/uris.py` | the `skill://` address space — `Catalogue`, the grammar |
-| `kubed/skills_mcp/resources.py` | the resources, and the mirror-hiding middleware |
-| `kubed/skills_mcp/tools.py` | the two mirror tools |
-| `kubed/skills_mcp/request.py` | what the current request says about itself |
-| `kubed/skills_mcp/prompts.py` | loads, renders and scopes the prompts |
-| `kubed/skills_mcp/routes.py` | plain HTTP endpoints (`/health`) |
-| `kubed/skills_mcp/server.py` | `SkillsMCP` — wiring only, no tool bodies |
-| `kubed/skills_mcp/main.py` | CLI and env parsing; the only file reading `os.environ` |
+| `mcp_school/skills.py` | the catalogue — `Skill`, loading, and `SkillIndex` |
+| `mcp_school/uris.py` | the `skill://` address space — `Catalogue`, the grammar |
+| `mcp_school/resources.py` | the resources, and the mirror-hiding middleware |
+| `mcp_school/tools.py` | the two mirror tools |
+| `mcp_school/request.py` | what the current request says about itself |
+| `mcp_school/prompts.py` | loads, renders and scopes the prompts |
+| `mcp_school/routes.py` | plain HTTP endpoints (`/health`) |
+| `mcp_school/server.py` | `School` — wiring only, no tool bodies |
+| `mcp_school/main.py` | CLI and env parsing; the only file reading `os.environ` |
 | `deploy/` | raw Deployment + Service |
 | `kustomization.yaml` | the one kustomization; `newTag` is the deployed version |
 | `skills/` | **gitignored** — build output, never commit it |
@@ -51,7 +51,7 @@ Then verify locally before pushing:
 ```bash
 python scripts/fetch_skills.py --out /tmp/skills   # clone the packs
 SKILLS_DIR=/tmp/skills python -m pytest -q         # 14 tests
-SKILLS_DIR=/tmp/skills skills-mcp --transport stdio
+SKILLS_DIR=/tmp/skills mcp-school --transport stdio
 ```
 
 Nesting depth does **not** matter. `load_skills` walks for `SKILL.md`, so a flat
@@ -73,7 +73,7 @@ Two workflows, in this order. Neither runs on a push to main.
 ```
 test    → the full 3.10 → 3.14 matrix; gates everything below
 version → pins kustomization.yaml newTag, rolls CHANGELOG, commits + tags main
-image   → checks out that tag, builds and pushes kubed/skills-mcp:vX.Y.Z
+image   → checks out that tag, builds and pushes kubed/mcp-school:vX.Y.Z
 package → checks out that tag, builds the sdist + wheel as a GHA artifact
 release → downloads that artifact and cuts the GitHub Release
 ```
@@ -231,8 +231,8 @@ tests in `tests/test_header_scope.py` run a real uvicorn server for that reason.
 ## Verifying in the cluster
 
 ```bash
-kubectl -n flow rollout status deploy/skills-mcp
-kubectl -n flow port-forward svc/skills-mcp 18000:8000
+kubectl -n flow rollout status deploy/mcp-school
+kubectl -n flow port-forward svc/mcp-school 18000:8000
 curl -s localhost:18000/health   # {"status":"ok","packs":[...],"skills":N}
 ```
 

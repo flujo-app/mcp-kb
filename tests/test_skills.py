@@ -6,7 +6,7 @@ rather than only through the tools that call it.
 
 import pytest
 
-from kubed.skills_mcp.skills import PackResources, SkillIndex, load_skills
+from mcp_school.skills import PackResources, SkillIndex, load_skills
 
 
 @pytest.fixture
@@ -72,7 +72,7 @@ def test_empty_index_is_safe(index):
 
 @pytest.fixture
 def resources(skills_dir):
-    from kubed.skills_mcp.skills import PackResources
+    from mcp_school.skills import PackResources
 
     return PackResources(skills_dir, load_skills(skills_dir))
 
@@ -120,7 +120,7 @@ def test_listing_never_walks_the_disk_after_startup(skills_dir, monkeypatch):
     import os
     import pathlib
 
-    from kubed.skills_mcp.uris import Catalogue
+    from mcp_school.uris import Catalogue
 
     skills = load_skills(skills_dir)
     resources = PackResources(skills_dir, skills)

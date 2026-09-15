@@ -1,6 +1,6 @@
 [project]
-name = "kubed-skills-mcp"
-description = "MCP server that serves Anthropic Agent Skills as MCP resources and tools"
+name = "mcp-school"
+description = "A resource and prompt gateway for MCP: serves skills, prompts and other agent material from many sources"
 readme = "README.md"
 dynamic = ["version"]
 requires-python = ">=3.10.0"
@@ -56,17 +56,17 @@ build-backend = "setuptools.build_meta"
 
 [project.urls]
 Homepage = "https://github.com/kubed-io"
-Repository = "https://github.com/kubed-io/skills-mcp"
-Issues = "https://github.com/kubed-io/skills-mcp/issues"
-Changelog = "https://github.com/kubed-io/skills-mcp/blob/main/CHANGELOG.md"
+Repository = "https://github.com/kubed-io/mcp-school"
+Issues = "https://github.com/kubed-io/mcp-school/issues"
+Changelog = "https://github.com/kubed-io/mcp-school/blob/main/CHANGELOG.md"
 
 [project.scripts]
-skills-mcp = "kubed.skills_mcp.main:main"
+mcp-school = "mcp_school.main:main"
 
 [tool.setuptools_scm]
 
 [tool.setuptools]
-packages = ["kubed.skills_mcp"]
+packages = ["mcp_school"]
 
 [tool.pytest.ini_options]
 minversion = "6.0"

@@ -37,7 +37,7 @@ for -- a skill citing one is not a reason to fetch it.
 """
 
 
-class SkillsMCP:
+class School:
     """An MCP server over a directory of Agent Skills.
 
     The catalogue is served twice, because MCP clients are not all alike. As
@@ -63,7 +63,7 @@ class SkillsMCP:
         self.resources = PackResources(skills_dir, skills)
         self.catalogue = Catalogue(self.index, self.resources)
         self.prompts = load_prompts(prompts_dir, packs)
-        self.mcp = FastMCP("Skills", instructions=INSTRUCTIONS)
+        self.mcp = FastMCP("mcp-school", instructions=INSTRUCTIONS)
 
         resources.register(self.mcp, self.catalogue)
         mirrors = tools.register(self.mcp, self.catalogue)

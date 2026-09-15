@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: skills-mcp
+  name: mcp-school
 spec:
   replicas: 1
   selector:
@@ -20,8 +20,8 @@ spec:
               - key: node-role.kubernetes.io/control-plane
                 operator: DoesNotExist
       containers:
-      - name: skills-mcp
-        image: kubed/skills-mcp
+      - name: mcp-school
+        image: kubed/mcp-school
         # Always, because kustomization.yaml currently floats on :latest — with
         # IfNotPresent a node keeps serving whatever layer it cached first.
         # Once publish.yml pins a semver this is just a cheap registry check.

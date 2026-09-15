@@ -242,7 +242,7 @@ def test_the_copied_venv_is_proved_to_work_at_build_time():
     import pulls the whole dependency tree.
     """
     runner = dockerfile_stages()["runner"]
-    assert any("kubed.skills_mcp.server" in ln for ln in runner)
+    assert any("mcp_school.server" in ln for ln in runner)
 
 
 def test_the_project_install_resolves_its_dependencies():

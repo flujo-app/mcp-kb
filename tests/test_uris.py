@@ -9,8 +9,8 @@ import json
 
 import pytest
 
-from kubed.skills_mcp.skills import PackResources, SkillIndex, load_skills
-from kubed.skills_mcp.uris import Catalogue, parse, uri_for
+from mcp_school.skills import PackResources, SkillIndex, load_skills
+from mcp_school.uris import Catalogue, parse, uri_for
 
 
 @pytest.fixture
