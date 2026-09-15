@@ -96,7 +96,7 @@ jobs:
     - name: Install Runtime Dependencies
       run: pip install --editable .
 
-    # --exclude-editable drops kubed-skills-mcp itself. It is not on PyPI, so
+    # --exclude-editable drops mcp-school itself. It is not on PyPI, so
     # leaving it in makes pip-audit fail to resolve the very package being
     # audited — which reads like a broken audit rather than a missing release.
     - name: Freeze Runtime Dependencies

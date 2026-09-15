@@ -1,7 +1,7 @@
 """Serve Agent Skills over MCP."""
 
 from .prompts import FilePrompt, load_prompts
-from .server import SkillsMCP
+from .server import School
 from .skills import PackResources, Skill, SkillIndex, load_skills
 from .uris import Catalogue, Entry
 
@@ -10,9 +10,9 @@ __all__ = [
     "Entry",
     "FilePrompt",
     "PackResources",
+    "School",
     "Skill",
     "SkillIndex",
-    "SkillsMCP",
     "load_prompts",
     "load_skills",
 ]

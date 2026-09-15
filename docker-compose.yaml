@@ -1,9 +1,9 @@
-# Local build + smoke test for the kubed/skills-mcp image. `docker buildx bake`
+# Local build + smoke test for the kubed/mcp-school image. `docker buildx bake`
 # reads the build block below -- that is what CI runs, so the tag list and
 # x-bake settings here are the release configuration, not just local convenience.
 services:
-  skills-mcp:
-    image: &image kubed/skills-mcp:latest
+  mcp-school:
+    image: &image kubed/mcp-school:latest
     build:
       context: .
       target: runner
@@ -11,16 +11,16 @@ services:
         PY_VERSION: ${PY_VERSION:-3.14}
       tags:
       - *image
-      - kubed/skills-mcp:${GIT_SHA:-latest}
-      - kubed/skills-mcp:${GIT_REF:-latest}
-      - kubed/skills-mcp:${GIT_TAG:-latest}
+      - kubed/mcp-school:${GIT_SHA:-latest}
+      - kubed/mcp-school:${GIT_REF:-latest}
+      - kubed/mcp-school:${GIT_TAG:-latest}
       x-bake:
         platforms:
         - linux/amd64
         - linux/arm64
-        cache-to: type=gha,mode=max,scope=skills-mcp
-        cache-from: type=gha,scope=skills-mcp
-    container_name: skills-mcp
+        cache-to: type=gha,mode=max,scope=mcp-school
+        cache-from: type=gha,scope=mcp-school
+    container_name: mcp-school
     restart: no
     ports:
     - 8000:8000

@@ -1,13 +1,14 @@
-# Skills MCP
+# mcp-school
 
-Serves [Agent Skills](https://code.claude.com/docs/en/skills) over MCP, so any client can
-discover and read them — including clients that only speak tools.
+A resource and prompt gateway for MCP. Serves [Agent Skills](https://code.claude.com/docs/en/skills)
+and prompts over MCP, so any client can discover and read them — including clients that only
+speak tools.
 
 Skills are declared as pinned dependencies in `skills.toml` and fetched at image build
 time. Nothing is fetched at runtime.
 
 ```
-docker run -p 8000:8000 kubed/skills-mcp:latest
+docker run -p 8000:8000 kubed/mcp-school:latest
 ```
 
 ## One address space
@@ -55,7 +56,7 @@ Turn the mirror on with `?resources=off` on the MCP URL, or an `X-MCP-Resources:
 header:
 
 ```
-http://skills-mcp.flow.svc.cluster.local:8000/mcp?resources=off
+http://mcp-school.flow.svc.cluster.local:8000/mcp?resources=off
 ```
 
 The two tools are hidden from clients that read resources, because advertising both
@@ -153,7 +154,7 @@ skill in the listing (for clients that sync skills to disk), `X-Skill-Pack` pins
 kubectl apply -k .
 ```
 
-Runs in the `flow` namespace as `skills-mcp:8000`. There is no authentication: every
+Runs in the `flow` namespace as `mcp-school:8000`. There is no authentication: every
 skill served is public markdown, the server has no write path and holds no credentials.
 
 ## Development

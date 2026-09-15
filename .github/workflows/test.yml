@@ -28,7 +28,7 @@ on:
   push:
     branches: [main]
     paths:
-    - kubed/**
+    - mcp_school/**
     - tests/**
     - scripts/**
     - pyproject.toml

@@ -116,7 +116,7 @@ COPY prompts /prompts
 # a running pod, so it is checked here — this imports the whole dependency tree,
 # which is what would break if a wheel needed a shared library only the fat
 # image has.
-RUN python -c "from kubed.skills_mcp.server import SkillsMCP"
+RUN python -c "from mcp_school.server import School"
 
 ENV SKILLS_DIR=/skills \
     PROMPTS_DIR=/prompts \
@@ -129,4 +129,4 @@ EXPOSE 8000
 # non-numeric USER and refuses to start the container.
 USER 65534
 
-ENTRYPOINT ["skills-mcp"]
+ENTRYPOINT ["mcp-school"]

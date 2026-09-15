@@ -67,4 +67,4 @@ jobs:
       run: |
         ruff --version
         pytest --version
-        skills-mcp --help
+        mcp-school --help

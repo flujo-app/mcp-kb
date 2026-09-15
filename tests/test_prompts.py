@@ -11,8 +11,8 @@ except ModuleNotFoundError:  # pragma: no cover - 3.10 only
 import pytest
 from fastmcp import Client
 
-from kubed.skills_mcp import SkillsMCP
-from kubed.skills_mcp.prompts import load_prompt, load_prompts
+from mcp_school import School
+from mcp_school.prompts import load_prompt, load_prompts
 
 pytestmark = pytest.mark.unit
 
@@ -92,7 +92,7 @@ def test_a_missing_directory_is_no_prompts(tmp_path):
 
 
 async def test_a_client_sees_the_prompt_and_its_arguments(skills_dir, prompts_dir):
-    async with Client(SkillsMCP(skills_dir, prompts_dir=prompts_dir).mcp) as client:
+    async with Client(School(skills_dir, prompts_dir=prompts_dir).mcp) as client:
         listed = {p.name: p for p in await client.list_prompts()}
     hello = listed["flatsource_hello"]
     assert hello.description == "Say hello."
@@ -103,7 +103,7 @@ async def test_a_client_sees_the_prompt_and_its_arguments(skills_dir, prompts_di
 
 
 async def test_rendering_fills_arguments_and_defaults(skills_dir, prompts_dir):
-    async with Client(SkillsMCP(skills_dir, prompts_dir=prompts_dir).mcp) as client:
+    async with Client(School(skills_dir, prompts_dir=prompts_dir).mcp) as client:
         given = await client.get_prompt("flatsource_hello", {"who": "Dr K", "greeting": "Hi"})
         defaulted = await client.get_prompt("flatsource_hello", {"who": "Dr K"})
         blank = await client.get_prompt("flatsource_hello", {"who": "Dr K", "greeting": ""})
@@ -114,20 +114,20 @@ async def test_rendering_fills_arguments_and_defaults(skills_dir, prompts_dir):
 
 
 async def test_a_missing_required_argument_is_refused(skills_dir, prompts_dir):
-    async with Client(SkillsMCP(skills_dir, prompts_dir=prompts_dir).mcp) as client:
+    async with Client(School(skills_dir, prompts_dir=prompts_dir).mcp) as client:
         with pytest.raises(Exception, match="who"):
             await client.get_prompt("flatsource_hello", {})
 
 
 async def test_logql_braces_survive_rendering(skills_dir, prompts_dir):
-    async with Client(SkillsMCP(skills_dir, prompts_dir=prompts_dir).mcp) as client:
+    async with Client(School(skills_dir, prompts_dir=prompts_dir).mcp) as client:
         result = await client.get_prompt("deepsource_check", {"service": "api"})
     assert text(result) == '{app="api"} |= "error"\n'
 
 
 async def test_skill_packs_scopes_prompts(skills_dir, prompts_dir):
     """A prompt from an unloaded pack is neither listed nor renderable."""
-    server = SkillsMCP(skills_dir, packs=["flatsource"], prompts_dir=prompts_dir)
+    server = School(skills_dir, packs=["flatsource"], prompts_dir=prompts_dir)
     async with Client(server.mcp) as client:
         assert [p.name for p in await client.list_prompts()] == ["flatsource_hello"]
         with pytest.raises(Exception, match="deepsource_check"):
@@ -135,7 +135,7 @@ async def test_skill_packs_scopes_prompts(skills_dir, prompts_dir):
 
 
 async def test_the_shipped_grafana_prompt_renders(skills_dir):
-    async with Client(SkillsMCP(skills_dir, prompts_dir=SHIPPED).mcp) as client:
+    async with Client(School(skills_dir, prompts_dir=SHIPPED).mcp) as client:
         result = await client.get_prompt("grafana_debug-logs", {"app": "nextcloud"})
     body = text(result)
     assert "**nextcloud**" in body

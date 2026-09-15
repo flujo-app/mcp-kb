@@ -11,12 +11,12 @@ import argparse
 import os
 from pathlib import Path
 
-from .server import DEFAULT_PROMPTS_DIR, DEFAULT_SKILLS_DIR, SkillsMCP
+from .server import DEFAULT_PROMPTS_DIR, DEFAULT_SKILLS_DIR, School
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="skills-mcp", description="Serve Agent Skills over MCP."
+        prog="mcp-school", description="Serve Agent Skills over MCP."
     )
     parser.add_argument(
         "--skills-dir",
@@ -56,10 +56,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Entry point for the ``skills-mcp`` console script."""
+    """Entry point for the ``mcp-school`` console script."""
     args = build_parser().parse_args(argv)
     packs = [p.strip() for p in args.packs.split(",") if p.strip()] or None
-    server = SkillsMCP(args.skills_dir, packs, args.prompts_dir)
+    server = School(args.skills_dir, packs, args.prompts_dir)
     server.run(transport=args.transport, host=args.host, port=args.port)
 
 
