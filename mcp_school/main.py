@@ -8,15 +8,24 @@ the environment, so this file is the whole configuration surface.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 
+from .config import schema
 from .server import DEFAULT_PROMPTS_DIR, DEFAULT_SKILLS_DIR, School
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mcp-school", description="Serve Agent Skills over MCP."
+    )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        default="serve",
+        choices=["serve", "schema"],
+        help="serve the catalogue, or print its config JSON Schema (default: serve)",
     )
     parser.add_argument(
         "--skills-dir",
@@ -58,6 +67,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     """Entry point for the ``mcp-school`` console script."""
     args = build_parser().parse_args(argv)
+    if args.command == "schema":
+        print(json.dumps(schema(), indent=2))
+        return
     packs = [p.strip() for p in args.packs.split(",") if p.strip()] or None
     server = School(args.skills_dir, packs, args.prompts_dir)
     server.run(transport=args.transport, host=args.host, port=args.port)
