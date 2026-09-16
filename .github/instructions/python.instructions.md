@@ -8,21 +8,23 @@ Applies to every `.py` file here. Cross-cutting review priorities are in
 [copilot-instructions.md](../copilot-instructions.md); this file is the
 language-specific rules. These are hard conventions — flag violations.
 
-## The supported range is 3.10 → 3.14
+## The supported range is 3.11 → 3.14
 
-`pyproject.toml` declares `requires-python = ">=3.10"`, and `test.yml` sweeps the
-whole range on main. So a 3.11+ syntax or stdlib feature is a **build break on
-the oldest supported interpreter**, not a style question.
+`pyproject.toml` declares `requires-python = ">=3.11"`, and `test.yml` sweeps the
+whole range on main. So a 3.12+ syntax or stdlib feature is a **build break on
+the oldest supported interpreter**, not a style question. 3.10 was dropped with
+pygit2: `Remote.list_heads` arrives in pygit2 1.19, which requires 3.11.
 
 The ones that actually come up:
 
-- `match` statements are 3.10, fine. `except*` groups are 3.11 — not fine.
-- `typing.Self` and `asyncio.TaskGroup` are 3.11 — not fine.
-- `tomllib` is 3.11 — not fine.
-- `X | Y` in an annotation is fine on 3.10 **because every module starts with
+- `except*` groups, `typing.Self`, `asyncio.TaskGroup` and `tomllib` are 3.11 —
+  all fine now.
+- PEP 695 `type X = ...` and the `type` parameter syntax are 3.12 — not fine.
+- `itertools.batched` is 3.12; `enum.StrEnum` is 3.11, fine.
+- A glob ending in `**` matches directories only before 3.13. Always `dir/**/*`.
+- `X | Y` in an annotation is fine **because every module starts with
   `from __future__ import annotations`**. Used at runtime — `isinstance(x, A | B)`,
-  a `TypeAlias` value, a pydantic field evaluated eagerly — it is 3.10+ only in
-  annotations and needs care elsewhere.
+  a `TypeAlias` value, a pydantic field evaluated eagerly — it needs care.
 
 If a newer feature is genuinely worth it, the change is to raise
 `requires-python` and drop matrix legs, in its own PR, deliberately. Not silently.

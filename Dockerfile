@@ -50,10 +50,6 @@ COPY scripts/requirements.py ./scripts/
 RUN <<'SHELL'
 set -eu
 pip install --no-cache-dir --upgrade pip
-# The reader needs a TOML parser, and tomllib is 3.11+. PY_VERSION is an ARG and
-# the project supports 3.10, so this marker supplies the backport there and
-# installs nothing anywhere else.
-pip install --no-cache-dir "tomli; python_version < '3.11'"
 # Read out of pyproject.toml rather than restated here: a second copy is a
 # second thing to keep in step, and the way that fails is an image built against
 # dependencies nobody declared. No --extra: [build] and [test] are both tooling.

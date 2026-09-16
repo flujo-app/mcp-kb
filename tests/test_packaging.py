@@ -18,15 +18,7 @@ the wheel the builder had just built — reads as perfectly ordinary Dockerfile.
 import pathlib
 import re
 import sys
-
-# tomllib is 3.11+. The package supports 3.10, so on that leg the reader is
-# tomli — the same parser tomllib was adopted from, pulled in by the `test`
-# extra under the same marker. Without this the whole module fails to import and
-# every test in it is skipped as a collection error rather than reported.
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - 3.10 only
-    import tomli as tomllib
+import tomllib
 
 import pytest
 import yaml
@@ -36,6 +28,7 @@ pytestmark = pytest.mark.unit
 REPO = pathlib.Path(__file__).resolve().parent.parent
 PYPROJECT = REPO / "pyproject.toml"
 IMAGE_WORKFLOW = REPO / ".github" / "workflows" / "image.yml"
+TEST_WORKFLOW = REPO / ".github" / "workflows" / "test.yml"
 DOCKERFILE = REPO / "Dockerfile"
 
 sys.path.insert(0, str(REPO / "scripts"))
@@ -109,6 +102,60 @@ def covered(path: str, patterns: set[str]) -> bool:
         ):
             return True
     return False
+
+
+def interpreters() -> dict[str, set[str]]:
+    """Every statement this repo makes about which interpreters it supports."""
+    data = tomllib.loads(PYPROJECT.read_text())
+    matrix = yaml.safe_load(TEST_WORKFLOW.read_text())["jobs"]["test"]["strategy"][
+        "matrix"
+    ]["python-version"]
+    return {
+        "requires-python": {data["project"]["requires-python"].lstrip(">=")},
+        "classifiers": {
+            c.rsplit(" :: ", 1)[1]
+            for c in data["project"]["classifiers"]
+            if re.fullmatch(r"Programming Language :: Python :: 3\.\d+", c)
+        },
+        "test.yml": set(re.findall(r"3\.\d+", matrix)),
+    }
+
+
+# --------------------------------------------------------------------------
+# Which interpreters this is
+# --------------------------------------------------------------------------
+
+
+def test_the_supported_interpreters_are_the_same_everywhere():
+    """`requires-python`, the classifiers and the CI matrix are three
+    statements of one fact, made in three files that drift silently.
+
+    A pull request runs 3.14 alone, so an interpreter named in the metadata but
+    missing from the matrix is a claim nothing checks until the merge — or
+    until the release, since publish.yml gates on this workflow.
+    """
+    said = interpreters()
+    assert said["classifiers"] == said["test.yml"]
+    assert min(said["classifiers"], key=_version) == min(said["requires-python"])
+
+
+def test_the_pygit2_floor_has_the_api_the_git_source_calls():
+    """`Remote.list_heads` first exists in pygit2 1.19.
+
+    1.15 to 1.18 have `ls_remotes` and nothing else, so a lower floor resolves —
+    on any interpreter old enough for pip to pick one — to a pygit2 that sends
+    `School.__init__` out with an uncaught `AttributeError`. 1.19 is also the
+    first release to require Python 3.11, which is why the floor here and the
+    floor in `requires-python` move together.
+    """
+    data = tomllib.loads(PYPROJECT.read_text())
+    pin = next(d for d in data["project"]["dependencies"] if d.startswith("pygit2"))
+    assert _version(pin.removeprefix("pygit2>=")) >= (1, 19)
+    assert _version(data["project"]["requires-python"].lstrip(">=")) >= (3, 11)
+
+
+def _version(text: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in text.split("."))
 
 
 # --------------------------------------------------------------------------

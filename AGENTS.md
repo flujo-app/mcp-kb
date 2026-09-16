@@ -100,7 +100,7 @@ One workflow. It does not run on a push to main.
 **`🧬 Publish Version`** (`workflow_dispatch`) — four jobs:
 
 ```
-test    → the full 3.10 → 3.14 matrix; gates everything below
+test    → the full 3.11 → 3.14 matrix; gates everything below
 version → rolls CHANGELOG, commits + tags main
 image   → checks out that tag, builds and pushes kubed/mcp-school:vX.Y.Z
 package → checks out that tag, builds the sdist + wheel as a GHA artifact

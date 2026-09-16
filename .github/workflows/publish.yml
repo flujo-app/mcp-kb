@@ -4,7 +4,7 @@ name: 🧬 Publish Version
 # a clean input, ordered so nothing outward-facing happens until every artifact
 # it refers to already exists:
 #
-#   test    → the full 3.10 → 3.14 matrix. A release is the one moment the
+#   test    → the full 3.11 → 3.14 matrix. A release is the one moment the
 #             compatibility sweep has to be green, so it gates everything below.
 #   version → roll CHANGELOG [Unreleased], commit + tag on main
 #   image   → check out that tag and build+push kubed/mcp-school:<tag>

@@ -136,7 +136,7 @@ shape of the pipeline itself:
 
 - **The image is not built on pull requests** — deliberately. Don't ask for it
   back; `quality.yml`, `package.yml` and `test.yml` cover the part that is ours.
-- **`test.yml` runs one interpreter (3.14) on a PR and the full 3.10–3.14 matrix
+- **`test.yml` runs one interpreter (3.14) on a PR and the full 3.11–3.14 matrix
   on main and on release.** `Test (3.14)` is a required status check.
 - **Required checks must never be path-filtered.** A path-filtered required check
   never reports on a PR that misses the filter, and the PR can then never merge.

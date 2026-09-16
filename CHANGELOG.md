@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Node affinity keeping the pod off the control-plane nodes, which carry no taint in this cluster and would otherwise be scheduled onto.
 
 ### Changed
+- **BREAKING:** Python 3.10 is no longer supported. `Remote.list_heads` — the one call that makes a branch or tag cost a ref listing rather than a fetch — arrives in pygit2 1.19, which requires 3.11; on 3.10 pip resolved to a pygit2 without it and the server died at startup with an `AttributeError`. The floor, the classifiers, the CI matrix and ruff's target all move to 3.11.
 - **BREAKING:** the image bakes nothing. Sources are fetched at start into `CACHE_DIR`; `examples/config.yaml` ships the four upstream packs as `github://` sources. `skills.toml`, `scripts/fetch_skills.py`, the Update Skills workflow, the bundled prompts, the Kubernetes manifests and the Deploy workflow are gone — installation lives with the installer.
 - **BREAKING:** the catalogue is a config file of sources (`CONFIG`, default `/etc/mcp-school/config.yaml`, schema in `config.schema.json`); `SKILLS_DIR`, `PROMPTS_DIR` and `SKILL_PACKS` are gone. Sources join libraries, every resource and prompt carries tags, and `/health` reports each source.
 - **BREAKING:** renamed to `mcp-school` — distribution `mcp-school`, package `mcp_school`, console script `mcp-school`, image `kubed/mcp-school`, Kubernetes resources `mcp-school`. The `skill://` URIs, tools, headers and env vars are unchanged.
