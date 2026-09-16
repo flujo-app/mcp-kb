@@ -1,5 +1,6 @@
 """Unit tests for the on-disk index: round trip, corruption, atomicity."""
 
+import json
 import os
 from pathlib import Path
 
@@ -95,6 +96,23 @@ def test_a_missing_or_corrupt_index_reads_as_none(tmp_path):
 def test_a_different_version_reads_as_none(tmp_path):
     path = tmp_path / "index.json"
     _index(version=INDEX_VERSION + 1).write(path)
+    assert Index.read(path) is None
+
+
+@pytest.mark.unit
+def test_a_wrong_shaped_sources_field_reads_as_none(tmp_path):
+    path = tmp_path / "index.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": INDEX_VERSION,
+                "built": now(),
+                "config_hash": "x",
+                "sources": [],
+            }
+        ),
+        encoding="utf-8",
+    )
     assert Index.read(path) is None
 
 

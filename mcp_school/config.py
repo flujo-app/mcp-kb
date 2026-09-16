@@ -99,10 +99,18 @@ class SourceBase(Strict):
     library: str | None = Field(default=None, pattern=NAME)
     tags: list[str] = Field(default_factory=list)
     include: Include = Include()
+    refresh: str | None = Field(default=None, pattern=r"^[1-9]\d*[smh]$")
 
     @property
     def library_name(self) -> str:
         return self.library or self.name
+
+    @property
+    def refresh_seconds(self) -> int | None:
+        if self.refresh is None:
+            return None
+        seconds_per_unit = {"s": 1, "m": 60, "h": 3600}
+        return int(self.refresh[:-1]) * seconds_per_unit[self.refresh[-1]]
 
 
 class FileSource(SourceBase):
@@ -143,7 +151,11 @@ class Config(Strict):
     @classmethod
     def _known_scheme(cls, raw: object) -> object:
         for item in raw if isinstance(raw, list) else []:
-            url = item.get("url", "") if isinstance(item, dict) else ""
+            url = (
+                item.get("url", "")
+                if isinstance(item, dict)
+                else getattr(item, "url", "")
+            )
             scheme = urlsplit(str(url)).scheme
             if scheme not in SCHEMES:
                 known = ", ".join(f"{s}://" for s in SCHEMES)
@@ -170,6 +182,14 @@ class Config(Strict):
             if lib.name == name:
                 return lib
         return Library(name=name)
+
+    @property
+    def min_refresh_seconds(self) -> int | None:
+        """The smallest refresh interval declared by any source, or None."""
+        seconds = [
+            s.refresh_seconds for s in self.sources if s.refresh_seconds is not None
+        ]
+        return min(seconds) if seconds else None
 
 
 def _unique(kind: str, names: list[str]) -> None:

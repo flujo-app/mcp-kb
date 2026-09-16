@@ -175,6 +175,8 @@ class Index:
             return None
         if not isinstance(raw, dict) or raw.get("version") != INDEX_VERSION:
             return None
+        if not isinstance(raw.get("sources"), dict):
+            return None
         try:
             sources = {
                 name: _source_record_from_dict(rec)
@@ -186,7 +188,7 @@ class Index:
                 config_hash=raw["config_hash"],
                 sources=sources,
             )
-        except (KeyError, TypeError):
+        except (KeyError, TypeError, AttributeError, ValueError):
             return None
 
 

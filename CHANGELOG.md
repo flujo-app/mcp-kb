@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- A `refresh` interval per source (`30s`, `5m`, `1h`) and `sources.fingerprint()`, a cheap file-count/bytes/newest-mtime summary used to detect a changed source without re-harvesting it — not yet wired to a refresh loop.
 - `mcp_school.index`: an on-disk index of what each source yielded (`Index`, `SourceRecord`, `SkillRow`, `PromptRow`) — not yet used by the server.
 - `mcp-school schema` prints the config JSON Schema.
 - `mcp_school.config`: a validated config file of sources and libraries (`Config`, `FileSource`, `{env:}` secrets), published as `config.schema.json` and printable via `mcp-school schema`.
