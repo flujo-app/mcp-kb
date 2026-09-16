@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `mcp_school.index`: an on-disk index of what each source yielded (`Index`, `SourceRecord`, `SkillRow`, `PromptRow`) — not yet used by the server.
 - `mcp-school schema` prints the config JSON Schema.
 - `mcp_school.config`: a validated config file of sources and libraries (`Config`, `FileSource`, `{env:}` secrets), published as `config.schema.json` and printable via `mcp-school schema`.
 - `mcp_school.harvest` and `mcp_school.sources`: convention-based globs turn a `file://` source directory into skill dirs, prompt files and pack-level files, with a traversal guard so a glob like `../**` finds nothing.
