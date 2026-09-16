@@ -277,3 +277,21 @@ def test_a_skill_md_symlinked_out_of_the_root_does_not_register(tmp_path):
     (leak / "SKILL.md").symlink_to(outside / "SKILL.md")
 
     assert skill_dirs(root, Include(skills=["skills"])) == []
+
+
+@pytest.mark.unit
+def test_a_link_back_to_an_ancestor_does_not_loop_a_directory_glob(tmp_path):
+    """A directory glob walks with `rglob`, which does not follow directory links.
+
+    Checked on 3.11.16, 3.12.14 and 3.13.5: a link back up the tree yields the one
+    real skill and ends. Pinned here because CI runs the old end of the range on
+    every pull request, and a switch to a link-following walk would hang instead.
+    """
+    skills = tmp_path / "src" / "skills"
+    (skills / "a").mkdir(parents=True)
+    (skills / "a" / "SKILL.md").write_text("---\nname: a\n---\nbody")
+    (skills / "a" / "up").symlink_to(skills)
+
+    found = skill_dirs(tmp_path / "src", Include(skills=["skills"]))
+
+    assert [p.name for p in found] == ["a"]
