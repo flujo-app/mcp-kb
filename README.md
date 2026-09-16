@@ -169,7 +169,9 @@ revisited on its own:
 
 `POST /reindex` forces a rebuild of every source immediately, fingerprint
 check skipped, and answers with `/health`'s body plus `rebuilt`, the source
-names that actually changed.
+names actually rebuilt this pass — since the fingerprint check is skipped,
+that is every source that did not fail identically to how it already had,
+changed or not, not only the ones whose content moved.
 
 A session that persists across requests is told, once, the next time it asks
 — MCP 2026-07-28 has no sessions of its own, so a sessionless client gets no
