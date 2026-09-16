@@ -1,5 +1,39 @@
 {
   "$defs": {
+    "BasicAuth": {
+      "additionalProperties": false,
+      "description": "Credentials for a git remote that requires them.",
+      "properties": {
+        "username": {
+          "title": "Username",
+          "type": "string"
+        },
+        "password": {
+          "$ref": "#/$defs/EnvRef"
+        }
+      },
+      "required": [
+        "username",
+        "password"
+      ],
+      "title": "BasicAuth",
+      "type": "object"
+    },
+    "EnvRef": {
+      "additionalProperties": false,
+      "description": "A secret named by the environment variable that holds it.",
+      "properties": {
+        "env": {
+          "title": "Env",
+          "type": "string"
+        }
+      },
+      "required": [
+        "env"
+      ],
+      "title": "EnvRef",
+      "type": "object"
+    },
     "FileSource": {
       "additionalProperties": false,
       "description": "A directory on this machine, served in place.",
@@ -62,6 +96,105 @@
         "url"
       ],
       "title": "FileSource",
+      "type": "object"
+    },
+    "GitSource": {
+      "additionalProperties": false,
+      "description": "A git repository, cloned bare and shallow, exported at a ref.",
+      "properties": {
+        "name": {
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$",
+          "title": "Name",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        },
+        "library": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Library"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "include": {
+          "$ref": "#/$defs/Include",
+          "default": {
+            "skills": null,
+            "prompts": null,
+            "instructions": null,
+            "agents": null,
+            "files": null
+          }
+        },
+        "refresh": {
+          "anyOf": [
+            {
+              "pattern": "^[1-9]\\d*[smh]$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Refresh"
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ref"
+        },
+        "subdirectory": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subdirectory"
+        },
+        "auth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BasicAuth"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name",
+        "url"
+      ],
+      "title": "GitSource",
       "type": "object"
     },
     "Include": {
@@ -188,7 +321,14 @@
     },
     "sources": {
       "items": {
-        "$ref": "#/$defs/FileSource"
+        "oneOf": [
+          {
+            "$ref": "#/$defs/FileSource"
+          },
+          {
+            "$ref": "#/$defs/GitSource"
+          }
+        ]
       },
       "title": "Sources",
       "type": "array"

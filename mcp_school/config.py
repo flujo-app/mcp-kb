@@ -22,14 +22,17 @@ from __future__ import annotations
 
 import os
 from pathlib import Path, PurePosixPath
+from typing import Annotated
 from urllib.parse import urlsplit
 
 import yaml
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Discriminator,
     Field,
     SecretStr,
+    Tag,
     ValidationError,
     field_validator,
 )
@@ -98,12 +101,17 @@ class SourceBase(Strict):
     url: str
     library: str | None = Field(default=None, pattern=NAME)
     tags: list[str] = Field(default_factory=list)
-    include: Include = Include()
-    refresh: str | None = Field(default=None, pattern=r"^[1-9]\d*[smh]$")
 
     @property
     def library_name(self) -> str:
         return self.library or self.name
+
+
+class MirrorSource(SourceBase):
+    """A source that becomes a local directory: has include globs and a refresh."""
+
+    include: Include = Include()
+    refresh: str | None = Field(default=None, pattern=r"^[1-9]\d*[smh]$")
 
     @property
     def refresh_seconds(self) -> int | None:
@@ -113,7 +121,7 @@ class SourceBase(Strict):
         return int(self.refresh[:-1]) * seconds_per_unit[self.refresh[-1]]
 
 
-class FileSource(SourceBase):
+class FileSource(MirrorSource):
     """A directory on this machine, served in place."""
 
     @field_validator("url")
@@ -132,13 +140,77 @@ class FileSource(SourceBase):
         return Path(urlsplit(self.url).path)
 
 
-SCHEMES: dict[str, type[SourceBase]] = {"file": FileSource}
+class BasicAuth(Strict):
+    """Credentials for a git remote that requires them."""
 
-# One member for now. When a second scheme lands this becomes
-# Annotated[Annotated[FileSource, Tag("file")] | Annotated[GitSource, Tag("git")],
-#           Discriminator(<scheme of url>)]
-# -- a discriminator needs a union of at least two, so it arrives with the second.
-Source = FileSource
+    username: str
+    password: EnvRef
+
+
+class GitSource(MirrorSource):
+    """A git repository, cloned bare and shallow, exported at a ref."""
+
+    ref: str | None = None  # PEP 610 requested_revision: branch, tag or commit
+    subdirectory: str | None = None  # PEP 610: harvest under this path of the export
+    # GitHub: username "x-access-token", password {env: GITHUB_TOKEN}
+    auth: BasicAuth | None = None
+
+    @field_validator("url")
+    @classmethod
+    def _well_formed(cls, url: str) -> str:
+        parts = urlsplit(url)
+        if parts.scheme == "github":
+            org = parts.netloc
+            repo = parts.path.lstrip("/")
+            if not org or not repo or "/" in repo:
+                msg = f"a github:// URL must be github://org/repo, got {url!r}"
+                raise ValueError(msg)
+        return url
+
+    @field_validator("subdirectory")
+    @classmethod
+    def _relative(cls, value: str | None) -> str | None:
+        # Same escape harvest.files() guards against, caught here instead so
+        # it never reaches an export rooted one directory above the tree.
+        if value is not None and (
+            not value or value.startswith("/") or ".." in PurePosixPath(value).parts
+        ):
+            msg = f"subdirectory {value!r} must be a relative path without '..'"
+            raise ValueError(msg)
+        return value
+
+    @property
+    def clone_url(self) -> str:
+        parts = urlsplit(self.url)
+        if parts.scheme == "github":
+            org = parts.netloc
+            repo = parts.path.lstrip("/")
+            if not repo.endswith(".git"):
+                repo += ".git"
+            return f"https://github.com/{org}/{repo}"
+        # git+https://h/p.git -> https://h/p.git ; git+http -> http ; git+file:///p -> file:///p
+        return self.url.removeprefix("git+")
+
+
+SCHEMES: dict[str, str] = {  # url scheme -> union tag
+    "file": "file",
+    "git+https": "git",
+    "git+http": "git",
+    "git+file": "git",
+    "github": "git",
+}
+MODELS: dict[str, type[SourceBase]] = {"file": FileSource, "git": GitSource}
+
+
+def _tag(value: object) -> str | None:
+    url = value.get("url", "") if isinstance(value, dict) else getattr(value, "url", "")
+    return SCHEMES.get(urlsplit(str(url)).scheme)
+
+
+Source = Annotated[
+    Annotated[FileSource, Tag("file")] | Annotated[GitSource, Tag("git")],
+    Discriminator(_tag),
+]
 
 
 class Config(Strict):
@@ -185,9 +257,11 @@ class Config(Strict):
 
     @property
     def min_refresh_seconds(self) -> int | None:
-        """The smallest refresh interval declared by any source, or None."""
+        """The smallest refresh interval declared by any mirrored source, or None."""
         seconds = [
-            s.refresh_seconds for s in self.sources if s.refresh_seconds is not None
+            s.refresh_seconds
+            for s in self.sources
+            if isinstance(s, MirrorSource) and s.refresh_seconds is not None
         ]
         return min(seconds) if seconds else None
 
