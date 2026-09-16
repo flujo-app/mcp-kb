@@ -35,6 +35,13 @@ def _penpot(root: Path) -> None:
     (root / "shared" / "x.md").write_text("shared\n")
     (root / "workflows").mkdir()
     (root / "workflows" / "y.md").write_text("workflow\n")
+    # penpot/penpot-ai-kit really does have one of these at its repo root, and
+    # the day an upstream adds frontmatter to a file in it, an `include` that
+    # names no prompts glob starts serving whatever is in there.
+    (root / "prompts").mkdir()
+    (root / "prompts" / "brief.md").write_text(
+        "---\ndescription: Not ours to serve.\n---\nDo the thing.\n"
+    )
 
 
 BUILDERS = {
@@ -80,3 +87,14 @@ def test_the_shipped_config_loads_the_shipped_shape(tmp_path):
 
     libraries = sorted({s["library"] for s in school.status.values()})
     assert libraries == ["grafana", "n8n", "penpot", "superpowers"]
+
+
+def test_the_shipped_config_serves_no_prompt_it_did_not_ask_for(tmp_path):
+    """Every source here is rooted at a repository root, where the conventional
+    prompt globs (`prompts/**/*.md` and the rest) find whatever an upstream
+    happens to keep. A source that names one include kind still gets the
+    defaults for the others, so each one says `prompts: []` and means it.
+    """
+    school = School(_rewritten_config(tmp_path), tmp_path / "cache")
+
+    assert school.prompts == ()
