@@ -20,7 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `mcp-school schema` prints the config JSON Schema.
+
 ### Changed
+- **BREAKING:** the catalogue is a config file of sources (`CONFIG`, default `/etc/mcp-school/config.yaml`, schema in `config.schema.json`); `SKILLS_DIR`, `PROMPTS_DIR` and `SKILL_PACKS` are gone. Sources join libraries, every resource and prompt carries tags, and `/health` reports each source.
 - **BREAKING:** renamed to `mcp-school` — distribution `mcp-school`, package `mcp_school`, console script `mcp-school`, image `kubed/mcp-school`, Kubernetes resources `mcp-school`. The `skill://` URIs, tools, headers and env vars are unchanged.
 - **BREAKING:** the tool surface is now two tools — `list_resources()` and `read_resource(uri)` — which mirror `resources/list` and `resources/read` exactly, replacing `list_packs` / `list_skills` / `read_skill` / `read_pack_file`. A client that can drive MCP resources can drive this server without learning a second vocabulary for the same act.
 - Resources are the interface and the tools are a mirror of them, so a client that reads resources is now shown no tools at all; declare `?resources=off` on the MCP URL (or `X-MCP-Resources: off`) to reveal the two, as n8n must.

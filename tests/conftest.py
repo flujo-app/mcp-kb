@@ -3,7 +3,7 @@
 import pytest
 
 from mcp_school import harvest
-from mcp_school.config import Include
+from mcp_school.config import Config, Include
 from mcp_school.prompts import load_prompts
 from mcp_school.skills import PackResources, load_skills
 
@@ -59,6 +59,44 @@ def load_all_prompts(root):
     for pack in PACK_INCLUDES:
         prompts += load_pack_prompts(root, pack)
     return prompts
+
+
+def make_config(skills_dir=None, prompts_dir=None, packs=None):
+    """A ``Config`` whose ``file://`` sources mirror the fixture trees above.
+
+    One source per top-level directory under ``skills_dir``; one prompt source
+    per top-level directory under ``prompts_dir``, joined to the same-named
+    library -- the config-level shape of ``examples/config.yaml``'s
+    grafana/grafana-prompts pair, needed because the two trees are separate
+    roots and a source is exactly one root. ``packs`` narrows both to the named
+    packs: the config-file equivalent of the old ``SKILL_PACKS`` hard scope, a
+    deployment that should serve less gets a config that lists less.
+    """
+    sources = []
+    for base, is_prompts in ((skills_dir, False), (prompts_dir, True)):
+        if base is None:
+            continue
+        for name in sorted(p.name for p in base.iterdir() if p.is_dir()):
+            if packs is not None and name not in packs:
+                continue
+            if is_prompts:
+                sources.append(
+                    {
+                        "name": f"{name}-prompts",
+                        "library": name,
+                        "url": f"file://{base / name}",
+                        "include": {"skills": [], "prompts": ["*.md"]},
+                    }
+                )
+            else:
+                sources.append(
+                    {
+                        "name": name,
+                        "url": f"file://{base / name}",
+                        "include": {"skills": ["**/SKILL.md"], "files": ["**/*"]},
+                    }
+                )
+    return Config.model_validate({"sources": sources})
 
 
 def _build_tree(root):

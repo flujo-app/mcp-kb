@@ -74,8 +74,7 @@ X-Skill-Pack: penpot
 Set it once in the client's connection config. In n8n that is a Header Auth credential
 on the MCP Client Tool node — a plumbed constant, not something the model fills in.
 
-`SKILL_PACKS` does the same per deployment; the rest of the catalogue is not loaded at
-all. They compose: the header narrows within whatever `SKILL_PACKS` allows.
+A deployment that should serve less gets a config that lists less.
 
 ## Prompts
 
@@ -136,17 +135,20 @@ The **Update Skills** workflow runs that weekly and opens a PR.
 
 | variable | default | meaning |
 | --- | --- | --- |
-| `SKILLS_DIR` | `/skills` | directory to scan |
-| `SKILL_PACKS` | *(all)* | comma-separated packs to serve; hard scope |
-| `PROMPTS_DIR` | `/prompts` | directory holding `<pack>/<name>.md` prompts |
+| `CONFIG` | `/etc/mcp-school/config.yaml` | config file listing the sources to serve |
+| `CACHE_DIR` | `/var/cache/mcp-school` | directory a non-`file://` source materialises into |
 | `TRANSPORT` | `http` | `http` or `stdio` |
 | `HOST` | `0.0.0.0` | bind address |
 | `PORT` | `8000` | port |
 
+See `examples/config.yaml` for what the image ships, and `config.schema.json` — a
+plain `Config.model_json_schema()` — for the full shape of a source.
+
 Per request: `?resources=off` reveals the tool mirror, `?skills=full` enumerates every
 skill in the listing (for clients that sync skills to disk), `X-Skill-Pack` pins a pack.
 
-`GET /health` reports status, the packs served, and the skill and prompt counts.
+`GET /health` reports status, the libraries and skill/prompt counts, and each
+configured source's own status.
 
 ## Deploying
 

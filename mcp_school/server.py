@@ -1,10 +1,13 @@
 """The MCP server itself: wiring, and nothing else.
 
-Assembles a FastMCP instance from the skill catalogue -- the address space, the
-resources, the mirror tools, the routes -- and runs it on a transport. The
-catalogue lives in ``skills.py``, the URI space in ``uris.py``, the tool bodies
-in ``tools.py``, the prompts in ``prompts.py``, the endpoints in ``routes.py``;
-this module only connects them, so a new tool never means editing the server.
+Assembles a FastMCP instance from the catalogue a config file describes -- the
+address space, the resources, the mirror tools, the routes -- and runs it on a
+transport. Turning a config source into a directory is ``sources.py``'s job;
+deciding what in it counts as a skill, a prompt or a pack-level file is
+``harvest.py``'s; the catalogue itself lives in ``skills.py``, ``prompts.py``
+and ``uris.py``. This module only walks the config in source order and
+connects the pieces, so a new source scheme or a new kind of component never
+means editing the server.
 """
 
 from __future__ import annotations
@@ -13,13 +16,12 @@ from pathlib import Path
 
 from fastmcp import FastMCP
 
-from . import prompts, resources, routes, tools
-from .prompts import load_prompts
-from .skills import PackResources, SkillIndex, load_skills
+from . import harvest, prompts, resources, routes, tools
+from .config import Config
+from .prompts import FilePrompt, load_prompts
+from .skills import PackResources, Skill, SkillIndex, load_skills
+from .sources import SourceError, materialise_all
 from .uris import Catalogue
-
-DEFAULT_SKILLS_DIR = Path("/skills")
-DEFAULT_PROMPTS_DIR = Path("/prompts")
 
 INSTRUCTIONS = """\
 This server hosts Agent Skills: instruction packages that teach you how to \
@@ -38,7 +40,7 @@ for -- a skill citing one is not a reason to fetch it.
 
 
 class School:
-    """An MCP server over a directory of Agent Skills.
+    """An MCP server over the sources a config file names.
 
     The catalogue is served twice, because MCP clients are not all alike. As
     ``skill://`` **resources**, which is what it is; and as two **tools** that
@@ -50,26 +52,55 @@ class School:
     ``?resources=off`` on the MCP URL or an ``X-MCP-Resources: off`` header.
     """
 
-    def __init__(
-        self,
-        skills_dir: Path = DEFAULT_SKILLS_DIR,
-        packs: list[str] | None = None,
-        prompts_dir: Path = DEFAULT_PROMPTS_DIR,
-    ):
-        self.skills_dir = skills_dir
-        self.packs = packs
-        skills = load_skills(skills_dir, packs)
+    def __init__(self, config: Config, cache: Path):
+        self.config = config
+        self.cache = cache
+
+        materialised = materialise_all(config, cache)
+        skills: list[Skill] = []
+        all_prompts: list[FilePrompt] = []
+        self.resources = PackResources()
+        self.status: dict[str, dict] = {}
+
+        for source in config.sources:
+            root = materialised[source.name]
+            if isinstance(root, SourceError):
+                self.status[source.name] = {"status": "failed", "error": str(root)}
+                continue
+            lib = config.library(source.library_name)
+            tags = [*lib.tags, *source.tags]
+            dirs = harvest.skill_dirs(root, source.include)
+            loaded_skills = load_skills(
+                dirs, pack=lib.name, source=source.name, root=root, tags=tags
+            )
+            skills += loaded_skills
+            files = harvest.pack_files(root, source.include, dirs)
+            self.resources.add(lib.name, root, files, dirs)
+            loaded_prompts = load_prompts(
+                harvest.prompt_files(root, source.include),
+                pack=lib.name,
+                source=source.name,
+                tags=tags,
+            )
+            all_prompts += loaded_prompts
+            self.status[source.name] = {
+                "status": "ok",
+                "library": lib.name,
+                "skills": len(loaded_skills),
+                "prompts": len(loaded_prompts),
+                "files": len(files),
+            }
+
         self.index = SkillIndex(skills)
-        self.resources = PackResources(skills_dir, skills)
         self.catalogue = Catalogue(self.index, self.resources)
-        self.prompts = load_prompts(prompts_dir, packs)
+        self.prompts = all_prompts
         self.mcp = FastMCP("mcp-school", instructions=INSTRUCTIONS)
 
         resources.register(self.mcp, self.catalogue)
         mirrors = tools.register(self.mcp, self.catalogue)
         self.mcp.add_middleware(resources.HideMirrorTools(mirrors))
         prompts.register(self.mcp, self.prompts, self.index)
-        routes.register(self.mcp, self.index, self.prompts)
+        routes.register(self.mcp, self.index, self.prompts, self.status)
 
     def run(
         self, transport: str = "http", host: str = "0.0.0.0", port: int = 8000

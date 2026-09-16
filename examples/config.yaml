@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=../config.schema.json
+# The catalogue the image serves: the four packs Dockerfile bakes under /skills,
+# plus this repo's prompts, joined to the grafana library.
+sources:
+- name: n8n
+  url: file:///skills/n8n
+  include:
+    skills: ["*/SKILL.md"]
+- name: grafana
+  url: file:///skills/grafana
+  include:
+    skills: ["*/*/SKILL.md"]
+- name: penpot
+  url: file:///skills/penpot
+  include:
+    skills: ["*/SKILL.md"]
+    files: ["shared/**", "workflows/**"]
+- name: superpowers
+  url: file:///skills/superpowers
+  include:
+    skills: ["*/SKILL.md"]
+- name: grafana-prompts
+  library: grafana
+  url: file:///prompts/grafana
+  include:
+    skills: []
+    prompts: ["*.md"]
