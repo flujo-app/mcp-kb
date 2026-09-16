@@ -34,7 +34,7 @@ from fastmcp.server.middleware import Middleware
 from fastmcp.server.providers.base import Provider
 from fastmcp.utilities.versions import VersionSpec
 
-from .request import client_reads_resources, full_listing, requested_pack
+from .request import full_listing, requested_scope
 from .uris import Catalogue
 
 
@@ -43,10 +43,10 @@ class CatalogueProvider(Provider):
 
     The scope is applied here rather than in middleware because it is applied on
     *every* call anyway -- ``Catalogue`` has no method that does not take
-    ``pinned``. Middleware would be a second place for it to be forgotten.
+    the scope. Middleware would be a second place for it to be forgotten.
 
     An out-of-scope URI resolves to None, which FastMCP reports as an unknown
-    resource. That conflation is deliberate and matches ``SkillIndex``: a pinned
+    resource. That conflation is deliberate and matches ``SkillIndex``: a scoped
     client must not be able to confirm another pack's contents from the shape of
     an error.
 
@@ -60,7 +60,7 @@ class CatalogueProvider(Provider):
         self._catalogue = catalogue
 
     async def _list_resources(self) -> Sequence[Resource]:
-        entries = self._catalogue().entries(requested_pack(), full=full_listing())
+        entries = self._catalogue().entries(requested_scope(), full=full_listing())
         return [
             TextResource(
                 uri=entry.uri,
@@ -80,7 +80,7 @@ class CatalogueProvider(Provider):
         self, uri: str, version: VersionSpec | None = None
     ) -> Resource | None:
         catalogue = self._catalogue()
-        body = catalogue.read(uri, requested_pack())
+        body = catalogue.read(uri, requested_scope())
         if body is None:
             return None
         return TextResource(
@@ -92,13 +92,14 @@ class CatalogueProvider(Provider):
 
 
 class HideMirrorTools(Middleware):
-    """Drop the resource-mirroring tools from ``tools/list`` for clients that
-    read resources.
+    """Drop the mirroring tools from ``tools/list`` for clients that have the
+    native feature each one mirrors.
 
-    Every tool this server has is a mirror: it exists only because some clients
-    cannot read resources. Advertising both shapes to a client that has
-    resources is noise -- two ways to ask one question, and the model has to
-    pick one.
+    Every tool this server has is a mirror: ``list_resources``/``read_resource``
+    stand in for MCP resources and ``list_prompts``/``get_prompt`` for MCP
+    prompts, for clients that cannot use those. Advertising both shapes to a
+    client that has the real one is noise -- two ways to ask one question, and
+    the model has to pick one.
 
     Filtering the listing rather than registering conditionally is what keeps
     one server object correct for every client at once. The decision depends on
@@ -110,14 +111,17 @@ class HideMirrorTools(Middleware):
     be a different and worse contract.
     """
 
-    def __init__(self, names: set[str]):
-        self.names = set(names)
+    def __init__(self, mirrors: dict[str, Callable[[], bool]]):
+        # tool name -> "does this client have the native feature it mirrors?"
+        self.mirrors = dict(mirrors)
 
     async def on_list_tools(self, context, call_next):
         tools = await call_next(context)
-        if not self.names or not client_reads_resources():
-            return tools
-        return [tool for tool in tools if tool.name not in self.names]
+        return [
+            tool
+            for tool in tools
+            if tool.name not in self.mirrors or not self.mirrors[tool.name]()
+        ]
 
 
 def register(mcp: FastMCP, catalogue: Callable[[], Catalogue]) -> None:

@@ -12,6 +12,7 @@ from fastmcp.server.context import Context
 import mcp_school.server
 from mcp_school import School, snapshot
 from mcp_school.config import Config
+from mcp_school.scope import Scope
 from mcp_school.server import _can_remember
 from mcp_school.sources import SourceError
 from tests.conftest import make_config
@@ -391,9 +392,9 @@ def test_listings_are_memoised_per_scope(skills_dir, cache):
     """A catalogue lives and dies with its snapshot, so its memo cannot go stale."""
     catalogue = School(make_config(skills_dir), cache).snapshot.catalogue
 
-    assert catalogue.entries("", False) is catalogue.entries("", False)
-    assert catalogue.entries("flatsource", False) is not catalogue.entries("", False)
-    assert catalogue.entries("", True) is not catalogue.entries("", False)
+    assert catalogue.entries(Scope(), False) is catalogue.entries(Scope(), False)
+    assert catalogue.entries(Scope("flatsource"), False) is not catalogue.entries(Scope(), False)
+    assert catalogue.entries(Scope(), True) is not catalogue.entries(Scope(), False)
 
 
 # -- what a live client sees ---------------------------------------------------

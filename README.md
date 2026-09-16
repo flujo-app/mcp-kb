@@ -54,28 +54,34 @@ resource-only server looks empty. They get the same interface as two tools:
 | --- | --- |
 | `list_resources()` | `resources/list` — the same `uri`/`name`/`description`/`mimeType` rows |
 | `read_resource(uri)` | `resources/read` — the same URI |
+| `list_prompts()` | `prompts/list` — each prompt's name, description and arguments |
+| `get_prompt(name, arguments)` | `prompts/get` — the rendered, role-tagged messages |
 
-Turn the mirror on with `?resources=off` on the MCP URL, or an `X-MCP-Resources: off`
-header:
+Each pair is turned on separately, because a client may have one feature and not the
+other — `?resources=off`, `?prompts=off`, or both, on the MCP URL (or the
+`X-MCP-Resources` / `X-MCP-Prompts` headers):
 
 ```
-http://mcp-school.flow.svc.cluster.local:8000/mcp?resources=off
+http://mcp-school.flow.svc.cluster.local:8000/mcp?resources=off&prompts=off
 ```
 
-The two tools are hidden from clients that read resources, because advertising both
+The tools are hidden from clients that have the real feature, because advertising both
 shapes is two ways to ask one question. They stay callable either way.
 
-## Filtering to one pack
+## Choosing a library, or tags
 
-`X-Skill-Pack` pins a client to one pack or group, and it is a ceiling the model cannot
-widen past — enforced on resources and tools alike:
+A client can be narrowed to part of the catalogue, and the narrowing is a ceiling the
+model cannot widen past — enforced on resources, prompts and every mirror tool:
 
-```
-X-Skill-Pack: penpot
-```
+| on the MCP URL | header | sees |
+| --- | --- | --- |
+| `?library=grafana` | `X-Skill-Library` | that whole library, or one of its groups |
+| `?tags=ops,ui` | `X-Skill-Tags` | anything carrying **any** of the tags, across libraries |
+| `?library=grafana&tags=ops` | both | the tagged part of that one library |
 
-Set it once in the client's connection config. In n8n that is a Header Auth credential
-on the MCP Client Tool node — a plumbed constant, not something the model fills in.
+A header beats the URL. `X-Skill-Pack` still works as an alias for `X-Skill-Library`.
+Set it once in the client's connection config — in n8n, a Header Auth credential on the
+MCP Client Tool node, a plumbed constant rather than something the model fills in.
 
 A deployment that should serve less gets a config that lists less.
 
@@ -100,8 +106,9 @@ arguments:
 Investigate the logs of **{{ app }}** over the last {{ since }}.
 ```
 
-Double braces, because prompt bodies are full of LogQL and JSON. `X-Skill-Pack`
-scopes prompts exactly as it scopes skills.
+Double braces, because prompt bodies are full of LogQL and JSON. A library or tag
+scope applies to prompts exactly as to skills, and a library holding only prompts is
+still selectable by name.
 
 ## Sources
 
@@ -205,8 +212,9 @@ interval is the honest setting there.
 See `examples/config.yaml` for what the image ships, and `config.schema.json` — a
 plain `Config.model_json_schema()` — for the full shape of a source.
 
-Per request: `?resources=off` reveals the tool mirror, `?skills=full` enumerates every
-skill in the listing (for clients that sync skills to disk), `X-Skill-Pack` pins a pack.
+Per request: `?resources=off` and `?prompts=off` reveal the tool mirrors, `?library=`
+and `?tags=` narrow what is served, and `?skills=full` enumerates every skill in the
+listing (for clients that sync skills to disk).
 
 `GET /health` reports status, the libraries and skill/prompt counts, and each
 configured source's own status.

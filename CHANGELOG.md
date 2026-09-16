@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `?library=` and `?tags=` (or `X-Skill-Library` / `X-Skill-Tags`) narrow a client to one library, or to anything carrying any of the tags, across resources and prompts alike.
+- `list_prompts` and `get_prompt` tools for clients without MCP prompts, shown with `?prompts=off` and returning the rendered role-tagged messages.
 - An `include.skills` glob may name the skill's directory (`skills/*`, or a composite like `skills/grafana-lgtm`) as well as its `SKILL.md`; a directory contributes every skill beneath it.
 - An `auth.username` may be an `{env:}` reference as well as a literal, so a service account whose name and password are issued together can be named once rather than repeated in the config.
 - `cache: live` on a WebDAV source: a read revalidates that one file against the server by ETag and downloads it again only when it moved, so a file edited in Nextcloud is served on the next read — a *new* file still needs a `refresh:` interval or `POST /reindex`, and a server that stops answering degrades to the cached copy instead of failing the read.
@@ -68,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `python-frontmatter` replaces the two hand-written frontmatter parsers in `skills.py` and `prompts.py`; every skill and prompt now also carries its library, its source and its kind as tags.
 
 ### Fixed
+- A library holding prompts and no skills is visible when selected by name.
 - A `file://` source serves and re-checks material mounted from a Kubernetes ConfigMap, where every key is a symlink through a dot-directory and the whole mount was silently harvested as nothing and fingerprinted as empty.
 - A glob whose last component is `**` means "everything underneath" on every supported interpreter, where before Python 3.13 it matched directories only and served nothing.
 - A rebuilt export is published beside the tree being served, never over it: an export is named by its version, so repairing one that lost files used to mean deleting and replacing the exact directory a live snapshot was reading — 549 of 25 852 concurrent reads came back empty. The repair lands at the next free name and the old tree is collected once nothing can still be reading it.

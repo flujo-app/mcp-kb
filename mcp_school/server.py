@@ -46,7 +46,7 @@ from . import prompts, resources, routes, tools
 from .config import Config, Source
 from .index import INDEX_VERSION, Index, SourceRecord, config_hash, now
 from .prompts import FilePrompt
-from .request import http_request
+from .request import client_reads_resources, client_uses_prompts, http_request
 from .skills import PackResources, SkillIndex
 from .snapshot import (
     SERVABLE,
@@ -192,10 +192,12 @@ class School:
         )
 
         resources.register(self.mcp, lambda: self.snapshot.catalogue)
-        mirrors = tools.register(self.mcp, lambda: self.snapshot.catalogue)
+        resource_tools = tools.register(self.mcp, lambda: self.snapshot.catalogue)
+        prompt_tools = prompts.register(self.mcp, lambda: self.snapshot)
+        mirrors = dict.fromkeys(resource_tools, client_reads_resources)
+        mirrors.update(dict.fromkeys(prompt_tools, client_uses_prompts))
         self.mcp.add_middleware(resources.HideMirrorTools(mirrors))
         self.mcp.add_middleware(AnnounceChanges(self))
-        prompts.register(self.mcp, lambda: self.snapshot)
         routes.register(self.mcp, self)
 
     # -- what the snapshot currently holds -----------------------------------

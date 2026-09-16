@@ -22,6 +22,7 @@ import frontmatter
 import yaml
 
 from . import harvest
+from .scope import EVERYTHING, Scope
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,12 @@ class _Root:
 
     base: Path
     files: tuple[str, ...]
+    # The same tags this source's skills carry. Two sources can feed one
+    # library, so a tag scope has to be checked per root, not per pack.
+    tags: frozenset[str] = frozenset()
+
+    def admits(self, tags: frozenset[str]) -> bool:
+        return not tags or not tags.isdisjoint(self.tags)
 
 
 class PackResources:
@@ -133,6 +140,7 @@ class PackResources:
         root: Path,
         files: Sequence[str],
         skill_dirs: Sequence[Path],
+        tags: Sequence[str] = (),
     ) -> None:
         """Register one source's contribution to ``pack``.
 
@@ -147,11 +155,13 @@ class PackResources:
             target = (base / rel).resolve()
             if any(target == d or d in target.parents for d in dirs):
                 raise ValueError(f"{rel!r} lies inside a skill directory")
-        entry = _Root(base=base, files=tuple(files))
+        entry = _Root(base=base, files=tuple(files), tags=frozenset(tags))
         self._roots.setdefault(pack, []).append(entry)
 
-    def files(self, pack: str) -> list[str]:
+    def files(self, pack: str, tags: frozenset[str] = frozenset()) -> list[str]:
         """Every pack-level file, as paths relative to whichever root holds it.
+
+        ``tags`` is a request's tag scope: only roots carrying any of them count.
 
         A path registered by two sources of the same library is listed twice --
         known, and not reachable from the shipped config, where no library is
@@ -159,10 +169,13 @@ class PackResources:
         """
         found: list[str] = []
         for entry in self._roots.get(pack, ()):
-            found.extend(entry.files)
+            if entry.admits(tags):
+                found.extend(entry.files)
         return found
 
-    def read(self, pack: str, rel: str) -> str | None:
+    def read(
+        self, pack: str, rel: str, tags: frozenset[str] = frozenset()
+    ) -> str | None:
         """Read one pack-level file, or None when it is absent or off-limits.
 
         ``rel`` must be exactly one of the paths ``add()`` registered for this
@@ -178,7 +191,7 @@ class PackResources:
         """
         target_rel = PurePosixPath(rel).as_posix()
         for entry in self._roots.get(pack, ()):
-            if target_rel not in entry.files:
+            if target_rel not in entry.files or not entry.admits(tags):
                 continue
             target = (entry.base / rel).resolve()
             if not target.is_relative_to(entry.base) or not target.is_file():
@@ -192,7 +205,7 @@ class PackResources:
 class SkillIndex:
     """A queryable catalogue that enforces the per-request scope.
 
-    Every read goes through ``pinned``, the pack a client is restricted to.
+    Every read goes through a ``Scope``, the slice a client is restricted to.
     Centralising it here is the point: a handler that forgot to apply it would
     silently hand a scoped client somebody else's skills.
     """
@@ -214,30 +227,34 @@ class SkillIndex:
         """Every pack in the catalogue, ignoring any request scope."""
         return sorted({s.pack for s in self._skills})
 
-    def visible(self, pinned: str = "") -> list[Skill]:
-        """The skills a client pinned to ``pinned`` may see."""
-        return [s for s in self._skills if not pinned or s.in_pack(pinned)]
+    def visible(self, scope: Scope = EVERYTHING) -> list[Skill]:
+        """The skills a client restricted to ``scope`` may see."""
+        return [s for s in self._skills if _admits(scope, s)]
 
-    def select(self, pinned: str = "", pack: str = "") -> list[Skill]:
-        """Visible skills narrowed further by the caller's ``pack`` argument."""
-        return [s for s in self.visible(pinned) if not pack or s.in_pack(pack)]
+    def select(self, scope: Scope = EVERYTHING, pack: str = "") -> list[Skill]:
+        """Visible skills narrowed further by a pack or group selector."""
+        return [s for s in self.visible(scope) if not pack or s.in_pack(pack)]
 
-    def selectors(self, pinned: str = "") -> list[str]:
-        """Valid ``pack`` values for this client -- packs and their groups.
+    def selectors(self, scope: Scope = EVERYTHING) -> list[str]:
+        """Valid selectors for this client -- packs and their groups.
 
-        Scoped by ``pinned`` on purpose: an error message that listed every
-        selector would leak the other packs' names to a pinned client.
+        Scoped on purpose: an error message that listed every selector would
+        leak the other packs' names to a scoped client.
         """
-        visible = self.visible(pinned)
+        visible = self.visible(scope)
         return sorted({s.pack for s in visible} | {s.group for s in visible})
 
-    def get(self, name: str, pinned: str = "") -> Skill | None:
+    def get(self, name: str, scope: Scope = EVERYTHING) -> Skill | None:
         """Look up one skill, or None when it is absent or out of scope.
 
         Out-of-scope reads are indistinguishable from missing ones by design:
         knowing a skill's exact name must not be enough to confirm it exists.
         """
         found = self._by_name.get(name)
-        if found is not None and pinned and not found.in_pack(pinned):
+        if found is not None and not _admits(scope, found):
             return None
         return found
+
+
+def _admits(scope: Scope, skill: Skill) -> bool:
+    return scope.admits(skill.pack, skill.tags, skill.group)

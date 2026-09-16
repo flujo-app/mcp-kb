@@ -42,10 +42,16 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import PromptError
 from fastmcp.prompts import Prompt, PromptArgument
 from fastmcp.server.providers.base import Provider
+from fastmcp.server.transforms import PromptsAsTools
+from fastmcp.tools.base import Tool
 from fastmcp.utilities.versions import VersionSpec
+from mcp_types import ToolAnnotations
 from pydantic import Field
 
-from .request import requested_pack
+from .request import requested_scope
+from .scope import EVERYTHING, Scope
+from .skills import SkillIndex
+from .tools import READ_ONLY
 
 if TYPE_CHECKING:
     from .snapshot import Snapshot
@@ -230,18 +236,21 @@ class PromptProvider(Provider):
         super().__init__()
         self._snapshot = snapshot
 
-    def visible(self, pinned: str = "") -> list[FilePrompt]:
+    def visible(self, scope: Scope = EVERYTHING) -> list[FilePrompt]:
         snapshot = self._snapshot()
         prompts = list(snapshot.prompts)
-        if not pinned:
+        if not scope:
             return prompts
-        # A prompt belongs to a pack, not a group, so a group pin sees its pack's
-        # prompts -- the same rule pack-level files follow.
-        packs = {s.pack for s in snapshot.index.visible(pinned)}
-        return [p for p in prompts if p.pack in packs]
+        libraries = _libraries_of(scope.library, snapshot.index)
+        tags = Scope(tags=scope.tags)
+        return [
+            p
+            for p in prompts
+            if (not libraries or p.pack in libraries) and tags.admits(p.pack, p.tags)
+        ]
 
     async def _list_prompts(self) -> Sequence[Prompt]:
-        return self.visible(requested_pack())
+        return self.visible(requested_scope())
 
     async def _get_prompt(
         self, name: str, version: VersionSpec | None = None
@@ -258,6 +267,56 @@ class PromptProvider(Provider):
         return prompt
 
 
-def register(mcp: FastMCP, snapshot: Callable[[], Snapshot]) -> None:
-    """Publish the prompts, read through ``snapshot`` on every listing."""
+class ReadOnlyPromptsAsTools(PromptsAsTools):
+    """FastMCP's prompt tools, annotated as the read-only calls they are.
+
+    Its generated tools carry no annotations, and unannotated MCP defaults
+    advertise a tool as destructive and non-idempotent -- the same mistake the
+    resource mirror was corrected for. Only the annotations change; what the
+    tools do and return is FastMCP's.
+    """
+
+    def _make_list_prompts_tool(self) -> Tool:
+        return _annotate(super()._make_list_prompts_tool(), "List prompts")
+
+    def _make_get_prompt_tool(self) -> Tool:
+        return _annotate(super()._make_get_prompt_tool(), "Get a prompt")
+
+
+def _annotate(tool: Tool, title: str) -> Tool:
+    return tool.model_copy(
+        update={"annotations": ToolAnnotations(title=title, **READ_ONLY)}
+    )
+
+
+# FastMCP's PromptsAsTools names. Its tools route through the server's own
+# prompts/list and prompts/get, so this provider's scoping applies to them too.
+PROMPT_TOOLS = frozenset({"list_prompts", "get_prompt"})
+
+
+def register(mcp: FastMCP, snapshot: Callable[[], Snapshot]) -> set[str]:
+    """Publish the prompts, and their tool mirror; return the mirror's names.
+
+    The mirror is FastMCP's own ``PromptsAsTools`` rather than one written here:
+    it keeps what a prompt actually is -- role-tagged messages, several of them
+    if the prompt has several -- which a resource or a hand-rolled tool would
+    flatten to text.
+    """
     mcp.add_provider(PromptProvider(snapshot))
+    mcp.add_transform(ReadOnlyPromptsAsTools(mcp))
+    return set(PROMPT_TOOLS)
+
+
+def _libraries_of(selector: str, index: SkillIndex) -> frozenset[str]:
+    """The libraries a scope's ``library`` selects, for matching prompts.
+
+    A prompt belongs to a library, not a group, so a group name resolves to the
+    libraries holding that group -- every one of them, since group names are
+    not unique across libraries and resources already admit them all. The
+    selector also always counts as a library name in its own right, or a library
+    of prompts and no skills would vanish whenever some other library happened
+    to have a group by the same name.
+    """
+    if not selector:
+        return frozenset()
+    return frozenset(s.pack for s in index.visible(Scope(selector))) | {selector}

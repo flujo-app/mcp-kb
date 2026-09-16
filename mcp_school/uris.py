@@ -52,11 +52,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .harvest import hidden
+from .scope import EVERYTHING, Scope
 from .skills import PackResources, Skill, SkillIndex
 
 SCHEME = "skill://"
 MAIN_FILE = "SKILL.md"
 MANIFEST = "_manifest"
+# Distinct scopes a catalogue remembers listings for before starting over.
+MEMO_LIMIT = 64
 PACK_FILES = "_files"
 
 
@@ -177,10 +180,10 @@ class Catalogue:
     a URI space needs on top: a total function from address to content, with the
     request scope applied on every single call.
 
-    ``pinned`` is threaded through every method for that reason. It is the pack
-    an ``X-Skill-Pack`` client is restricted to, and a method that forgot it
-    would hand that client somebody else's skills -- so there is no method here
-    that can be called without deciding about it.
+    ``scope`` is threaded through every method for that reason. It is the slice
+    a scoped client is restricted to, and a method that forgot it would hand
+    that client somebody else's skills -- so there is no method here that can be
+    called without deciding about it.
     """
 
     def __init__(
@@ -192,11 +195,11 @@ class Catalogue:
         self._index = index
         self._resources = resources
         self._revalidate = revalidate
-        self._memo: dict[tuple[str, bool], list[Entry]] = {}
+        self._memo: dict[tuple[Scope, bool], list[Entry]] = {}
 
     # -- listing ------------------------------------------------------------
 
-    def entries(self, pinned: str = "", full: bool = False) -> list[Entry]:
+    def entries(self, scope: Scope = EVERYTHING, full: bool = False) -> list[Entry]:
         """The resource listing: indexes first, then optionally every skill.
 
         The default is the indexes alone -- a dozen rows for a catalogue of
@@ -206,27 +209,32 @@ class Catalogue:
         anyway (``fastmcp.utilities.skills`` finds skills only by scanning the
         listing for ``/SKILL.md``), not for agents.
 
-        Memoised per ``(pinned, full)``. A ``Catalogue`` is built per snapshot
+        Memoised per ``(scope, full)``. A ``Catalogue`` is built per snapshot
         and thrown away with it, so the memo cannot outlive the data it
         summarises -- which is the only reason caching a listing is safe here
         at all. The list is shared with every other caller of the same scope:
         read it, never edit it.
         """
-        key = (pinned, full)
+        key = (scope, full)
         memo = self._memo.get(key)
         if memo is not None:
             return memo
-        entries = self._entries(pinned, full)
-        if not entries and pinned:
-            # An unknown pin yields nothing and cost nothing to find out.
-            # Memoising it would let a client grow this dict one bogus
-            # X-Skill-Pack header at a time.
+        entries = self._entries(scope, full)
+        if not entries and scope:
+            # An unknown scope yields nothing and cost nothing to find out.
+            # Memoising it would let a client grow this dict one bogus header
+            # at a time.
             return entries
+        if len(self._memo) >= MEMO_LIMIT:
+            # Tag combinations are the client's choice, so the set of real
+            # scopes is not bounded by the catalogue. Dropping the lot is
+            # cheaper than an LRU and a listing is quick to rebuild.
+            self._memo.clear()
         self._memo[key] = entries
         return entries
 
-    def _entries(self, pinned: str, full: bool) -> list[Entry]:
-        visible = self._index.visible(pinned)
+    def _entries(self, scope: Scope, full: bool) -> list[Entry]:
+        visible = self._index.visible(scope)
         if not visible:
             return []
 
@@ -259,7 +267,7 @@ class Catalogue:
                 )
                 for group in groups
             ]
-            if self._resources.files(pack):
+            if self._resources.files(pack, scope.tags):
                 entries.append(
                     Entry(
                         f"{SCHEME}{pack}/{PACK_FILES}",
@@ -286,7 +294,7 @@ class Catalogue:
 
     # -- reading ------------------------------------------------------------
 
-    def read(self, uri: str, pinned: str = "") -> str | None:
+    def read(self, uri: str, scope: Scope = EVERYTHING) -> str | None:
         """The content at ``uri``, or None when there is none to give.
 
         None covers absent, malformed and out-of-scope alike, and that conflation
@@ -298,10 +306,10 @@ class Catalogue:
             return None
         head, path = parsed
         if not path:
-            return self._index_body(head, pinned)
-        return self._content(head, path, pinned)
+            return self._index_body(head, scope)
+        return self._content(head, path, scope)
 
-    def _index_body(self, selector: str, pinned: str) -> str | None:
+    def _index_body(self, selector: str, scope: Scope) -> str | None:
         """One index: every skill under a pack or group, addressed by URI.
 
         Lines are ``<uri>: <description>`` rather than ``<name>: ...`` so that
@@ -309,7 +317,7 @@ class Catalogue:
         have to be translated back into an address anyway, and across packs it
         is not even unique.
         """
-        selected = self._index.select(pinned, selector)
+        selected = self._index.select(scope, selector)
         if not selected:
             return None
         lines = [
@@ -324,7 +332,7 @@ class Catalogue:
             " those paths under the same skill URI.\n"
         )
 
-    def _content(self, pack: str, path: str, pinned: str) -> str | None:
+    def _content(self, pack: str, path: str, scope: Scope) -> str | None:
         """Anything with two or more segments: a skill's file, or a pack's.
 
         Resolution order is skill first, pack file second. The two spaces cannot
@@ -333,17 +341,17 @@ class Catalogue:
         URI rather than arbitrating a genuine ambiguity.
         """
         head, _, rest = path.partition("/")
-        skill = self._index.get(f"{pack}/{head}", pinned)
+        skill = self._index.get(f"{pack}/{head}", scope)
         if skill is not None:
             return self._skill_file(skill, rest or MAIN_FILE)
         if path == PACK_FILES:
-            return self._pack_files(pack, pinned)
+            return self._pack_files(pack, scope)
         # Not a skill, so it is pack-level material. PackResources applies its
-        # own scoping, but the pin has to be checked here too: it knows which
+        # own scoping, but the scope has to be checked here too: it knows which
         # packs exist, not which this caller may see.
-        if pinned and not any(s.pack == pack for s in self._index.visible(pinned)):
+        if scope and not any(s.pack == pack for s in self._index.visible(scope)):
             return None
-        return self._resources.read(pack, path)
+        return self._resources.read(pack, path, scope.tags)
 
     def _skill_file(self, skill: Skill, file: str) -> str | None:
         if file == MANIFEST:
@@ -365,10 +373,10 @@ class Catalogue:
             self._revalidate(target)
         return target.read_text(encoding="utf-8", errors="replace")
 
-    def _pack_files(self, pack: str, pinned: str) -> str | None:
-        if pinned and not any(s.pack == pack for s in self._index.visible(pinned)):
+    def _pack_files(self, pack: str, scope: Scope) -> str | None:
+        if scope and not any(s.pack == pack for s in self._index.visible(scope)):
             return None
-        files = self._resources.files(pack)
+        files = self._resources.files(pack, scope.tags)
         if not files:
             return None
         lines = [f"{SCHEME}{pack}/{f}" for f in files]
