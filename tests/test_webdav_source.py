@@ -373,6 +373,41 @@ def test_a_temp_file_a_killed_fetch_left_does_not_truncate_the_export(webdav, tm
     assert materialise(source, tmp_path) == root, "the export is still whole"
 
 
+# -- names a URL has to carry --------------------------------------------------
+
+AWKWARD = ("hash#.md", "question?.md", "with space.md", "café-筆記.md")
+
+
+def test_a_folder_whose_names_need_encoding_is_copied_whole(webdav, tmp_path):
+    """One ``#`` anywhere under the folder failed the entire source.
+
+    webdav4 reads the listing's href through httpx, which decodes it, and then
+    re-addresses that decoded path -- which httpx refuses for a ``#`` or a
+    ``?``. Both are ordinary in a Nextcloud note's filename.
+    """
+    for name in AWKWARD:
+        webdav.write(f"docs/{name}", f"body of {name}\n")
+    webdav.write("docs/deep#dir/note?.md", "in a folder that needs it too\n")
+
+    root = materialise(_source(webdav), tmp_path)
+
+    for name in AWKWARD:
+        assert (root / "docs" / name).read_text() == f"body of {name}\n"
+    assert "in a folder" in (root / "docs" / "deep#dir" / "note?.md").read_text()
+
+
+def test_a_name_that_needs_encoding_is_revalidated_like_any_other(webdav, tmp_path):
+    """The live half of the same address, since it re-addresses one file."""
+    rel = "docs/hash#and?both.md"
+    webdav.write(rel, "first\n")
+    source = _source(webdav)
+    root = materialise(source, tmp_path)
+    webdav.write(rel, "edited upstream, and rather longer than before\n")
+
+    assert fetch_file(source, root, rel) is not None
+    assert "edited upstream" in (root / rel).read_text()
+
+
 def test_fetch_file_refuses_a_path_that_leaves_the_export(webdav, tmp_path):
     source = _source(webdav)
     root = materialise(source, tmp_path)

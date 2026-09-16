@@ -15,6 +15,7 @@ Two quirks of the server under test:
   microseconds. The one test about the TTL turns it back on.
 """
 
+import json
 import socket
 import threading
 import time
@@ -109,6 +110,22 @@ async def test_a_live_prompt_renders_the_edited_body(webdav, tmp_path):
 
 
 # -- and what it does not ------------------------------------------------------
+
+
+def test_a_manifest_is_priced_against_the_server_before_it_is_served(
+    webdav, tmp_path
+):
+    """A size and a hash are claims about bytes. Served without revalidating,
+    they describe the copy on disk and the very next read serves something
+    else."""
+    school = _school(webdav, tmp_path)
+    before = json.loads(school.catalogue.read(f"{URI}/_manifest"))
+
+    webdav.skill("x", "edited in nextcloud, and rather longer than before")
+    after = json.loads(school.catalogue.read(f"{URI}/_manifest"))
+
+    assert after != before
+    assert after["files"][0]["size"] > before["files"][0]["size"]
 
 
 def test_a_new_upstream_file_needs_a_refresh(webdav, tmp_path):

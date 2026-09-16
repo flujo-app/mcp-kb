@@ -51,6 +51,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from .harvest import hidden
 from .skills import PackResources, Skill, SkillIndex
 
 SCHEME = "skill://"
@@ -126,11 +127,13 @@ def _manifest_json(skill: Skill) -> str:
     three and raises on a manifest missing any of them. Dropping the hash would
     be cheaper in tokens and would quietly break every client that syncs skills
     to disk.
+
+    The same dot-file rule the harvest applies, so what a manifest advertises is
+    what the skill ships: a client that syncs a skill to disk must not be sent
+    after an editor's swap file.
     """
     files = []
-    for path in sorted(
-        p for p in skill.path.rglob("*") if p.is_file() and not p.is_symlink()
-    ):
+    for path in sorted(_manifest_files(skill)):
         digest = hashlib.sha256()
         with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(8192), b""):
@@ -143,6 +146,17 @@ def _manifest_json(skill: Skill) -> str:
             }
         )
     return json.dumps({"skill": skill.qualified, "files": files}, indent=2)
+
+
+def _manifest_files(skill: Skill) -> list[Path]:
+    """The files a manifest describes: every regular one the harvest would keep."""
+    return [
+        p
+        for p in skill.path.rglob("*")
+        if p.is_file()
+        and not p.is_symlink()
+        and not hidden(p.relative_to(skill.path))
+    ]
 
 
 def mime_for(path: str) -> str:
@@ -333,6 +347,12 @@ class Catalogue:
 
     def _skill_file(self, skill: Skill, file: str) -> str | None:
         if file == MANIFEST:
+            # Every file first: a size and a hash are claims about the bytes,
+            # and on a live source the ones on disk may be an edit behind the
+            # body the very next read would serve. The TTL covers that read.
+            for path in _manifest_files(skill):
+                if self._revalidate is not None:
+                    self._revalidate(path)
             return _manifest_json(skill)
         # Resolve before comparing, which is what blocks ../ and a symlink
         # pointing out of the skill directory.

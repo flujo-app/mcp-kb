@@ -40,13 +40,18 @@ import re
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
+from urllib.parse import quote
 
-from webdav4.client import ClientError, HTTPError
+from webdav4.client import Client, ClientError, HTTPError
 from webdav4.fsspec import WebdavFileSystem
 
 from ..config import ConfigError, WebdavSource
 from .errors import SourceError
 from .export import WORK_PREFIX, Exports, workspace
+
+if TYPE_CHECKING:
+    from httpx import URL
 
 # Written at the root of an export: what every file's ETag was when it was
 # copied, which is what a live read revalidates against. Hidden, so harvest.py's
@@ -58,6 +63,23 @@ ETAGS_FILE = ".mcp-school-etags.json"
 VERSION_FILE = ".mcp-school-version"
 
 VERSION = re.compile(r"^[0-9a-f]{64}$")
+
+
+class _Client(Client):
+    """webdav4's client, with the path percent-encoded on its way into a URL.
+
+    webdav4 reads a listing's ``href`` through httpx, which decodes it, and
+    then re-addresses that decoded path with ``URL.copy_with(path=...)``, which
+    refuses a ``#`` or a ``?``. A hash in a note's filename is ordinary in
+    Nextcloud and took the whole folder down with it. Encoding here is the one
+    place both halves meet: every path webdav4 hands back is still the decoded
+    one, and an already-encoded escape is left alone rather than doubled.
+    """
+
+    def join_url(self, path: str, add_trailing_slash: bool = False) -> URL:
+        return super().join_url(
+            quote(path, safe="/"), add_trailing_slash=add_trailing_slash
+        )
 
 
 def client(source: WebdavSource, *, timeout: float | None = None) -> WebdavFileSystem:
@@ -81,9 +103,8 @@ def client(source: WebdavSource, *, timeout: float | None = None) -> WebdavFileS
     opts = {} if timeout is None else {"timeout": timeout}
     return WebdavFileSystem(
         source.base_url,
-        auth=(source.auth.username, password),
+        client=_Client(source.base_url, auth=(source.auth.username, password), **opts),
         skip_instance_cache=True,
-        **opts,
     )
 
 

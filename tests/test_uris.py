@@ -151,6 +151,17 @@ def test_manifest_excludes_a_file_reached_through_a_symlink(catalogue, skills_di
 
 
 @pytest.mark.unit
+def test_manifest_lists_only_the_files_the_harvest_would_keep(catalogue, skills_dir):
+    """The manifest is what a client syncing a skill to disk goes shopping from,
+    so it advertises what the skill ships and not an editor's swap file."""
+    (skills_dir / "flatsource" / "alpha" / ".tmp-half").write_text("not a file\n")
+
+    manifest = json.loads(catalogue.read("skill://flatsource/alpha/_manifest"))
+
+    assert ".tmp-half" not in {f["path"] for f in manifest["files"]}
+
+
+@pytest.mark.unit
 def test_pack_files_index_and_one_of_its_files(catalogue):
     index = catalogue.read("skill://deepsource/_files")
     assert "skill://deepsource/shared/guide.md" in index

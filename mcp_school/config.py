@@ -43,7 +43,9 @@ NAME = r"^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$"
 # The userinfo slot of a URL, which is where a token gets smuggled in. A source
 # URL is refused for carrying one -- but pydantic quotes the offending value
 # back in its error, so the refusal has to be scrubbed before it is reported.
-USERINFO = re.compile(r"(?<=://)[^/\s'\"@]+@")
+# Greedy up to the last '@' before the path, because a password may contain an
+# unencoded one and half a password echoed is a password echoed.
+USERINFO = re.compile(r"(?<=://)[^/\s'\"]+@")
 
 
 class ConfigError(ValueError):

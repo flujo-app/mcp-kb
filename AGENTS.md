@@ -164,6 +164,22 @@ tag it chooses.
   it was reduced to a digest and a count. Whatever a new backend's fingerprint
   returns, it is a thing an operator reads and a thing rewritten to disk on
   every rebuild.
+- **A live read blocks the whole event loop, and that is still true.** The
+  resource and prompt handlers are `async`, and `Catalogue.read` under them is
+  synchronous — so ten concurrent reads of a source 300ms away take 3.0s,
+  perfectly serialized, and nothing else on the loop runs meanwhile, not
+  another source's read and not `/health`. What is bounded is the *failure*:
+  `REVALIDATE_TIMEOUT` caps one read and `COOLDOWN_SECONDS` stops a wedged
+  server costing anything after the first. **Making the read path async — a
+  thread for the blocking call, or an async webdav client — is the outstanding
+  follow-up**, and it is a change to `resources.py`, `prompts.py` and
+  `uris.py`, not to `live.py`.
+- **An export is named by its version, so a rebuild of a version that has not
+  moved is a rebuild over a tree being read.** That is the one case a repair
+  happens at all — an export that lost files, or one a killed fetch left a temp
+  file in. `Exports.ensure` publishes to the next free name (`<version>.1`)
+  for exactly this reason; a "simplification" that renames onto `<version>`
+  brings back 2% empty reads under load. `tests/test_exports.py` holds it.
 - **wsgidav's ETag is `inode-mtime-size`.** The test server's, not Nextcloud's,
   which is content-derived — so a test that edits a served file must change its
   *length*, or two writes in the same second are one ETag and the revalidation

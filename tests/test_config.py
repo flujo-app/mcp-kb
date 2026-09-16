@@ -368,6 +368,19 @@ def test_a_credential_embedded_in_a_webdav_url_is_refused(tmp_path):
     assert "hunter2" not in str(raised.value)
 
 
+def test_a_password_containing_an_at_is_not_half_echoed(tmp_path):
+    """The scrub used to stop at the *first* `@`, so the tail of a password with
+    an unencoded one came back in the error and hence in the startup log."""
+    text = (
+        "sources:\n- name: notes\n  url: webdav+https://me:hun@ter2@cloud.example/dav\n"
+        "  auth: {username: me, password: {env: P}}\n"
+    )
+    with pytest.raises(ConfigError, match="credential") as raised:
+        load_config(write(tmp_path, text))
+    assert "ter2" not in str(raised.value)
+    assert "hun" not in str(raised.value)
+
+
 def test_refresh_is_still_accepted_on_a_webdav_source(tmp_path):
     config = load_config(write(tmp_path, _webdav("  refresh: 10m\n")))
     assert config.sources[0].refresh_seconds == 600
