@@ -136,8 +136,9 @@ the only way in: a URL carrying its own `user:token@` is refused, because git sa
 a remote URL to disk verbatim and the URL is quoted back in what `/health` reports.
 
 One difference between the backends worth knowing: a symlink in a git repository is
-served as a regular file holding the link's target as its text, where the same tree
-behind `file://` leaves it out. Neither reads what the link points at.
+served as a regular file holding the link's target as its text. Behind `file://` a
+symlink is followed when it lands inside the source root — which is what makes a
+Kubernetes ConfigMap mount, all symlinks, servable — and left out when it escapes.
 
 A pack that factors shared material up out of its skills — penpot references `shared/*`
 from 190 places — adds those directories to `include.files`, and they are served at

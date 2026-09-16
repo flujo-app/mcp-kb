@@ -135,9 +135,9 @@ def test_the_supported_interpreters_are_the_same_everywhere():
     """`requires-python`, the classifiers and the CI matrix are three
     statements of one fact, made in three files that drift silently.
 
-    A pull request runs 3.14 alone, so an interpreter named in the metadata but
-    missing from the matrix is a claim nothing checks until the merge — or
-    until the release, since publish.yml gates on this workflow.
+    A pull request runs only the ends of the range, so an interpreter named in
+    the metadata but missing from the matrix is a claim nothing checks until the
+    merge — or until the release, since publish.yml gates on this workflow.
     """
     said = interpreters()
     assert said["classifiers"] == said["test.yml"]

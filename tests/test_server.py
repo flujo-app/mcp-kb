@@ -169,3 +169,42 @@ async def test_the_mirror_honours_the_hard_pack_scope(skills_dir):
     async with Client(server.mcp) as client:
         out = await call(client, "read_resource", uri="skill://deepsource/gamma")
     assert "No resource" in out
+
+
+async def test_a_configmap_mount_is_served_under_the_names_it_was_mounted_as(tmp_path):
+    """Every row names the path the config asked for, never the symlink target.
+
+    A ConfigMap mounts `shared/foo.md -> ..data/shared/foo.md`, and `..data`
+    points at a timestamp directory Kubernetes replaces on every update. A row
+    recording the resolved path lists `..2026.../shared/foo.md` — not the URI a
+    skill cites, and gone after the next update.
+    """
+    root = tmp_path / "pack"
+    stamp = root / "..2026_09_16_13_15_49"
+    (stamp / "shared").mkdir(parents=True)
+    (stamp / "shared" / "foo.md").write_text("shared body")
+    (stamp / "skills" / "alpha").mkdir(parents=True)
+    (stamp / "skills" / "alpha" / "SKILL.md").write_text(
+        "---\nname: alpha\ndescription: a\n---\nskill body"
+    )
+    (root / "..data").symlink_to(stamp)
+    (root / "shared").symlink_to(root / "..data" / "shared")
+    (root / "skills").symlink_to(root / "..data" / "skills")
+    config = Config(
+        sources=[
+            {
+                "name": "pack",
+                "url": f"file://{root}",
+                "include": {"prompts": [], "files": ["shared/**/*"]},
+            }
+        ]
+    )
+    school = School(config, tmp_path / "cache")
+
+    assert school.snapshot.resources.files("pack") == ["shared/foo.md"]
+    assert all(".." not in str(s.path) for s in school.index.visible())
+    async with Client(school.mcp) as client:
+        shared = (await client.read_resource("skill://pack/shared/foo.md"))[0].text
+        skill = (await client.read_resource("skill://pack/alpha"))[0].text
+    assert shared == "shared body"
+    assert "skill body" in skill

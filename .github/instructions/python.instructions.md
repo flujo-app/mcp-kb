@@ -21,7 +21,9 @@ The ones that actually come up:
   all fine now.
 - PEP 695 `type X = ...` and the `type` parameter syntax are 3.12 — not fine.
 - `itertools.batched` is 3.12; `enum.StrEnum` is 3.11, fine.
-- A glob ending in `**` matches directories only before 3.13. Always `dir/**/*`.
+- A glob ending in `**` matches directories only before 3.13, so in code always
+  write `dir/**/*`. Config `include` globs are the exception: `harvest.patterns`
+  normalises them, so a config may say either.
 - `X | Y` in an annotation is fine **because every module starts with
   `from __future__ import annotations`**. Used at runtime — `isinstance(x, A | B)`,
   a `TypeAlias` value, a pydantic field evaluated eagerly — it needs care.

@@ -285,7 +285,7 @@ picked up an edit yet.
   it. Dependabot PRs carry the `no changelog` label, and `pr.yml` also skips the
   gate for them unconditionally — a label is repository state anyone can delete,
   and Dependabot silently drops a label that does not exist.
-- The gates on a PR are `Test (3.14)`, `Package`, and the four `quality.yml`
+- The gates on a PR are `Test (3.11)`, `Test (3.14)`, `Package`, and the four `quality.yml`
   jobs. The image is deliberately not built on a PR; `quality.yml` lints the
   Dockerfile and `package.yml` builds the wheel it wraps.
 - `.github/zizmor.yml` and `.hadolint.yaml` record *why* each relaxed rule is

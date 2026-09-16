@@ -136,8 +136,10 @@ shape of the pipeline itself:
 
 - **The image is not built on pull requests** — deliberately. Don't ask for it
   back; `quality.yml`, `package.yml` and `test.yml` cover the part that is ours.
-- **`test.yml` runs one interpreter (3.14) on a PR and the full 3.11–3.14 matrix
-  on main and on release.** `Test (3.14)` is a required status check.
+- **`test.yml` runs both ends of the range (3.11 and 3.14) on a PR and the full
+  3.11–3.14 matrix on main and on release.** `Test (3.14)` is a required status
+  check. The old end is on the PR because that is where every version break
+  here has been: a trailing `**` glob, and a `pygit2` floor without the API.
 - **Required checks must never be path-filtered.** A path-filtered required check
   never reports on a PR that misses the filter, and the PR can then never merge.
 - **Every quality gate has a config file with reasons**: `.github/zizmor.yml` and
