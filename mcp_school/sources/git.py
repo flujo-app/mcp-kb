@@ -363,18 +363,16 @@ def _collect(home: Path, keep: Path) -> None:
     Best effort: a cache that cannot be tidied is not a reason to fail a build.
     """
     with contextlib.suppress(OSError):
+        others = [p for p in home.iterdir() if p.is_dir() and p != keep]
         exports = sorted(
-            (p for p in home.iterdir() if p != keep and SHA.match(p.name)),
+            (p for p in others if SHA.match(p.name)),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
         cutoff = time.time() - GRACE_SECONDS
         doomed = [p for p in exports[1:] if p.stat().st_mtime < cutoff]
-        doomed += [
-            p
-            for p in home.iterdir()
-            if p.name.startswith((WORK_PREFIX, DISCARD_PREFIX))
-        ]
+        leftovers = (WORK_PREFIX, DISCARD_PREFIX)
+        doomed += [p for p in others if p.name.startswith(leftovers)]
         for path in doomed:
             _discard(path)
 
