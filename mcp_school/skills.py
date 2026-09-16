@@ -168,10 +168,10 @@ class PackResources:
         file outside every configured ``include.files`` glob) is refused even
         though nothing here walks the directory to find that out. A registered
         path is still resolved and checked against its root before being read,
-        as defence in depth against a symlink pointing outside the tree; there
-        is no separate "inside a skill directory" check because harvest never
-        registers one of those. Tries each root added for ``pack`` in order and
-        returns the first hit.
+        as defence in depth against a symlink pointing outside the tree; ``add``
+        already refused any path inside a skill directory, so none can be
+        registered here. Tries each root added for ``pack`` in order and returns
+        the first hit.
         """
         target_rel = PurePosixPath(rel).as_posix()
         for entry in self._roots.get(pack, ()):

@@ -42,7 +42,7 @@ sources:
   url: file:///skills/penpot
   include:
     skills: ["*/SKILL.md"]
-    files: ["shared/**", "workflows/**"]
+    files: ["shared/**/*", "workflows/**/*"]
 ```
 
 `file://` is the only scheme so far, must be absolute (`file:///path`, no
