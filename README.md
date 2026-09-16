@@ -155,6 +155,34 @@ skill in the listing (for clients that sync skills to disk), `X-Skill-Pack` pins
 `GET /health` reports status, the libraries and skill/prompt counts, and each
 configured source's own status.
 
+## Index and refresh
+
+`CACHE_DIR/index.json` is the on-disk catalogue: what each source yielded last
+time, rows enough to rebuild every skill and prompt without re-reading a
+single file. Cold start reads it and serves in milliseconds; a background pass
+then checks each source's fingerprint and rebuilds only the ones that moved,
+so a pod restart never has to re-harvest a source that has not changed.
+
+`refresh: 5m` on a source schedules that check; a source with none is never
+revisited on its own:
+
+```yaml
+- name: grafana-prompts
+  url: file:///prompts/grafana
+  refresh: 5m
+```
+
+`POST /reindex` forces a rebuild of every source immediately, fingerprint
+check skipped, and answers with `/health`'s body plus `rebuilt`, the source
+names actually rebuilt this pass — since the fingerprint check is skipped,
+that is every source that did not fail identically to how it already had,
+changed or not, not only the ones whose content moved.
+
+A session that persists across requests is told, once, the next time it asks
+— MCP 2026-07-28 has no sessions of its own, so a sessionless client gets no
+such notice and instead relies on `cache_ttl`, which this server advertises as
+the shortest `refresh` among its sources.
+
 ## Deploying
 
 The image is the whole artifact: point `CONFIG` at a config file and `CACHE_DIR` at a

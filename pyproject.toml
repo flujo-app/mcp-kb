@@ -51,6 +51,10 @@ test = [
   "pytest-asyncio",
   "ruff",
   "uvicorn",
+  # tests/test_refresh.py drives the ASGI app directly. FastMCP pulls in httpx2,
+  # not httpx, so this has to be declared or the suite only passes where
+  # something else happened to install it.
+  "httpx",
   # tests/test_packaging.py reads pyproject.toml, and tomllib is 3.11+. It
   # arrives with pytest today; declared because a test that imports it should.
   "tomli; python_version < '3.11'",

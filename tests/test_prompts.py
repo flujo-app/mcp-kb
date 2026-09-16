@@ -1,13 +1,16 @@
 """Prompts: the files, how they render, and who may see them."""
 
 import logging
+import pathlib
+from types import SimpleNamespace
 
 import pytest
 from fastmcp import Client
 
 from mcp_school import School, harvest
 from mcp_school.config import Include
-from mcp_school.prompts import load_prompt, load_prompts
+from mcp_school.prompts import FilePrompt, PromptProvider, load_prompt, load_prompts
+from mcp_school.skills import SkillIndex
 from tests.conftest import load_all_prompts, load_pack_prompts, make_config
 
 pytestmark = pytest.mark.unit
@@ -150,3 +153,32 @@ async def test_skill_packs_scopes_prompts(skills_dir, prompts_dir):
         assert [p.name for p in await client.list_prompts()] == ["flatsource_hello"]
         with pytest.raises(Exception, match="deepsource_check"):
             await client.get_prompt("deepsource_check", {"service": "api"})
+
+
+# -- reading the snapshot -------------------------------------------------------
+
+
+def test_visible_reads_the_snapshot_exactly_once():
+    """Two separate reads of `School.snapshot` could straddle a swap and mix
+    generations (M6) -- `PromptProvider` must take one reference and derive
+    both the prompts and the index from it, the way `resources.py` and
+    `routes.py` already do.
+    """
+    calls = []
+    prompt = FilePrompt(
+        path=pathlib.Path("/x/hello.md"),
+        name="flatsource_hello",
+        pack="flatsource",
+        source="flatsource",
+        template="hi",
+    )
+    snapshot = SimpleNamespace(prompts=(prompt,), index=SkillIndex([]))
+
+    def snapshot_getter():
+        calls.append(1)
+        return snapshot
+
+    provider = PromptProvider(snapshot_getter)
+    provider.visible("flatsource")
+
+    assert len(calls) == 1

@@ -34,8 +34,8 @@ import asyncio
 import contextlib
 import logging
 import threading
+import time
 from collections.abc import AsyncIterator, Iterable
-from datetime import datetime, timezone
 from pathlib import Path
 
 import mcp_types
@@ -112,10 +112,12 @@ class AnnounceChanges(Middleware):
     ever read, one per request, into a store with a day-long TTL. So an HTTP
     request arriving without an ``mcp-session-id`` is left alone entirely --
     correct as well as cheap, since a client with no session across requests
-    has no listing to invalidate. stdio and in-memory connections are not HTTP
-    and do have one continuous session, so they fall through to the state
-    calls, which are still guarded: this must never turn a working request into
-    a failed one.
+    has no listing to invalidate. stdio and in-memory connections have no such
+    header to check at all, so ``_can_remember`` defaults to True for them and
+    they fall through to the state calls too -- which, under FastMCP 4.0.3,
+    turn out to be just as wasted, since those transports mint a fresh state
+    key per request as well. Wasted, not wrong: the calls are still guarded,
+    so this must never turn a working request into a failed one.
     """
 
     def __init__(self, school: School):
@@ -161,10 +163,15 @@ class School:
         self.config = config
         self.cache = cache
         self.index_path = cache / INDEX_FILE
-        # Every write of self._records and self.snapshot happens under this.
-        # Index.write is not itself locked and uses a fixed .tmp sibling, so two
-        # concurrent refreshes would race for that one temporary file.
+        # Every write of self._records and self.snapshot happens under this,
+        # so two refreshes triggered at once still swap in a single order.
         self._lock = threading.Lock()
+        # When each source was last examined, keyed by monotonic time rather
+        # than a record's `built` -- `built` only moves when a rebuild actually
+        # replaces a record, and scheduling off it is what let an unchanged (or
+        # persistently failing) source come due on every tick forever. See
+        # `_due`.
+        self._checked: dict[str, float] = {}
 
         self._records = self._cold_start()
         self.snapshot: Snapshot = build_snapshot(config, self._records, generation=0)
@@ -188,9 +195,7 @@ class School:
         mirrors = tools.register(self.mcp, lambda: self.snapshot.catalogue)
         self.mcp.add_middleware(resources.HideMirrorTools(mirrors))
         self.mcp.add_middleware(AnnounceChanges(self))
-        prompts.register(
-            self.mcp, lambda: self.snapshot.prompts, lambda: self.snapshot.index
-        )
+        prompts.register(self.mcp, lambda: self.snapshot)
         routes.register(self.mcp, self)
 
     # -- what the snapshot currently holds -----------------------------------
@@ -286,6 +291,7 @@ class School:
         temporary file. Call it from the event loop through ``refresh_async``.
         """
         names = None if only is None else set(only)
+        checked_at = time.monotonic()
         with self._lock:
             records = dict(self._records)
             rebuilt: list[str] = []
@@ -293,6 +299,10 @@ class School:
                 if names is not None and source.name not in names:
                     continue
                 current = records.get(source.name)
+                # Examined, whether or not it turns out stale -- this is what
+                # `_due` schedules off, so it must move on every check, not
+                # only on a rebuild.
+                self._checked[source.name] = checked_at
                 if (
                     not force
                     and current is not None
@@ -312,8 +322,10 @@ class School:
                 self.config, records, generation=self.snapshot.generation + 1
             )
             self._records = records
-            self._write_index()
             self.snapshot = snapshot
+            # Best-effort and therefore last: a raise here must not leave
+            # _records advanced while snapshot still holds the old generation.
+            self._write_index()
             return rebuilt
 
     async def refresh_async(self, **kwargs) -> list[str]:
@@ -389,12 +401,21 @@ class School:
                 )
 
     def _due(self) -> list[str]:
-        """The sources whose own refresh interval has elapsed since their build."""
+        """The sources whose own refresh interval has elapsed since they were
+        last *checked* -- not since their record was last *built*.
+
+        Those differ the moment a check finds nothing to rebuild: `built` stays
+        put, but the source has still been examined and must not come due
+        again until its own interval passes a second time. A source never
+        checked (``-inf``) is due immediately.
+        """
+        now = time.monotonic()
         return [
             source.name
             for source in self.config.sources
             if source.refresh_seconds is not None
-            and _age(self._records.get(source.name)) >= source.refresh_seconds
+            and now - self._checked.get(source.name, float("-inf"))
+            >= source.refresh_seconds
         ]
 
     def run(
@@ -408,12 +429,22 @@ class School:
 
 
 def _can_remember() -> bool:
-    """Whether this connection will still be the same one on the next request.
+    """Whether this connection is worth trying to remember state against.
 
     Announcing once means remembering what was announced, and the only place to
     remember it is state keyed by the session. An HTTP request carrying no
-    ``mcp-session-id`` has no session to key on; anything that is not an HTTP
-    request -- stdio, in-memory -- is one continuous connection and does.
+    ``mcp-session-id`` header has no session to key on, so it is never worth
+    trying: False.
+
+    Anything that is not an HTTP request -- stdio, in-memory -- has no such
+    header to check, so this defaults to True for it. That default is
+    optimistic, not a guarantee: under FastMCP 4.0.3 neither actually keeps one
+    continuous session either -- ``test_a_sessionless_connection_is_told_...``
+    shows the real in-memory transport minting a fresh state key per request,
+    the same as a sessionless HTTP client. The state calls this makes for them
+    are therefore wasted, not merely redundant, but harmless: ``AnnounceChanges``
+    already guards every one of them against a state store that will not read
+    them back.
     """
     http = http_request()
     if http is None:
@@ -456,16 +487,3 @@ def _same_failure(old: SourceRecord | None, new: SourceRecord) -> bool:
         and old.status == new.status
         and old.error == new.error
     )
-
-
-def _age(record: SourceRecord | None) -> float:
-    """Seconds since ``record`` was built; infinite when there is none to read."""
-    if record is None:
-        return float("inf")
-    try:
-        built = datetime.strptime(record.built, "%Y-%m-%dT%H:%M:%SZ")
-    except (TypeError, ValueError):
-        return float("inf")
-    return (
-        datetime.now(timezone.utc) - built.replace(tzinfo=timezone.utc)
-    ).total_seconds()

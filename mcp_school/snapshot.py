@@ -68,24 +68,34 @@ def build_source(config: Config, source: Source, cache: Path) -> SourceRecord:
     mid-harvest lands outside the recorded fingerprint and the next pass
     rebuilds. Taken after, that write would look already-accounted-for and the
     change would never be picked up.
+
+    Everything from ``materialise`` through ``load_prompts`` runs in one try:
+    a file can vanish or turn unreadable between the fingerprint walk and the
+    read that follows it (a plain TOCTOU, and the whole point of this module is
+    serving sources that change underneath it), and that must fail *this
+    source*, not the caller. ``OSError`` is caught alongside ``SourceError`` for
+    that reason -- a ``PermissionError`` or a deleted file is exactly as much
+    "a failed source is a record, not an exception" as a bad URL is.
     """
     lib = config.library(source.library_name)
     try:
         root = materialise(source, cache)
         stamp = fingerprint(source, cache, root)
-    except SourceError as exc:
+        tags = [*lib.tags, *source.tags]
+        dirs = harvest.skill_dirs(root, source.include)
+        skills = load_skills(
+            dirs, pack=lib.name, source=source.name, root=root, tags=tags
+        )
+        files = harvest.pack_files(root, source.include, dirs)
+        prompts = load_prompts(
+            harvest.prompt_files(root, source.include),
+            pack=lib.name,
+            source=source.name,
+            tags=tags,
+        )
+    except (SourceError, OSError) as exc:
         return _failed(source.name, lib.name, str(exc))
 
-    tags = [*lib.tags, *source.tags]
-    dirs = harvest.skill_dirs(root, source.include)
-    skills = load_skills(dirs, pack=lib.name, source=source.name, root=root, tags=tags)
-    files = harvest.pack_files(root, source.include, dirs)
-    prompts = load_prompts(
-        harvest.prompt_files(root, source.include),
-        pack=lib.name,
-        source=source.name,
-        tags=tags,
-    )
     return SourceRecord(
         name=source.name,
         status="ok",

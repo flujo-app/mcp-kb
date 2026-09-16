@@ -11,7 +11,8 @@ file, and it is cloned or read at container **start**, into a cache volume.
 | --- | --- |
 | `mcp_school/config.py` | the config file's schema — `Config`, `load_config`, `Library`, `FileSource`, `GitSource` |
 | `mcp_school/harvest.py` | turns a source's `include` globs into skill dirs, prompt files and pack files |
-| `mcp_school/sources/` | turns a config source into a local directory — `file://` and `git+…`/`github://` |
+| `mcp_school/sources/` | turns a config source into a local directory — `file://` and `git+…`/`github://` — and fingerprints it, to detect a changed one |
+| `mcp_school/index.py` | `Index`/`SourceRecord`, the on-disk `index.json` a cold start reads instead of re-harvesting |
 | `scripts/requirements.py` | prints the dependency list out of `pyproject.toml` for the image build |
 | `examples/config.yaml` | the worked example the image ships — the four packs as `github://` sources |
 | `config.schema.json` | `Config.model_json_schema()`, committed so an editor can validate a config live |
@@ -21,9 +22,9 @@ file, and it is cloned or read at container **start**, into a cache volume.
 | `mcp_school/tools.py` | the two mirror tools |
 | `mcp_school/request.py` | what the current request says about itself |
 | `mcp_school/prompts.py` | loads, renders and scopes the prompts |
-| `mcp_school/routes.py` | plain HTTP endpoints (`/health`) |
-| `mcp_school/server.py` | `School` — wiring, the snapshot/refresh lifecycle, no tool bodies |
-| `mcp_school/index.py` | the on-disk index a cold start reuses, so a restart touches no network |
+| `mcp_school/routes.py` | plain HTTP endpoints (`/health`, `/reindex`) |
+| `mcp_school/snapshot.py` | `Snapshot`, `build_snapshot` — the immutable view of the catalogue every request reads |
+| `mcp_school/server.py` | `School` — wiring, cold start, refresh, no tool bodies |
 | `mcp_school/main.py` | CLI and env parsing; the only file reading `os.environ` |
 
 ## Adding a source
@@ -139,6 +140,9 @@ tag it chooses.
   `SkillsDirectoryProvider` also keys a skill on its folder name alone, so two
   packs shipping a `testing/` collapse into one and the loser vanishes from the
   server entirely. Neither failure raises anything.
+- **A provider that stores a `Catalogue` serves the old generation forever** —
+  read through the getter (`lambda: school.snapshot.catalogue`), never a
+  captured reference.
 
 ## Where code goes
 
@@ -176,6 +180,8 @@ namespaces tool names with a prefix, and these three names are the agent's API.
   surface. Nothing else in the package reads `os.environ`, except the
   `{env: NAME}` resolver in `config.py`, which is the one other reader of the
   environment.
+- **Anything that changes what the catalogue holds** goes through
+  `School.refresh` and produces a new `Snapshot`; never mutate one.
 
 `skills.py` imports no FastMCP, which is deliberate: the catalogue is testable
 without an MCP client, and `tests/test_skills.py` exercises the scoping rules
@@ -219,10 +225,18 @@ They compose: the header narrows within whatever the config loads. Header
 scoping only exists inside an HTTP request, so it is inert over stdio — the
 tests in `tests/test_header_scope.py` run a real uvicorn server for that reason.
 
-`GET /health` reports the libraries, the skill and prompt counts, and each
-source's own status — `{"status":"ok","libraries":[...],"skills":N,"prompts":N,"sources":{...}}` —
-which is the fastest way to tell whether every configured source loaded,
-wherever this is running.
+`GET /health` reports the libraries, the skill and prompt counts, the
+catalogue's generation and when it was built, and each source's own status and
+fingerprint:
+
+```
+{"status":"ok","generation":N,"built":"...","libraries":[...],"skills":N,"prompts":N,"sources":{...}}
+```
+
+`POST /reindex` returns the same payload plus `"rebuilt":[names]`. Between them
+they answer the three questions worth asking of a running instance: did every
+configured source load, which generation is being served, and has a refresh
+picked up an edit yet.
 
 ## House rules that apply here
 

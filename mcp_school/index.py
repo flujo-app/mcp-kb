@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -155,14 +156,20 @@ class Index:
     sources: dict[str, SourceRecord]
 
     def write(self, path: Path) -> None:
-        """Write as ``<path>.tmp`` then ``os.replace`` it onto ``path``.
+        """Write to a unique temp file beside ``path``, then ``os.replace`` it.
 
         A reader never sees a half-written file: ``os.replace`` is a single
         filesystem rename, so the index at ``path`` is either the previous
-        complete one or this complete one, never a partial write.
+        complete one or this complete one, never a partial write. The temp
+        file comes from ``tempfile.mkstemp`` rather than a fixed sibling name,
+        so two writers in the same directory can never race for it.
         """
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(asdict(self), sort_keys=True), encoding="utf-8")
+        fd, name = tempfile.mkstemp(
+            dir=path.parent, prefix=f"{path.name}.", suffix=".tmp"
+        )
+        tmp = Path(name)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(asdict(self), sort_keys=True))
         os.replace(tmp, path)  # noqa: PTH105 - the atomic rename tests monkeypatch
 
     @classmethod

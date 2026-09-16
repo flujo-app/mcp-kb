@@ -22,8 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `git+https://`, `git+http://`, `git+file://` and `github://org/repo` sources: cloned bare and shallow with pygit2, read at `ref` (a branch, tag or commit), exported into the cache; `subdirectory` and `auth` per PEP 610.
-- A `refresh` interval per source (`30s`, `5m`, `1h`) and `sources.fingerprint()`, a cheap file-count/bytes/newest-mtime summary used to detect a changed source without re-harvesting it — not yet wired to a refresh loop.
-- `mcp_school.index`: an on-disk index of what each source yielded (`Index`, `SourceRecord`, `SkillRow`, `PromptRow`) — not yet used by the server.
+- `mcp_school.index`: an on-disk index of what each source yielded (`Index`, `SourceRecord`, `SkillRow`, `PromptRow`), written to `<CACHE_DIR>/index.json`. The server starts from it without touching any source, then verifies each source's fingerprint (`sources.fingerprint()`, a cheap file-count/bytes/newest-mtime summary) in the background and rebuilds only what changed; a `refresh: <duration>` (`30s`, `5m`, `1h`) per source schedules those re-checks, `POST /reindex` forces one immediately, and a session that persists across requests is told the catalogue changed next time it asks — MCP 2026-07-28 has no sessions, so a sessionless client relies on the advertised `cache_ttl` instead.
+- Listings are memoised per scope, so `resources/list` is a dict lookup.
 - `mcp-school schema` prints the config JSON Schema.
 - `mcp_school.config`: a validated config file of sources and libraries (`Config`, `FileSource`, `{env:}` secrets), published as `config.schema.json` and printable via `mcp-school schema`.
 - `mcp_school.harvest` and `mcp_school.sources`: convention-based globs turn a `file://` source directory into skill dirs, prompt files and pack-level files, with a traversal guard so a glob like `../**` finds nothing.
@@ -62,6 +62,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - A refresh that fails now keeps the last good catalogue: the source is marked `stale` in `/health` with the error that broke it and goes on being served, where an unreachable remote used to empty it until the next successful pass.
+- A source with `refresh:` is now re-checked once per its own interval instead of every 5 seconds forever once it is unchanged or fails the same way twice — the schedule tracks when a source was last *checked*, not when its record was last *built*, which only moved on an actual rebuild.
+- A `PermissionError` (or any other `OSError`) reading one source now fails only that source instead of freezing the whole refresh pass over every source; `POST /reindex` answers with an error payload instead of an unhandled 500.
+- The Kubernetes deployment now mounts an `emptyDir` at `CACHE_DIR` (and one at `/tmp`), so `index.json` is actually written and read in the cluster under `readOnlyRootFilesystem: true` — previously nowhere to write it, silently.
+- `Index.write`'s temp file is now unique per write (`tempfile.mkstemp`) rather than a fixed sibling name, closing a cross-process race for it.
+- `School.refresh` now writes `index.json` after swapping in the new snapshot rather than between the two commits, so a failure persisting it can no longer leave the served catalogue on the old generation while its records have already moved on.
+- `PromptProvider.visible` reads `School.snapshot` once instead of twice, closing a narrow window where a refresh between the two reads could mix prompts from one generation with the index from the next.
+- A skill's manifest no longer lists a file reached through a symlink pointing outside the skill root; reading it was already refused.
 - `resources/list` answers in milliseconds instead of ~5 seconds: pack-level files are scanned once at startup rather than on every call, which also stops the listing from freezing every other request, health probes included, while it ran.
 - Pack-level files are no longer hidden when the skills directory itself sits under a dot-directory such as `~/.cache`.
 - `list_resources` and `read_resource` are annotated read-only; unannotated, MCP's defaults advertised them as destructive.

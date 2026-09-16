@@ -12,6 +12,7 @@ from fastmcp.server.context import Context
 import mcp_school.server
 from mcp_school import School, snapshot
 from mcp_school.config import Config
+from mcp_school.server import _can_remember
 from mcp_school.sources import SourceError
 from tests.conftest import make_config
 
@@ -212,7 +213,63 @@ def test_a_failed_refresh_keeps_the_last_good_catalogue(skills_dir, cache, monke
     assert school.status["flatsource"]["status"] == "stale"
     assert "unreachable" in school.status["flatsource"]["error"]
     assert school.status["flatsource"]["skills"] == 2
+
+
+@pytest.mark.unit
+def test_an_unreadable_file_in_one_source_fails_only_that_source(
+    skills_dir, cache, monkeypatch
+):
+    """I2: a `PermissionError` (any `OSError`) out of one source's harvest must
+    become a record for that source, not an exception that aborts the refresh
+    pass over every other source.
+
+    The record is `stale` rather than `failed` because this source had a good
+    one to keep: an unreadable file is exactly the transient the stale rule
+    exists for, and the two rules compose. What I2 is really about is that
+    `deepsource` is untouched and nothing escapes.
+    """
+    school = School(make_config(skills_dir), cache)
+    real_load_skills = snapshot.load_skills
+
+    def flaky(dirs, *, pack, source, root, tags=()):
+        if source == "flatsource":
+            raise PermissionError("[Errno 13] Permission denied: SKILL.md")
+        return real_load_skills(dirs, pack=pack, source=source, root=root, tags=tags)
+
+    monkeypatch.setattr(snapshot, "load_skills", flaky)
+
+    assert school.refresh(force=True) == ["deepsource", "flatsource"]
+    assert school.status["flatsource"]["status"] == "stale"
+    assert "Permission denied" in school.status["flatsource"]["error"]
     assert school.status["deepsource"]["status"] == "ok"
+    assert sorted(s.name for s in school.index.visible()) == [
+        "alpha",
+        "beta",
+        "delta",
+        "gamma",
+    ]
+
+
+@pytest.mark.unit
+def test_an_unreadable_file_with_no_prior_record_is_a_failed_source(
+    skills_dir, cache, monkeypatch
+):
+    """The other half of I2: with nothing good to keep, an `OSError` is still a
+    failed record and still must not empty the catalogue of everything else.
+    """
+    real_load_skills = snapshot.load_skills
+
+    def flaky(dirs, *, pack, source, root, tags=()):
+        if source == "flatsource":
+            raise PermissionError("[Errno 13] Permission denied: SKILL.md")
+        return real_load_skills(dirs, pack=pack, source=source, root=root, tags=tags)
+
+    monkeypatch.setattr(snapshot, "load_skills", flaky)
+    school = School(make_config(skills_dir), cache)
+
+    assert school.status["flatsource"]["status"] == "failed"
+    assert school.status["deepsource"]["status"] == "ok"
+    assert sorted(s.name for s in school.index.visible()) == ["delta", "gamma"]
 
 
 @pytest.mark.unit
@@ -292,6 +349,26 @@ def test_a_restart_keeps_serving_what_a_stale_record_still_names(
         "delta",
         "gamma",
     ]
+def test_persistence_failure_does_not_leave_records_ahead_of_the_snapshot(
+    skills_dir, cache, monkeypatch
+):
+    """M5: `_write_index` is best-effort and must run after the commit, not
+    inside it -- otherwise a raise there leaves `_records` advanced while
+    `snapshot` stays on the old generation forever.
+    """
+    school = School(make_config(skills_dir), cache)
+
+    def boom():
+        raise TypeError("boom")
+
+    monkeypatch.setattr(school, "_write_index", boom)
+
+    with pytest.raises(TypeError):
+        school.refresh(force=True)
+
+    # The swap already happened; only persisting it to disk failed.
+    assert school.generation == 1
+    assert school.snapshot.status["deepsource"]["built"] == school._records["deepsource"].built
 
 
 @pytest.mark.unit
@@ -387,6 +464,115 @@ async def test_the_loop_keeps_rebuilding_a_source_whose_refresh_is_due(
         assert await _until(lambda: school.generation >= 1)
 
     assert school.status["flatsource"]["status"] == "ok"
+
+
+@pytest.mark.unit
+async def test_an_unchanged_source_is_examined_once_per_interval_not_every_tick(
+    skills_dir, cache, monkeypatch
+):
+    """I1: `refresh: 1s` on an unchanged tree must mean "check once a second",
+    not "check every tick forever". The bug: `_due()` scheduled off
+    `record.built`, which only moves when a rebuild actually replaces a
+    record -- so a source that is checked and found unchanged never advances
+    it, and is due again on the very next tick, forever.
+    """
+    monkeypatch.setattr(mcp_school.server, "TICK_SECONDS", 0.02)
+    raw = {
+        "sources": [
+            {**s.model_dump(mode="json"), "refresh": "1s"}
+            for s in make_config(skills_dir).sources
+        ]
+    }
+    school = School(Config.model_validate(raw), cache)
+
+    # The fingerprint walk, not `materialise`, is the expensive step an
+    # unchanged source repeats -- `build_source` (and `materialise` with it)
+    # is only ever reached once a fingerprint actually moves.
+    real_fingerprint = mcp_school.server.fingerprint
+    calls = []
+
+    def counting_fingerprint(source, cache_dir, root):
+        calls.append(source.name)
+        return real_fingerprint(source, cache_dir, root)
+
+    monkeypatch.setattr(mcp_school.server, "fingerprint", counting_fingerprint)
+
+    async with Client(school.mcp):
+        await asyncio.sleep(1.3)  # a little over one interval, at 50 ticks/s
+
+    # ~1 interval elapsed for 2 sources: a handful of walks is right. A
+    # per-tick walk over 1.3s at TICK_SECONDS=0.02 would be ~130.
+    assert len(calls) <= 8
+    assert school.generation == 0
+
+
+@pytest.mark.unit
+async def test_a_persistently_failing_source_is_not_retried_every_tick(
+    skills_dir, cache, monkeypatch
+):
+    """I1's second face: `_same_failure` skips storing the fresh record, so a
+    source that keeps failing the same way never advances `built` either --
+    which must not turn into a per-tick retry storm once a source is remote.
+    """
+    monkeypatch.setattr(mcp_school.server, "TICK_SECONDS", 0.02)
+    raw = {"sources": [s.model_dump(mode="json") for s in make_config(skills_dir).sources]}
+    raw["sources"].append(
+        {"name": "gone", "url": f"file://{skills_dir / 'nope'}", "refresh": "1s"}
+    )
+    school = School(Config.model_validate(raw), cache)
+    seen = _counting_materialise(monkeypatch)
+
+    async with Client(school.mcp):
+        await asyncio.sleep(1.3)
+
+    assert len([n for n in seen if n == "gone"]) <= 4
+    assert school.status["gone"]["status"] == "failed"
+
+
+@pytest.mark.unit
+async def test_can_remember_is_true_only_with_a_session_header(skills_dir, cache):
+    """M3: `_can_remember()` must actually read the `mcp-session-id` header --
+    replacing its whole body with `return True` left all 206 tests green.
+    """
+    school = School(make_config(skills_dir), cache)
+
+    @school.mcp.custom_route("/can-remember", methods=["GET"])
+    async def can_remember(_request):
+        from starlette.responses import JSONResponse
+
+        return JSONResponse({"can_remember": _can_remember()})
+
+    transport = httpx.ASGITransport(app=school.mcp.http_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://school") as http:
+        without_header = await http.get("/can-remember")
+        with_header = await http.get(
+            "/can-remember", headers={"mcp-session-id": "abc123"}
+        )
+
+    assert without_header.json()["can_remember"] is False
+    assert with_header.json()["can_remember"] is True
+
+
+@pytest.mark.unit
+async def test_reindex_answers_with_an_error_payload_instead_of_a_500(
+    skills_dir, cache, monkeypatch
+):
+    """I2: the only manual recovery lever this server has must still answer,
+    even when a refresh raises something `build_source` did not turn into a
+    failed record.
+    """
+    school = School(make_config(skills_dir), cache)
+
+    async def boom(**kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(school, "refresh_async", boom)
+    transport = httpx.ASGITransport(app=school.mcp.http_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://school") as http:
+        response = await http.post("/reindex")
+
+    assert response.status_code == 500
+    assert response.json()["status"] == "error"
 
 
 @pytest.mark.unit

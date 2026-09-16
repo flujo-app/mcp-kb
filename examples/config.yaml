@@ -24,3 +24,14 @@ sources:
   ref: b36e0829c6d0140e93cfef2ca599b1b07d4a7797
   include:
     skills: ["skills/*/SKILL.md"]
+
+# A pinned ref never needs re-checking, which is why none of the above set
+# `refresh:`. Track a branch instead and the server re-resolves it on that
+# interval, rebuilding only if the commit moved:
+#
+# - name: superpowers-tip
+#   url: github://obra/superpowers
+#   ref: main
+#   refresh: 1h
+#   include:
+#     skills: ["skills/*/SKILL.md"]

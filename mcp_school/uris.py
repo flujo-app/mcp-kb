@@ -126,7 +126,9 @@ def _manifest_json(skill: Skill) -> str:
     to disk.
     """
     files = []
-    for path in sorted(p for p in skill.path.rglob("*") if p.is_file()):
+    for path in sorted(
+        p for p in skill.path.rglob("*") if p.is_file() and not p.is_symlink()
+    ):
         digest = hashlib.sha256()
         with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(8192), b""):
