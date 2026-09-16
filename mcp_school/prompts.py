@@ -312,11 +312,11 @@ def _libraries_of(selector: str, index: SkillIndex) -> frozenset[str]:
 
     A prompt belongs to a library, not a group, so a group name resolves to the
     libraries holding that group -- every one of them, since group names are
-    not unique across libraries and resources already admit them all. A name no
-    skill carries is taken as the library itself, or a library of prompts and
-    no skills would show nothing when asked for by name.
+    not unique across libraries and resources already admit them all. The
+    selector also always counts as a library name in its own right, or a library
+    of prompts and no skills would vanish whenever some other library happened
+    to have a group by the same name.
     """
     if not selector:
         return frozenset()
-    found = frozenset(s.pack for s in index.visible(Scope(selector)))
-    return found or frozenset({selector})
+    return frozenset(s.pack for s in index.visible(Scope(selector))) | {selector}

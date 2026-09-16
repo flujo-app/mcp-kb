@@ -252,3 +252,34 @@ def test_a_group_name_shared_by_two_libraries_selects_both_libraries_prompts(mix
 
     assert sorted({s.pack for s in school.index.visible(core)}) == ["alpha", "beta"]
     assert sorted(p.name for p in prompts.visible(core)) == ["alpha_p", "beta_p"]
+
+
+def test_a_selector_naming_a_group_and_a_prompts_only_library_selects_both(tmp_path):
+    """`notes` is a group inside `alpha` and also a library holding only prompts.
+
+    Resources read the selector both ways; prompts treated the library name as a
+    fallback for when no group matched, so the prompts-only `notes` vanished.
+    """
+    from mcp_school.prompts import PromptProvider
+
+    d = tmp_path / "alpha" / "skills" / "notes" / "x"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: x\ndescription: x\n---\nb\n")
+    (tmp_path / "alpha" / "prompts").mkdir()
+    (tmp_path / "alpha" / "prompts" / "a.md").write_text("---\ndescription: a\n---\nhi\n")
+    (tmp_path / "notes").mkdir()
+    (tmp_path / "notes" / "n.md").write_text("---\ndescription: n\n---\nhi\n")
+    config = Config.model_validate(
+        {
+            "sources": [
+                {"name": "alpha", "url": f"file://{tmp_path / 'alpha'}"},
+                {"name": "notes", "url": f"file://{tmp_path / 'notes'}",
+                 "include": {"skills": [], "prompts": ["*.md"]}},
+            ]
+        }
+    )
+    school = School(config, tmp_path / "cache")
+
+    visible = PromptProvider(lambda: school.snapshot).visible(Scope("notes"))
+
+    assert sorted(p.name for p in visible) == ["alpha_a", "notes_n"]
