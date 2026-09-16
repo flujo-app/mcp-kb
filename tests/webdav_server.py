@@ -16,7 +16,7 @@ on the wire.
 from __future__ import annotations
 
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -29,7 +29,7 @@ PASSWORD = "s3cret-app-password"
 
 # What the fixture serves before a test edits it: one skill and one pack-level
 # file, the same shape tests/test_git_source.py's origin repository has.
-SKILL = "---\nname: x\ndescription: A skill.\n---\n\n{body}\n"
+SKILL = "---\nname: {name}\ndescription: A skill.\n---\n\n{body}\n"
 
 
 @dataclass
@@ -39,6 +39,10 @@ class Webdav:
     url: str
     root: Path
     requests: list[tuple[str, str]] = field(default_factory=list)
+    # Set by the fixture, and callable from a test: a live source has to go on
+    # serving when the server it revalidates against stops answering, and the
+    # only honest way to test that is to stop the server.
+    stop: Callable[[], None] = lambda: None
 
     def method(self, verb: str) -> list[str]:
         """The paths ``verb`` has been requested on, in order."""
@@ -52,7 +56,7 @@ class Webdav:
         return path
 
     def skill(self, name: str, body: str) -> Path:
-        return self.write(f"skills/{name}/SKILL.md", SKILL.format(body=body))
+        return self.write(f"skills/{name}/SKILL.md", SKILL.format(name=name, body=body))
 
 
 class _Recorder:
@@ -104,8 +108,19 @@ def webdav(tmp_path_factory) -> Iterator[Webdav]:
     served.url = f"webdav+http://127.0.0.1:{server.bind_addr[1]}"
     thread = threading.Thread(target=server.serve, daemon=True)
     thread.start()
+
+    stopped = False
+
+    def stop() -> None:
+        # Idempotent: a test may stop the server itself, and teardown still runs.
+        nonlocal stopped
+        if not stopped:
+            stopped = True
+            server.stop()
+            thread.join(timeout=5)
+
+    served.stop = stop
     try:
         yield served
     finally:
-        server.stop()
-        thread.join(timeout=5)
+        stop()

@@ -14,7 +14,7 @@ tree on its own.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -121,8 +121,11 @@ class PackResources:
     ``files``; this class only stores and serves what it is handed.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, revalidate: Callable[[Path], None] | None = None) -> None:
         self._roots: dict[str, list[_Root]] = {}
+        # A live source's files are revalidated as they are read, the same way
+        # uris.py does it for a skill's own files.
+        self._revalidate = revalidate
 
     def add(
         self,
@@ -180,6 +183,8 @@ class PackResources:
             target = (entry.base / rel).resolve()
             if not target.is_relative_to(entry.base) or not target.is_file():
                 continue
+            if self._revalidate is not None:
+                self._revalidate(target)
             return target.read_text(encoding="utf-8", errors="replace")
         return None
 

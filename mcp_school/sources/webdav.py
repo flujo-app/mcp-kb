@@ -96,26 +96,33 @@ def materialise_webdav(source: WebdavSource, cache: Path) -> Path:
 
 
 def fingerprint_webdav(source: WebdavSource, cache: Path, root: Path) -> dict:
-    """Every file's ETag upstream right now, and the extent of the local copy.
+    """What the folder is upstream right now, and what the local copy holds.
 
-    The ETags are the question ``School.refresh`` asks -- a different set means
-    the folder has moved and the export is behind it, and the same set means it
-    has not, however long ago the copy happened. ``exported`` and ``files``
-    make the copy's own integrity part of the answer: a tree that lost files
-    since it was written has moved as surely as the server has, and a rebuild
-    is what puts it back.
+    ``remote`` is the digest of every file's ETag and ``remote_files`` how many
+    there are -- which is the whole of what change detection needs, an edit
+    moving the digest and an add or a delete moving both. The map itself is
+    *not* here: a fingerprint is published in ``/health`` and written to
+    ``index.json``, and a folder's entire ``{path: etag}`` map has no business
+    in either. It is on disk at the export's root, which is where a live read
+    reads it from.
 
-    The map is also what a live read revalidates against, so it is kept whole
-    rather than reduced to its digest.
+    ``exported`` and ``files`` make the copy's own integrity part of the
+    answer: a tree that lost files since it was written has moved as surely as
+    the server has, and a rebuild is what puts it back. The two halves are
+    named as git's are -- ``exported``/``files`` for the tree being served,
+    ``remote`` for what the source says now -- and they are equal when the copy
+    is level with the folder.
     """
     exports = _exports(source, cache)
     exported = exports.exported(root)
     if exported is None:
         raise SourceError(f"{source.name}: nothing exported under the cache")
+    etags = _etags(source, client(source))
     return {
-        "etags": _etags(source, client(source)),
         "exported": exported[0],
         "files": exports.count(root),
+        "remote": _version(etags),
+        "remote_files": len(etags),
     }
 
 
@@ -140,7 +147,7 @@ def fetch_file(
     """
     target = _inside(source, root, rel)
     fs = fs or client(source)
-    recorded = etag if etag is not None else _recorded(root).get(rel)
+    recorded = etag if etag is not None else recorded_etags(root).get(rel)
 
     try:
         info = fs.info(rel)
@@ -223,8 +230,12 @@ def _version(etags: dict[str, str]) -> str:
     return digest.hexdigest()
 
 
-def _recorded(root: Path) -> dict[str, str]:
-    """The ETags the export was copied with, as written at its root."""
+def recorded_etags(root: Path) -> dict[str, str]:
+    """The ETags the export was copied with, as written at its root.
+
+    The one place the whole map lives, and where ``live.py`` picks it up: the
+    fingerprint carries only its digest.
+    """
     try:
         return json.loads((root / ETAGS_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):

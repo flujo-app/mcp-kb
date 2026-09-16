@@ -45,7 +45,12 @@ def register(mcp: FastMCP, school: School) -> None:
             "libraries": libraries,
             "skills": len(snapshot.index),
             "prompts": len(snapshot.prompts),
-            "sources": snapshot.status,
+            # The counters are read at report time, not at build time: a
+            # live source's reads happen long after its snapshot was made.
+            "sources": {
+                name: {**info, **snapshot.stats(name)}
+                for name, info in snapshot.status.items()
+            },
         }
 
     @mcp.custom_route("/health", methods=["GET"])

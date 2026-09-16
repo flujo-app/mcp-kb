@@ -37,9 +37,12 @@ dependencies = [
   # It is also the first release to require 3.11, which sets requires-python.
   "pygit2>=1.19",
   # webdav sources. The fsspec extra is what gives WebdavFileSystem; webdav4
-  # brings httpx<1, which coexists with FastMCP's httpx2. 0.10 is the floor
-  # where ls(detail=True) passes the ETag through, which is the whole design.
-  "webdav4[fsspec]>=0.10",
+  # brings httpx<1, which coexists with FastMCP's httpx2. 0.11 is the version
+  # the suite is actually run against -- a tested floor, not a known-minimum:
+  # nothing here can verify when ls(detail=True) started passing the ETag
+  # through, and CI resolves to the newest either way. Lower it only with a
+  # run that proves the lower one works.
+  "webdav4[fsspec]>=0.11",
 ]
 
 [project.optional-dependencies]

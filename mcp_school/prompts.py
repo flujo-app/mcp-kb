@@ -42,6 +42,7 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import PromptError
 from fastmcp.prompts import Prompt, PromptArgument
 from fastmcp.server.providers.base import Provider
+from fastmcp.utilities.versions import VersionSpec
 from pydantic import Field
 
 from .request import requested_pack
@@ -60,13 +61,34 @@ class FilePrompt(Prompt):
     ``path`` is where it was read from. It is carried on the prompt rather than
     only known to the harvester so a rebuild can record it in the index and
     re-parse exactly the files a source yielded last time.
+
+    ``live`` says the file is revalidated against its server as it is rendered,
+    so the *body* is re-read from disk instead of taken from ``template``. The
+    arguments are not re-read: they are what the harvest recorded, so declaring
+    a new one still needs a refresh.
     """
 
     path: Path
     pack: str
     source: str = ""
     template: str
+    live: bool = False
     defaults: dict[str, str] = Field(default_factory=dict)
+
+    def body(self) -> str:
+        """The template to render: off disk for a live prompt, memory otherwise.
+
+        A file that has become unreadable or lost its frontmatter falls back to
+        the body last harvested -- the same rule the rest of live mode follows,
+        that a source in trouble degrades to the copy already known good.
+        """
+        if not self.live:
+            return self.template
+        try:
+            return _split(self.path.read_text(encoding="utf-8"))[1]
+        except (OSError, ValueError) as exc:
+            log.warning("re-reading prompt %s: %s", self.path, exc)
+            return self.template
 
     async def render(self, arguments: dict[str, object] | None = None) -> str:
         # A field left blank arrives as "" from most prompt pickers, so it counts
@@ -84,7 +106,7 @@ class FilePrompt(Prompt):
         if missing:
             raise PromptError(f"Missing required arguments: {', '.join(missing)}")
         values = {**self.defaults, **given}
-        return PLACEHOLDER.sub(lambda m: values.get(m.group(1), ""), self.template)
+        return PLACEHOLDER.sub(lambda m: values.get(m.group(1), ""), self.body())
 
 
 def _split(text: str) -> tuple[dict, str]:
@@ -113,7 +135,12 @@ def _split(text: str) -> tuple[dict, str]:
 
 
 def load_prompt(
-    path: Path, pack: str, *, source: str = "", tags: Sequence[str] = ()
+    path: Path,
+    pack: str,
+    *,
+    source: str = "",
+    tags: Sequence[str] = (),
+    live: bool = False,
 ) -> FilePrompt:
     """Parse one prompt file, raising ValueError on anything malformed.
 
@@ -148,6 +175,7 @@ def load_prompt(
 
     return FilePrompt(
         path=path,
+        live=live,
         name=f"{pack}_{path.stem}",
         description=" ".join(str(meta.get("description", "")).split()) or None,
         arguments=arguments,
@@ -160,7 +188,12 @@ def load_prompt(
 
 
 def load_prompts(
-    files: Sequence[Path], *, pack: str, source: str, tags: Sequence[str] = ()
+    files: Sequence[Path],
+    *,
+    pack: str,
+    source: str,
+    tags: Sequence[str] = (),
+    live: bool = False,
 ) -> list[FilePrompt]:
     """Every prompt file ``harvest`` already found for one source, joined to ``pack``.
 
@@ -172,7 +205,7 @@ def load_prompts(
     prompts: list[FilePrompt] = []
     for path in sorted(files):
         try:
-            prompts.append(load_prompt(path, pack, source=source, tags=tags))
+            prompts.append(load_prompt(path, pack, source=source, tags=tags, live=live))
         except (OSError, ValueError, yaml.YAMLError) as exc:
             log.warning("skipping prompt %s: %s", path, exc)
     return prompts
@@ -209,6 +242,20 @@ class PromptProvider(Provider):
 
     async def _list_prompts(self) -> Sequence[Prompt]:
         return self.visible(requested_pack())
+
+    async def _get_prompt(
+        self, name: str, version: VersionSpec | None = None
+    ) -> Prompt | None:
+        """The prompt, revalidated first if it came from a live source.
+
+        ``render`` is where the body is read, and it is not this provider's to
+        call -- FastMCP renders what it is handed. So the file is brought level
+        with its server here, on the way out.
+        """
+        prompt = await super()._get_prompt(name, version)
+        if isinstance(prompt, FilePrompt):
+            self._snapshot().revalidate(prompt.path)
+        return prompt
 
 
 def register(mcp: FastMCP, snapshot: Callable[[], Snapshot]) -> None:

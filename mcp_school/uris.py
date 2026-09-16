@@ -47,7 +47,9 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
+from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from .skills import PackResources, Skill, SkillIndex
 
@@ -167,9 +169,15 @@ class Catalogue:
     that can be called without deciding about it.
     """
 
-    def __init__(self, index: SkillIndex, resources: PackResources):
+    def __init__(
+        self,
+        index: SkillIndex,
+        resources: PackResources,
+        revalidate: Callable[[Path], None] | None = None,
+    ):
         self._index = index
         self._resources = resources
+        self._revalidate = revalidate
         self._memo: dict[tuple[str, bool], list[Entry]] = {}
 
     # -- listing ------------------------------------------------------------
@@ -331,6 +339,10 @@ class Catalogue:
         target = (skill.path / file).resolve()
         if not target.is_relative_to(skill.path.resolve()) or not target.is_file():
             return None
+        # A live source's file may have moved since it was copied, and this
+        # is where that is noticed -- a read is the only thing that asks.
+        if self._revalidate is not None:
+            self._revalidate(target)
         return target.read_text(encoding="utf-8", errors="replace")
 
     def _pack_files(self, pack: str, pinned: str) -> str | None:

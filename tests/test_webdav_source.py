@@ -181,20 +181,39 @@ def test_the_password_never_lands_under_the_cache(webdav, tmp_path):
 # -- the fingerprint -----------------------------------------------------------
 
 
-def test_the_fingerprint_is_every_files_etag(webdav, tmp_path):
+def test_the_fingerprint_is_a_digest_of_every_files_etag(webdav, tmp_path):
+    """An edit moves the digest and an addition moves the count with it."""
     source = _source(webdav)
     root = materialise(source, tmp_path)
 
     before = fingerprint(source, tmp_path, root)
-    assert sorted(before["etags"]) == ["docs/guide.md", SKILL]
+    assert before["remote"] == root.name, "the copy is level with the folder"
+    assert before["remote_files"] == 2
     assert fingerprint(source, tmp_path, root) == before, "an idle folder must compare equal"
 
     webdav.skill("x", "an edit that is longer than the first")
     edited = fingerprint(source, tmp_path, root)
     assert edited != before
+    assert edited["remote_files"] == 2
 
     webdav.skill("y", "another skill")
-    assert fingerprint(source, tmp_path, root) != edited
+    assert fingerprint(source, tmp_path, root)["remote_files"] == 3
+
+
+def test_the_fingerprint_carries_the_digest_and_not_the_map(webdav, tmp_path):
+    """It is published in /health and written to index.json, so it stays small.
+
+    The map itself is the export's own file, which is where a live read reads
+    it from -- not a thing to republish once per file per source.
+    """
+    source = _source(webdav)
+    root = materialise(source, tmp_path)
+
+    stamp = json.dumps(fingerprint(source, tmp_path, root))
+
+    assert SKILL not in stamp and "docs/guide.md" not in stamp
+    assert len(stamp) < 200
+    assert json.loads((root / ETAGS_FILE).read_text()).keys() >= {SKILL}
 
 
 def test_the_fingerprint_moves_when_the_export_loses_a_file(webdav, tmp_path):
