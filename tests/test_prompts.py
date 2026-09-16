@@ -87,10 +87,47 @@ def test_a_required_argument_cannot_have_a_default(tmp_path):
         load_prompt(path, "flatsource")
 
 
+def test_a_default_empty_source_leaves_no_empty_tag(tmp_path):
+    """``source=""`` (the default) must not put an empty-string tag in the set."""
+    path = tmp_path / "hello.md"
+    path.write_text("---\ndescription: hi\n---\nHi.\n")
+    prompt = load_prompt(path, "flatsource")
+    assert "" not in prompt.tags
+    assert prompt.tags == {"flatsource", "prompt"}
+
+
 def test_a_missing_directory_is_no_prompts(tmp_path):
     """Harvest yields no files for a missing source; loading an empty list loads none."""
     files = harvest.prompt_files(tmp_path / "nope", Include())
     assert load_prompts(files, pack="flatsource", source="flatsource") == []
+
+
+# -- splitting frontmatter from the body ---------------------------------------
+
+
+def test_a_body_that_recurs_in_the_frontmatter_is_sliced_by_position(tmp_path):
+    """``str.index`` finds the body's first occurrence anywhere, including inside
+    the frontmatter block when the description happens to repeat the body text."""
+    path = tmp_path / "echo.md"
+    path.write_text("---\ndescription: body\n---\nbody\n")
+    prompt = load_prompt(path, "flatsource")
+    assert prompt.template == "body\n"
+
+
+def test_an_unterminated_frontmatter_block_is_refused(tmp_path):
+    path = tmp_path / "broken.md"
+    path.write_text("---\ndescription: d\nbody never closed\n")
+    with pytest.raises(ValueError, match="no YAML frontmatter"):
+        load_prompt(path, "flatsource")
+
+
+def test_a_body_starting_with_a_dashed_rule_still_parses(tmp_path):
+    """A real frontmatter block, followed by a body that itself starts with
+    ``---``, must not be mistaken for "no frontmatter at all"."""
+    path = tmp_path / "rule.md"
+    path.write_text("---\ndescription: d\n---\n---\nnot frontmatter, just text\n")
+    prompt = load_prompt(path, "flatsource")
+    assert prompt.template == "---\nnot frontmatter, just text\n"
 
 
 # -- over MCP ------------------------------------------------------------------

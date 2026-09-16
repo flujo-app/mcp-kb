@@ -136,6 +136,7 @@
     },
     "Library": {
       "additionalProperties": false,
+      "description": "A named grouping several sources can join, carrying its own tags.",
       "properties": {
         "name": {
           "pattern": "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$",
@@ -163,6 +164,7 @@
     }
   },
   "additionalProperties": false,
+  "description": "The whole config file: the libraries declared and the sources that join them.",
   "properties": {
     "libraries": {
       "items": {

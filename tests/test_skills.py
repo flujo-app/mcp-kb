@@ -206,6 +206,44 @@ def test_read_only_serves_the_harvested_list(tmp_path):
 
 
 @pytest.mark.unit
+def test_read_refuses_an_unregistered_file_that_exists_on_disk(tmp_path):
+    """Pins the allow-list: an existing but never-harvested file stays unreadable,
+    the same way grafana's real `.gitkeep` placeholders do."""
+    (tmp_path / ".gitkeep").write_text("")
+
+    resources = PackResources()
+    resources.add("lib", tmp_path, [], [])
+
+    assert resources.read("lib", ".gitkeep") is None
+
+
+@pytest.mark.unit
+def test_add_refuses_a_file_that_resolves_inside_a_skill_dir(tmp_path):
+    """The defence in depth ``add()``'s docstring promises: a caller that mis-scoped
+    its own file list must not silently publish a skill's own file as a pack file."""
+    skill_dir = tmp_path / "loki"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("---\nname: loki\ndescription: d\n---\n")
+
+    resources = PackResources()
+    with pytest.raises(ValueError, match="skill directory"):
+        resources.add("lib", tmp_path, ["loki/SKILL.md"], [skill_dir])
+
+
+@pytest.mark.unit
+def test_load_skills_drops_an_empty_source_tag(tmp_path):
+    """``source=""`` must not put an empty-string tag in the set."""
+    skill_dir = tmp_path / "loki"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("---\nname: loki\ndescription: d\n---\n")
+
+    skills = load_skills([skill_dir], pack="grafana", source="", root=tmp_path)
+
+    assert "" not in skills[0].tags
+    assert skills[0].tags == frozenset({"grafana", "skill"})
+
+
+@pytest.mark.unit
 def test_read_refuses_a_registered_path_whose_target_escapes_the_root(tmp_path):
     """The resolve + is_relative_to guard is defence in depth, kept even though
     ``rel`` is on the harvested list -- a symlink can still point outside."""

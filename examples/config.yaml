@@ -14,7 +14,7 @@ sources:
   url: file:///skills/penpot
   include:
     skills: ["*/SKILL.md"]
-    files: ["shared/**", "workflows/**"]
+    files: ["shared/**/*", "workflows/**/*"]
 - name: superpowers
   url: file:///skills/superpowers
   include:

@@ -1,3 +1,5 @@
+"""Turning a source's include globs into skill dirs, prompt files and pack files."""
+
 from pathlib import Path
 
 import pytest

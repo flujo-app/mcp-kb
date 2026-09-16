@@ -10,6 +10,9 @@ Everything found is resolved and checked to lie inside the root, the same
 guard ``uris.py`` applies on read, so a glob like ``../**`` finds nothing.
 Dot directories are skipped, except the three that agent tooling conventionally
 lives in.
+
+Write a files glob as ``dir/**/*``, not ``dir/**`` -- a trailing ``**`` matches
+directories only on Python versions before 3.13.
 """
 
 from __future__ import annotations

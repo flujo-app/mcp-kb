@@ -16,6 +16,7 @@ the wheel the builder had just built — reads as perfectly ordinary Dockerfile.
 """
 
 import pathlib
+import re
 import sys
 
 # tomllib is 3.11+. The package supports 3.10, so on that leg the reader is
@@ -232,6 +233,18 @@ def test_nothing_inherits_the_build_tooling():
     assert "FROM python:${PY_VERSION} AS builder" in body
     assert "FROM python:${PY_VERSION}-slim AS runner" in body
     assert "FROM builder" not in body
+
+
+def test_the_env_defaults_match_mains():
+    """The image's ``CONFIG``/``CACHE_DIR`` must be the same paths main.py falls
+    back to when the env vars are unset, or the two silently drift apart."""
+    from mcp_school.main import DEFAULT_CACHE_DIR, DEFAULT_CONFIG
+
+    runner = "\n".join(dockerfile_stages()["runner"])
+    config_match = re.search(r"\bCONFIG=(\S+?)\s*\\?$", runner, re.MULTILINE)
+    cache_match = re.search(r"\bCACHE_DIR=(\S+?)\s*\\?$", runner, re.MULTILINE)
+    assert config_match and pathlib.Path(config_match.group(1)) == DEFAULT_CONFIG
+    assert cache_match and pathlib.Path(cache_match.group(1)) == DEFAULT_CACHE_DIR
 
 
 def test_the_copied_venv_is_proved_to_work_at_build_time():

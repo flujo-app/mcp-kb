@@ -58,12 +58,21 @@ file for an editor to validate it live, and regenerate the committed schema
 with `mcp-school schema > config.schema.json` after touching `config.py` —
 `tests/test_schema.py` fails when the two drift.
 
-Then verify locally before pushing:
+Then verify locally before pushing. `pytest` no longer reads `CONFIG`, and
+`examples/config.yaml` points at the image's `/skills` and `/prompts` paths, so
+fetch the skills and rewrite those roots to somewhere local first:
 
 ```bash
-CONFIG=examples/config.yaml python -m pytest -q
-CONFIG=examples/config.yaml mcp-school --transport stdio
+python scripts/fetch_skills.py --out /tmp/skills
+mkdir -p /tmp/prompts && cp -r prompts/grafana /tmp/prompts/
+sed 's#file:///skills#file:///tmp/skills#; s#file:///prompts#file:///tmp/prompts#' \
+  examples/config.yaml > /tmp/config.yaml
+python3 -m pytest -q
+mcp-school --config /tmp/config.yaml --transport http --port 18000
 ```
+
+Then, from another shell, `curl -s localhost:18000/health` to confirm every
+source is `ok`.
 
 Nesting depth does **not** matter. `harvest.skill_dirs` walks for `SKILL.md`
 through the `include` globs, so a flat source (`<pack>/<skill>/SKILL.md`,

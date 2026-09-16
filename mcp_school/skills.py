@@ -23,8 +23,6 @@ import yaml
 
 from . import harvest
 
-MAIN_FILE = "SKILL.md"
-
 
 @dataclass(frozen=True)
 class Skill:
@@ -43,7 +41,7 @@ class Skill:
         return f"{self.pack}/{self.name}"
 
     def in_pack(self, selector: str) -> bool:
-        """Match a selector against either the source or the group."""
+        """Match a selector against either the pack or the group."""
         return selector in (self.pack, self.group)
 
 
@@ -74,10 +72,10 @@ def load_skills(
     library's tags plus the source's, concatenated by the caller; every skill
     additionally carries its pack, its source and the literal ``"skill"``.
     """
-    base_tags = frozenset({pack, source, "skill", *tags})
+    base_tags = frozenset(t for t in (pack, source, "skill", *tags) if t)
     skills: list[Skill] = []
     for skill_dir in sorted(dirs):
-        meta = _frontmatter(skill_dir / MAIN_FILE)
+        meta = _frontmatter(skill_dir / harvest.MAIN_FILE)
         skills.append(
             Skill(
                 name=str(meta.get("name") or skill_dir.name),
@@ -133,16 +131,29 @@ class PackResources:
         files: Sequence[str],
         skill_dirs: Sequence[Path],
     ) -> None:
-        # skill_dirs is accepted for interface stability with harvest's output
-        # (and in case a future check needs it again) but is not stored: read()
-        # no longer excludes by directory, since harvest already excluded these
-        # files from ``files`` before handing them here.
-        del skill_dirs
-        entry = _Root(base=root.resolve(), files=tuple(files))
+        """Register one source's contribution to ``pack``.
+
+        ``skill_dirs`` is the defence in depth the class docstring describes:
+        harvest.py already excludes a skill's own files from ``files`` before
+        this is called, but a registered path that still resolves inside one of
+        ``skill_dirs`` is refused rather than silently served.
+        """
+        base = root.resolve()
+        dirs = [d.resolve() for d in skill_dirs]
+        for rel in files:
+            target = (base / rel).resolve()
+            if any(target == d or d in target.parents for d in dirs):
+                raise ValueError(f"{rel!r} lies inside a skill directory")
+        entry = _Root(base=base, files=tuple(files))
         self._roots.setdefault(pack, []).append(entry)
 
     def files(self, pack: str) -> list[str]:
-        """Every pack-level file, as paths relative to whichever root holds it."""
+        """Every pack-level file, as paths relative to whichever root holds it.
+
+        A path registered by two sources of the same library is listed twice --
+        known, and not reachable from the shipped config, where no library is
+        fed by two sources sharing a file.
+        """
         found: list[str] = []
         for entry in self._roots.get(pack, ()):
             found.extend(entry.files)

@@ -84,12 +84,16 @@ class Include(Strict):
 
 
 class Library(Strict):
+    """A named grouping several sources can join, carrying its own tags."""
+
     name: str = Field(pattern=NAME)
     description: str = ""
     tags: list[str] = Field(default_factory=list)
 
 
 class SourceBase(Strict):
+    """Fields every source scheme shares: its name, the library it joins, its tags."""
+
     name: str = Field(pattern=NAME)
     url: str
     library: str | None = Field(default=None, pattern=NAME)
@@ -130,6 +134,8 @@ Source = FileSource
 
 
 class Config(Strict):
+    """The whole config file: the libraries declared and the sources that join them."""
+
     libraries: list[Library] = Field(default_factory=list)
     sources: list[Source] = Field(default_factory=list)
 

@@ -99,8 +99,8 @@ arguments:
 Investigate the logs of **{{ app }}** over the last {{ since }}.
 ```
 
-Double braces, because prompt bodies are full of LogQL and JSON. `X-Skill-Pack` and
-`SKILL_PACKS` scope prompts exactly as they scope skills.
+Double braces, because prompt bodies are full of LogQL and JSON. `X-Skill-Pack`
+scopes prompts exactly as it scopes skills.
 
 ## Skills as dependencies
 

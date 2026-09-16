@@ -83,17 +83,24 @@ def _split(text: str) -> tuple[dict, str]:
 
     ``frontmatter.loads`` returns empty metadata both for "no block" and for an
     "empty block" (``---\\n---\\nbody``) -- the latter is valid, so absence is
-    told apart by the text not starting with ``---`` at all. ``.content`` is
-    ``rstrip``-ped by the library, which would silently drop a template's
-    trailing newline; the body is re-sliced from the original text instead so a
-    LogQL line like ``|= "error"\\n`` renders exactly as written.
+    told apart by comparing the stripped content back against the stripped
+    whole text: only "no block at all" (including an unterminated one, which
+    the library also parses as empty metadata over the whole text) leaves them
+    equal. ``.content`` is ``rstrip``-ped by the library, which would silently
+    drop a template's trailing newline; the body is re-sliced from the original
+    text by length instead of by ``str.index``, which would find the first
+    occurrence of the content anywhere -- including inside the frontmatter
+    block itself, when the body text happens to recur there -- so a LogQL line
+    like ``|= "error"\\n`` renders exactly as written.
     """
     post = frontmatter.loads(text)
-    if post.metadata == {} and not text.startswith("---"):
+    if post.metadata == {} and post.content.strip() == text.strip():
         raise ValueError("no YAML frontmatter")
     meta = post.metadata if isinstance(post.metadata, dict) else {}
-    body = text[text.index(post.content) :] if post.content else ""
-    return meta, body
+    if not post.content:
+        return meta, ""
+    start = len(text.rstrip()) - len(post.content)
+    return meta, text[start:]
 
 
 def load_prompt(
@@ -134,7 +141,7 @@ def load_prompt(
         name=f"{pack}_{path.stem}",
         description=" ".join(str(meta.get("description", "")).split()) or None,
         arguments=arguments,
-        tags={pack, source, "prompt", *tags},
+        tags={t for t in (pack, source, "prompt", *tags) if t},
         pack=pack,
         source=source,
         template=body,

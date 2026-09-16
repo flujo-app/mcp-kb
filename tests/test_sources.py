@@ -1,3 +1,5 @@
+"""Materialising a config source into a local directory, and its failure mode."""
+
 import pytest
 
 from mcp_school.config import Config, FileSource

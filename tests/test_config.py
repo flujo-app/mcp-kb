@@ -1,3 +1,5 @@
+"""The config file schema: sources, libraries, includes, and what gets refused."""
+
 from pathlib import Path
 
 import pytest

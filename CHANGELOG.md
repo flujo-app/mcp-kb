@@ -22,6 +22,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `mcp-school schema` prints the config JSON Schema.
+- `mcp_school.config`: a validated config file of sources and libraries (`Config`, `FileSource`, `{env:}` secrets), published as `config.schema.json` and printable via `mcp-school schema`.
+- `mcp_school.harvest` and `mcp_school.sources`: convention-based globs turn a `file://` source directory into skill dirs, prompt files and pack-level files, with a traversal guard so a glob like `../**` finds nothing.
+- MCP prompts, served from `prompts/<pack>/<name>.md` with declared arguments and scoped by `X-Skill-Pack` like skills — starting with `grafana_debug-logs`, which walks the Grafana MCP server through debugging a workload's Loki logs.
+- `superpowers` skill pack from `obra/superpowers` (14 skills) — brainstorming, TDD, systematic debugging, writing plans and the rest of the workflow discipline set.
+- `?skills=full` (or `X-Skill-Listing: full`) enumerates every skill in the listing, for clients that sync skills to disk and can only find them by scanning for `/SKILL.md`.
+- `X-Skill-Pack` request header pins a client to one pack — a ceiling the model cannot widen past, so one deployment can serve several single-pack agents.
+- An `extras` key in `skills.toml`, serving files a pack ships outside its skills at `skill://<pack>/<path>` — penpot references `shared/*` from 190 places and those links were dead.
+- PRs are gated on the Test and PR Tasks checks; the image no longer builds on a pull request, only on merge to main.
+- An unknown `pack` no longer names the other packs in its error message, which leaked them to a pinned client.
+- Split the single `server.py` into `skills.py` (catalogue), `tools.py`, `routes.py`, `server.py` (wiring) and `main.py` (entry), separating MCP wiring from tool implementations.
+- `penpot` skill pack from `penpot/penpot-ai-kit` (12 skills, 108 supporting files) — pairs with the Penpot agent.
+- `AGENTS.md` covering how to add a skill pack, the `kubectl build`/`up` kustomize flow, and how to ship with the publish/deploy workflows.
+
+- MCP server serving Agent Skills, with progressive disclosure in the address space — so a client sees a dozen index rows no matter how many skills are installed.
+- Indexes addressable by source (`skill://n8n`) or group (`skill://grafana-lgtm`), plus `SKILL_PACKS` to hard-scope an instance to a subset the model cannot widen.
+- Skills published as `skill://` resources, mirrored as tools for clients that do not speak the resource half of MCP.
+- Skill sources declared as pinned dependencies in `skills.toml` and fetched at image build time, never vendored — currently 64 skills from n8n-io/skills and grafana/skills.
+- Skill discovery that walks for `SKILL.md`, so a source may nest its skills at any depth; the directory containing one becomes its selectable group.
+- `GET /health` reporting status and discovered root count, wired to the Kubernetes readiness and liveness probes.
+- Weekly **Update Skills** workflow that repins every source to upstream HEAD and opens a PR.
+- Kubernetes manifests deploying to the `flow` namespace as `skills-mcp:8000`, unauthenticated and read-only.
+- Node affinity keeping the pod off the control-plane nodes, which carry no taint in this cluster and would otherwise be scheduled onto.
 
 ### Changed
 - **BREAKING:** the catalogue is a config file of sources (`CONFIG`, default `/etc/mcp-school/config.yaml`, schema in `config.schema.json`); `SKILLS_DIR`, `PROMPTS_DIR` and `SKILL_PACKS` are gone. Sources join libraries, every resource and prompt carries tags, and `/health` reports each source.
@@ -42,27 +64,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Skill names no longer collide across packs: URIs are pack-qualified, where `SkillsDirectoryProvider` keyed on the folder name and silently dropped the loser entirely.
 - `resources/list` is ~1.9 KB instead of 77 KB — it lists a dozen indexes rather than every skill and manifest, which is the expense this server already rejected `ResourcesAsTools` for.
 - Pack-level dotfiles no longer earn a pack an index row pointing at nothing readable; grafana's only such files are two `.gitkeep` placeholders.
-
-### Added
-- `mcp_school.config`: a validated config file of sources and libraries (`Config`, `FileSource`, `{env:}` secrets), published as `config.schema.json` and printable via `mcp-school schema` — not yet wired into the server.
-- `mcp_school.harvest` and `mcp_school.sources`: convention-based globs turn a `file://` source directory into skill dirs, prompt files and pack-level files, with a traversal guard so a glob like `../**` finds nothing — not yet wired into the server.
-- MCP prompts, served from `prompts/<pack>/<name>.md` with declared arguments and scoped by `SKILL_PACKS` and `X-Skill-Pack` like skills — starting with `grafana_debug-logs`, which walks the Grafana MCP server through debugging a workload's Loki logs.
-- `superpowers` skill pack from `obra/superpowers` (14 skills) — brainstorming, TDD, systematic debugging, writing plans and the rest of the workflow discipline set.
-- `?skills=full` (or `X-Skill-Listing: full`) enumerates every skill in the listing, for clients that sync skills to disk and can only find them by scanning for `/SKILL.md`.
-- `X-Skill-Pack` request header pins a client to one pack — a ceiling the model cannot widen past, so one deployment can serve several single-pack agents.
-- An `extras` key in `skills.toml`, serving files a pack ships outside its skills at `skill://<pack>/<path>` — penpot references `shared/*` from 190 places and those links were dead.
-- PRs are gated on the Test and PR Tasks checks; the image no longer builds on a pull request, only on merge to main.
-- An unknown `pack` no longer names the other packs in its error message, which leaked them to a pinned client.
-- Split the single `server.py` into `skills.py` (catalogue), `tools.py`, `routes.py`, `server.py` (wiring) and `main.py` (entry), separating MCP wiring from tool implementations.
-- `penpot` skill pack from `penpot/penpot-ai-kit` (12 skills, 108 supporting files) — pairs with the Penpot agent.
-- `AGENTS.md` covering how to add a skill pack, the `kubectl build`/`up` kustomize flow, and how to ship with the publish/deploy workflows.
-
-- MCP server serving Agent Skills, with progressive disclosure in the address space — so a client sees a dozen index rows no matter how many skills are installed.
-- Indexes addressable by source (`skill://n8n`) or group (`skill://grafana-lgtm`), plus `SKILL_PACKS` to hard-scope an instance to a subset the model cannot widen.
-- Skills published as `skill://` resources, mirrored as tools for clients that do not speak the resource half of MCP.
-- Skill sources declared as pinned dependencies in `skills.toml` and fetched at image build time, never vendored — currently 64 skills from n8n-io/skills and grafana/skills.
-- Skill discovery that walks for `SKILL.md`, so a source may nest its skills at any depth; the directory containing one becomes its selectable group.
-- `GET /health` reporting status and discovered root count, wired to the Kubernetes readiness and liveness probes.
-- Weekly **Update Skills** workflow that repins every source to upstream HEAD and opens a PR.
-- Kubernetes manifests deploying to the `flow` namespace as `skills-mcp:8000`, unauthenticated and read-only.
-- Node affinity keeping the pod off the control-plane nodes, which carry no taint in this cluster and would otherwise be scheduled onto.
