@@ -1,7 +1,9 @@
-# The image is a wrapper around the wheel, plus the skill packs baked in at the
-# refs skills.toml pins. Nothing is fetched at runtime.
+# The image is the wheel plus an example config — nothing is fetched at build
+# time. A source is read at container START, into the cache volume; see
+# examples/config.yaml for the `github://` sources the example points at, and
+# README.md for the scheme reference.
 #
-# Three stages, and the thing that passes between the last two is a VIRTUALENV.
+# Two stages, and the thing that passes between them is a VIRTUALENV.
 #
 # A venv inside a container looks like ceremony — the container is already an
 # isolated box with one Python and one project in it. It is not here for
@@ -26,22 +28,6 @@
 # one ACTIONS_RUNTIME_TOKEN — and that is fixed in the action, so this repo gets
 # the cache it had been configuring all along.
 ARG PY_VERSION=3.14
-
-# ---- skills: the packs, fetched at their pinned refs.
-#      Isolated so it only re-runs when skills.toml or the fetch script changes,
-#      not on every source edit. `git` here clones the sources; it never reaches
-#      the runner.
-FROM python:${PY_VERSION}-slim AS skills
-
-WORKDIR /fetch
-
-RUN apt-get update && apt-get install -y --no-install-recommends git \
-  && rm -rf /var/lib/apt/lists/*
-
-COPY skills.toml ./
-COPY scripts/fetch_skills.py ./
-
-RUN python fetch_skills.py --out /skills
 
 # ---- builder: the FAT image, because nothing in it ships.
 #      python:${PY_VERSION} already carries git — which setuptools_scm needs to
@@ -92,18 +78,15 @@ pip install --no-cache-dir .
 pip uninstall --yes pip
 SHELL
 
-# ---- runner: slim, and it receives three directories.
+# ---- runner: slim, and it receives one directory plus an example config.
 #      No git, no toolchain, no source, and no second dependency install.
 FROM python:${PY_VERSION}-slim AS runner
 
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 
-COPY --from=skills /skills /skills
-# Prompts live in this repo rather than upstream, so they come from the context.
-COPY prompts /prompts
-# The catalogue the image serves: which sources join which library, and the
-# include globs over the two directories above. See examples/config.yaml.
+# A worked example, not the deployed catalogue: `github://` sources that
+# reproduce what this image used to bake. A real deployment mounts its own.
 COPY examples/config.yaml /etc/mcp-school/config.yaml
 
 # The venv is copied to the SAME path it was created at, which is the one rule.
@@ -120,6 +103,12 @@ COPY examples/config.yaml /etc/mcp-school/config.yaml
 # which is what would break if a wheel needed a shared library only the fat
 # image has.
 RUN python -c "from mcp_school.server import School"
+
+# Where a source is fetched into at start — a git clone's export, a mirrored
+# file:// tree, whatever the config names. Owned by the runtime user so a
+# source can write its own cache without the container running as root.
+RUN mkdir -p /var/cache/mcp-school && chown 65534:65534 /var/cache/mcp-school
+VOLUME /var/cache/mcp-school
 
 ENV CONFIG=/etc/mcp-school/config.yaml \
     CACHE_DIR=/var/cache/mcp-school \

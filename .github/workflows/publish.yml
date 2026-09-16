@@ -6,8 +6,7 @@ name: 🧬 Publish Version
 #
 #   test    → the full 3.10 → 3.14 matrix. A release is the one moment the
 #             compatibility sweep has to be green, so it gates everything below.
-#   version → pin kustomization.yaml to the version we're about to cut, roll
-#             CHANGELOG [Unreleased], commit + tag on main
+#   version → roll CHANGELOG [Unreleased], commit + tag on main
 #   image   → check out that tag and build+push kubed/mcp-school:<tag>
 #   package → check out that tag and build the sdist + wheel → GHA artifact
 #   release → download the package artifact and cut the GitHub Release
@@ -17,14 +16,9 @@ name: 🧬 Publish Version
 # distribution is built BEFORE the Release exists, so the Release never links to
 # a tarball or an image tag that was never produced.
 #
-# The deploy pin happens in `version`, before the tag is created, so the tag's
-# tree already points at its own image — check out vX.Y.Z and the manifest says
-# vX.Y.Z. That means computing the version first (a version-bump dry run) and
-# pinning with it.
-#
-# This is the ONLY workflow that writes the deployed tag, and it only ever writes
-# a semver — so main always sits on a stable, deployable version. image.yml just
-# builds images. To run something unreleased, point newTag at :main or :latest.
+# There is nothing left in this repo for `version` to pin — deployment is the
+# installer's manifests, not this repo's. `image.yml` just builds and tags
+# images at whatever ref it is given.
 #
 # Run once with push=false (dry run: runs the tests, computes the next version,
 # and builds both the image and the package without pushing anything) then
@@ -55,9 +49,8 @@ on:
         type: boolean
 
 permissions:
-  # contents: write because the version job pins the deploy tag — bump-image
-  # commits kustomization.yaml back to main. This is the ONLY place the deployed
-  # tag is written, and it's always a semver.
+  # contents: write because the version job rolls CHANGELOG.md and pushes the
+  # release tag to main.
   contents: write
   id-token: write   # GCP workload-identity federation
 
@@ -119,7 +112,7 @@ jobs:
         token: ${{ steps.app-token.outputs.token }}
 
     # Compute the next version WITHOUT changing anything, so we have it in hand
-    # before pinning the manifest to it.
+    # before the real bump below.
     - name: Compute next version
       id: next
       uses: duplocloud/version-bump@main
@@ -127,16 +120,6 @@ jobs:
         version: ${{ inputs.action }}
         push: false
         token: ${{ steps.app-token.outputs.token }}
-
-    # Point the kustomization at the version we're about to cut, so the tag's
-    # tree already references its own image. bump-image commits + pushes this to
-    # main itself, immediately before the tag commit below.
-    - name: Pin deploy tag to the new version
-      if: inputs.push
-      uses: kubed-io/actions/bump-image@main
-      with:
-        file: kustomization.yaml
-        tag: ${{ steps.next.outputs.tag }}
 
     - name: Bump Version
       id: bump

@@ -1,65 +1,82 @@
-"""examples/config.yaml, the shape the image actually ships, against a synthetic
-tree standing in for the real fetched skills and prompts.
+"""examples/config.yaml, the shape the image actually ships, against local git
+repositories standing in for the four upstream packs.
 
-Pins the four-pack, five-source shape (`grafana-prompts` joins the `grafana`
-library) and guards the ``shared/**/*``/``workflows/**/*`` fix for the
-trailing-``**``-is-directories-only glob bug that would otherwise only be
-caught by hand against the real 29-file penpot pack.
+Pins the four-source shape and guards the ``shared/**/*``/``workflows/**/*``
+fix for the trailing-``**``-is-directories-only glob bug that would otherwise
+only be caught by hand against the real 29-file penpot pack. Local rather than
+against github.com: the ``ref`` in the shipped config is a real upstream pin,
+which a unit test must not depend on staying reachable or unchanged.
 """
 
 from pathlib import Path
 
-from mcp_school.config import load_config
+import pygit2
+import yaml
+
+from mcp_school.config import Config
 from mcp_school.server import School
 
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE_CONFIG = ROOT / "examples" / "config.yaml"
-REAL_PROMPT = ROOT / "prompts" / "grafana" / "debug-logs.md"
+
+SIGNATURE = pygit2.Signature("Test", "test@example.com", 1700000000, 0)
 
 
-def _skill(path: Path) -> None:
+def _skill(root: Path, *parts: str) -> None:
+    path = root.joinpath(*parts, "SKILL.md")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"---\nname: {path.parent.name}\ndescription: d\n---\nBody.\n")
 
 
-def _tree(tmp_path: Path) -> Path:
-    """/skills/{n8n,grafana,penpot,superpowers} and /prompts/grafana, one tree."""
-    skills = tmp_path / "skills"
-    _skill(skills / "n8n" / "s" / "SKILL.md")
-    _skill(skills / "grafana" / "g" / "s" / "SKILL.md")
-    _skill(skills / "penpot" / "s" / "SKILL.md")
-    _skill(skills / "superpowers" / "s" / "SKILL.md")
-
-    (skills / "penpot" / "shared").mkdir(parents=True, exist_ok=True)
-    (skills / "penpot" / "shared" / "x.md").write_text("shared\n")
-    (skills / "penpot" / "workflows").mkdir(parents=True, exist_ok=True)
-    (skills / "penpot" / "workflows" / "y.md").write_text("workflow\n")
-
-    prompts = tmp_path / "prompts" / "grafana"
-    prompts.mkdir(parents=True)
-    (prompts / "debug-logs.md").write_text(REAL_PROMPT.read_text())
-
-    return tmp_path
+def _penpot(root: Path) -> None:
+    """The one pack that also references shared material outside its skills."""
+    _skill(root, "skills", "s")
+    (root / "shared").mkdir()
+    (root / "shared" / "x.md").write_text("shared\n")
+    (root / "workflows").mkdir()
+    (root / "workflows" / "y.md").write_text("workflow\n")
 
 
-def _rewritten_config(tmp_path: Path) -> Path:
-    """The shipped config, with its image-only roots pointed at ``tmp_path``."""
-    text = EXAMPLE_CONFIG.read_text()
-    text = text.replace("file:///skills", f"file://{tmp_path / 'skills'}")
-    text = text.replace("file:///prompts", f"file://{tmp_path / 'prompts'}")
-    out = tmp_path / "config.yaml"
-    out.write_text(text)
-    return out
+BUILDERS = {
+    "n8n": lambda root: _skill(root, "skills", "s"),
+    "grafana": lambda root: _skill(root, "skills", "g", "s"),
+    "penpot": _penpot,
+    "superpowers": lambda root: _skill(root, "skills", "s"),
+}
+
+
+def _repo(tmp_path: Path, name: str) -> str:
+    """A one-commit repository laid out like the real pack, as a ``git+file://`` URL."""
+    root = tmp_path / name
+    repo = pygit2.init_repository(str(root), bare=False, initial_head="main")
+    BUILDERS[name](root)
+    repo.index.add_all()
+    repo.index.write()
+    repo.create_commit(
+        "refs/heads/main", SIGNATURE, SIGNATURE, "seed", repo.index.write_tree(), []
+    )
+    return f"git+file://{root}"
+
+
+def _rewritten_config(tmp_path: Path) -> Config:
+    """The shipped config, with its ``github://`` sources pointed at local repos.
+
+    ``ref`` is dropped: the local repo has no such commit, and its ``main`` tip
+    stands in for whatever the real pin resolves to upstream.
+    """
+    raw = yaml.safe_load(EXAMPLE_CONFIG.read_text())
+    for source in raw["sources"]:
+        source["url"] = _repo(tmp_path, source["name"])
+        source.pop("ref", None)
+    return Config.model_validate(raw)
 
 
 def test_the_shipped_config_loads_the_shipped_shape(tmp_path):
-    _tree(tmp_path)
-    config = load_config(_rewritten_config(tmp_path))
+    config = _rewritten_config(tmp_path)
     school = School(config, tmp_path / "cache")
 
     assert all(s["status"] == "ok" for s in school.status.values()), school.status
     assert len(school.resources.files("penpot")) == 2
-    assert [p.name for p in school.prompts] == ["grafana_debug-logs"]
 
     libraries = sorted({s["library"] for s in school.status.values()})
     assert libraries == ["grafana", "n8n", "penpot", "superpowers"]

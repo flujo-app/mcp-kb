@@ -40,18 +40,13 @@ rules:
     ignore:
     - publish.yml
 
-  # Two checkouts here MUST keep their credentials, because both push through
-  # the remote that checkout configured:
-  #
-  #   publish.yml       duplocloud/version-bump commits the rolled changelog and
-  #                     pushes the tag — the only thing the job exists for.
-  #   update-skills.yml peter-evans/create-pull-request pushes the repin branch.
-  #
-  # Neither uploads an artifact, so the credential has nowhere to leak to.
+  # The checkout in publish.yml MUST keep its credentials: duplocloud/version-bump
+  # commits the rolled changelog and pushes the tag through the remote checkout
+  # configured — the only thing the job exists for. It uploads no artifact, so
+  # the credential has nowhere to leak to.
   artipacked:
     ignore:
     - publish.yml
-    - update-skills.yml
 
   # `gh release create` in a script step would work, but softprops/action-gh-release
   # is the house standard across every kubed-io repo's publish.yml, and a release

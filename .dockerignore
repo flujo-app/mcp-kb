@@ -11,10 +11,4 @@ dist/
 .ruff_cache/
 .mypy_cache/
 .github/
-deploy/
-kustomization.yaml
 *.log
-
-# Fetched inside the image by scripts/fetch_skills.py — a local copy in the
-# build context would be stale and would bust the cache on every dev fetch.
-/skills/

@@ -4,10 +4,10 @@ Two questions asked from opposite ends, and they drift apart quietly.
 
 *What rebuilds the image* is `image.yml`'s `paths:` filter; *what is in the
 image* is the Dockerfile's COPY lines and the wheel. A file that the Dockerfile
-copies but the filter does not watch changes the image and builds nothing — the
-deployed tag then silently keeps the old one. `scripts/requirements.py` is
-exactly that shape: it is not in the wheel, but it decides which dependencies
-the venv gets.
+copies but the filter does not watch changes the image and builds nothing —
+`:latest` then silently keeps serving the old build. `scripts/requirements.py`
+is exactly that shape: it is not in the wheel, but it decides which
+dependencies the venv gets.
 
 The rest pins the build's *shape*, because the venv hand-off is an optimisation
 and an optimisation with no test is a thing someone helpfully undoes. The
@@ -145,13 +145,13 @@ def test_the_packaged_source_rebuilds_the_image():
 def test_everything_the_dockerfile_copies_rebuilds_the_image():
     """The drift this file exists for.
 
-    None of `scripts/`, `prompts/` or `skills.toml` is in the wheel, so nothing
-    about the package points at them — but the Dockerfile COPYs each, and each
-    decides what the image contains. Watching some and not others is how a
-    change to the rest builds nothing at all.
+    Neither `scripts/requirements.py` nor `examples/config.yaml` is in the
+    wheel, so nothing about the package points at them — but the Dockerfile
+    COPYs each, and each decides what the image contains. Watching some and
+    not others is how a change to the rest builds nothing at all.
     """
     copied = copied_paths()
-    assert {"prompts", "scripts/requirements.py"} <= copied, (
+    assert {"examples/config.yaml", "scripts/requirements.py"} <= copied, (
         "the Dockerfile no longer copies what this test expects — revisit it"
     )
     for filters in image_trigger_paths():
@@ -195,11 +195,21 @@ def test_the_runner_receives_a_venv_and_installs_nothing():
     assert "COPY . ." not in runner, "the source has no business in the runner"
 
 
-def test_the_runner_still_gets_the_skills_and_prompts():
-    """The image is the wheel AND the content; a venv-only runner serves nothing."""
+def test_nothing_is_copied_from_a_skills_stage():
+    """The image bakes nothing: there is no `skills` stage left to copy from."""
+    body = DOCKERFILE.read_text()
+    assert "COPY --from=skills" not in body
+    assert "AS skills" not in body
+
+
+def test_the_cache_directory_exists_for_the_runtime_user():
+    """A source is fetched into this directory at start, as uid 65534 — the same
+    uid `USER` switches to — so it has to be owned before that switch happens."""
     runner = dockerfile_stages()["runner"]
-    assert "COPY --from=skills /skills /skills" in runner
-    assert "COPY prompts /prompts" in runner
+    assert any(
+        "mkdir -p /var/cache/mcp-school" in ln and "chown 65534:65534" in ln
+        for ln in runner
+    )
 
 
 def test_pip_is_removed_before_the_venv_is_copied():
@@ -212,18 +222,13 @@ def test_pip_is_removed_before_the_venv_is_copied():
     assert any(ln.startswith("pip uninstall") and "pip" in ln for ln in builder)
 
 
-def test_apt_get_is_confined_to_the_stage_that_clones():
-    """Only `skills` needs apt: it is -slim and has to put git back to clone.
-
-    `builder` needs git too, for setuptools_scm, and gets it from
-    python:${PY_VERSION} — which is the entire reason that stage is not -slim.
-    An apt-get appearing in `builder` or `runner` means someone has changed a
-    base image out from under that reasoning.
-    """
-    stages = dockerfile_stages()
-    for name, lines in stages.items():
-        has_apt = any("apt-get" in ln for ln in lines)
-        assert has_apt == (name == "skills"), f"unexpected apt-get state in {name}"
+def test_no_stage_reaches_for_apt():
+    """Nothing here clones or compiles: pygit2 ships prebuilt wheels, and
+    `builder` needs git only for setuptools_scm, which python:${PY_VERSION}
+    already carries. An apt-get appearing anywhere means a dependency stopped
+    shipping a wheel for some target architecture."""
+    for lines in dockerfile_stages().values():
+        assert not any("apt-get" in ln for ln in lines)
 
 
 def test_nothing_inherits_the_build_tooling():
