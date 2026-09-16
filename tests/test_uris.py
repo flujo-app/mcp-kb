@@ -9,6 +9,7 @@ import json
 
 import pytest
 
+from mcp_school.scope import Scope
 from mcp_school.skills import PackResources, SkillIndex, load_skills
 from mcp_school.uris import Catalogue, parse, uri_for
 from tests.conftest import build_pack_resources, load_all_skills
@@ -89,13 +90,13 @@ def test_a_pack_with_shared_material_advertises_it(catalogue):
 
 @pytest.mark.unit
 def test_entries_honour_the_pin(catalogue):
-    uris = [e.uri for e in catalogue.entries("flatsource")]
+    uris = [e.uri for e in catalogue.entries(Scope("flatsource"))]
     assert uris == ["skill://flatsource"]
 
 
 @pytest.mark.unit
 def test_a_group_pin_still_names_its_group(catalogue):
-    uris = [e.uri for e in catalogue.entries("plugin-a")]
+    uris = [e.uri for e in catalogue.entries(Scope("plugin-a"))]
     assert "skill://plugin-a" in uris
     assert "skill://plugin-b" not in uris
 
@@ -226,31 +227,31 @@ def test_a_skill_file_is_not_reachable_as_a_pack_file(catalogue):
 def test_the_pin_hides_another_pack_entirely(catalogue):
     """Out of scope is indistinguishable from absent, on purpose."""
     assert catalogue.read("skill://deepsource/gamma") is not None
-    assert catalogue.read("skill://deepsource/gamma", pinned="flatsource") is None
-    assert catalogue.read("skill://deepsource", pinned="flatsource") is None
+    assert catalogue.read("skill://deepsource/gamma", scope=Scope("flatsource")) is None
+    assert catalogue.read("skill://deepsource", scope=Scope("flatsource")) is None
 
 
 @pytest.mark.unit
 def test_a_group_pin_cannot_read_a_sibling_group(catalogue):
     """Pinning to one group must not widen to the whole pack."""
-    assert catalogue.read("skill://deepsource/gamma", pinned="plugin-a") is not None
-    assert catalogue.read("skill://deepsource/delta", pinned="plugin-a") is None
+    assert catalogue.read("skill://deepsource/gamma", scope=Scope("plugin-a")) is not None
+    assert catalogue.read("skill://deepsource/delta", scope=Scope("plugin-a")) is None
 
 
 @pytest.mark.unit
 def test_a_group_pin_still_reaches_its_packs_shared_material(catalogue):
     """Shared files belong to the pack, and are what its skills cite."""
-    body = catalogue.read("skill://deepsource/shared/guide.md", pinned="plugin-a")
+    body = catalogue.read("skill://deepsource/shared/guide.md", scope=Scope("plugin-a"))
     assert body == "shared guidance\n"
 
 
 @pytest.mark.unit
 def test_the_pin_blocks_shared_material_of_another_pack(catalogue):
     assert (
-        catalogue.read("skill://deepsource/shared/guide.md", pinned="flatsource")
+        catalogue.read("skill://deepsource/shared/guide.md", scope=Scope("flatsource"))
         is None
     )
-    assert catalogue.read("skill://deepsource/_files", pinned="flatsource") is None
+    assert catalogue.read("skill://deepsource/_files", scope=Scope("flatsource")) is None
 
 
 @pytest.mark.unit

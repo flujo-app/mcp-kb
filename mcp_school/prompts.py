@@ -45,7 +45,9 @@ from fastmcp.server.providers.base import Provider
 from fastmcp.utilities.versions import VersionSpec
 from pydantic import Field
 
-from .request import requested_pack
+from .request import requested_scope
+from .scope import EVERYTHING, Scope
+from .skills import SkillIndex
 
 if TYPE_CHECKING:
     from .snapshot import Snapshot
@@ -230,18 +232,21 @@ class PromptProvider(Provider):
         super().__init__()
         self._snapshot = snapshot
 
-    def visible(self, pinned: str = "") -> list[FilePrompt]:
+    def visible(self, scope: Scope = EVERYTHING) -> list[FilePrompt]:
         snapshot = self._snapshot()
         prompts = list(snapshot.prompts)
-        if not pinned:
+        if not scope:
             return prompts
-        # A prompt belongs to a pack, not a group, so a group pin sees its pack's
-        # prompts -- the same rule pack-level files follow.
-        packs = {s.pack for s in snapshot.index.visible(pinned)}
-        return [p for p in prompts if p.pack in packs]
+        library = _library_of(scope.library, snapshot.index)
+        tags = Scope(tags=scope.tags)
+        return [
+            p
+            for p in prompts
+            if (not library or p.pack == library) and tags.admits(p.pack, p.tags)
+        ]
 
     async def _list_prompts(self) -> Sequence[Prompt]:
-        return self.visible(requested_pack())
+        return self.visible(requested_scope())
 
     async def _get_prompt(
         self, name: str, version: VersionSpec | None = None
@@ -261,3 +266,18 @@ class PromptProvider(Provider):
 def register(mcp: FastMCP, snapshot: Callable[[], Snapshot]) -> None:
     """Publish the prompts, read through ``snapshot`` on every listing."""
     mcp.add_provider(PromptProvider(snapshot))
+
+
+def _library_of(selector: str, index: SkillIndex) -> str:
+    """The library a scope's ``library`` names, for matching prompts.
+
+    A prompt belongs to a library, not a group, so a group name resolves to the
+    library holding that group -- the rule pack-level files follow. A name no
+    skill carries is taken as the library itself, or a library of prompts and
+    no skills would show nothing when asked for by name.
+    """
+    if not selector:
+        return ""
+    for skill in index.visible(Scope(selector)):
+        return skill.pack
+    return selector

@@ -34,7 +34,7 @@ from fastmcp.server.middleware import Middleware
 from fastmcp.server.providers.base import Provider
 from fastmcp.utilities.versions import VersionSpec
 
-from .request import client_reads_resources, full_listing, requested_pack
+from .request import client_reads_resources, full_listing, requested_scope
 from .uris import Catalogue
 
 
@@ -43,10 +43,10 @@ class CatalogueProvider(Provider):
 
     The scope is applied here rather than in middleware because it is applied on
     *every* call anyway -- ``Catalogue`` has no method that does not take
-    ``pinned``. Middleware would be a second place for it to be forgotten.
+    the scope. Middleware would be a second place for it to be forgotten.
 
     An out-of-scope URI resolves to None, which FastMCP reports as an unknown
-    resource. That conflation is deliberate and matches ``SkillIndex``: a pinned
+    resource. That conflation is deliberate and matches ``SkillIndex``: a scoped
     client must not be able to confirm another pack's contents from the shape of
     an error.
 
@@ -60,7 +60,7 @@ class CatalogueProvider(Provider):
         self._catalogue = catalogue
 
     async def _list_resources(self) -> Sequence[Resource]:
-        entries = self._catalogue().entries(requested_pack(), full=full_listing())
+        entries = self._catalogue().entries(requested_scope(), full=full_listing())
         return [
             TextResource(
                 uri=entry.uri,
@@ -80,7 +80,7 @@ class CatalogueProvider(Provider):
         self, uri: str, version: VersionSpec | None = None
     ) -> Resource | None:
         catalogue = self._catalogue()
-        body = catalogue.read(uri, requested_pack())
+        body = catalogue.read(uri, requested_scope())
         if body is None:
             return None
         return TextResource(

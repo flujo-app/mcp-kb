@@ -10,6 +10,7 @@ from fastmcp import Client
 from mcp_school import School, harvest
 from mcp_school.config import Include
 from mcp_school.prompts import FilePrompt, PromptProvider, load_prompt, load_prompts
+from mcp_school.scope import Scope
 from mcp_school.skills import SkillIndex
 from tests.conftest import load_all_prompts, load_pack_prompts, make_config
 
@@ -179,6 +180,6 @@ def test_visible_reads_the_snapshot_exactly_once():
         return snapshot
 
     provider = PromptProvider(snapshot_getter)
-    provider.visible("flatsource")
+    provider.visible(Scope("flatsource"))
 
     assert len(calls) == 1

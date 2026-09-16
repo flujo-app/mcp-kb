@@ -6,6 +6,7 @@ rather than only through the tools that call it.
 
 import pytest
 
+from mcp_school.scope import Scope
 from mcp_school.skills import PackResources, SkillIndex, load_skills
 from tests.conftest import build_pack_resources, load_all_skills
 
@@ -34,15 +35,15 @@ def test_visible_is_everything_when_unpinned(index):
 
 @pytest.mark.unit
 def test_visible_honours_a_pack_or_a_group(index):
-    assert {s.name for s in index.visible("flatsource")} == {"alpha", "beta"}
-    assert {s.name for s in index.visible("plugin-a")} == {"gamma"}
+    assert {s.name for s in index.visible(Scope("flatsource"))} == {"alpha", "beta"}
+    assert {s.name for s in index.visible(Scope("plugin-a"))} == {"gamma"}
 
 
 @pytest.mark.unit
 def test_select_cannot_widen_past_the_pin(index):
     """The model's pack argument narrows within the pin, never past it."""
-    assert index.select("flatsource", "deepsource") == []
-    assert {s.name for s in index.select("flatsource", "flatsource")} == {
+    assert index.select(Scope("flatsource"), "deepsource") == []
+    assert {s.name for s in index.select(Scope("flatsource"), "flatsource")} == {
         "alpha",
         "beta",
     }
@@ -51,7 +52,7 @@ def test_select_cannot_widen_past_the_pin(index):
 @pytest.mark.unit
 def test_selectors_are_scoped_to_the_pin(index):
     """Suggestions must not leak the other packs' names."""
-    assert "deepsource" not in index.selectors("flatsource")
+    assert "deepsource" not in index.selectors(Scope("flatsource"))
     assert "deepsource" in index.selectors()
 
 
@@ -59,8 +60,8 @@ def test_selectors_are_scoped_to_the_pin(index):
 def test_get_hides_out_of_scope_skills(index):
     """Out of scope is indistinguishable from missing, on purpose."""
     assert index.get("gamma") is not None
-    assert index.get("gamma", "flatsource") is None
-    assert index.get("alpha", "flatsource") is not None
+    assert index.get("gamma", Scope("flatsource")) is None
+    assert index.get("alpha", Scope("flatsource")) is not None
 
 
 @pytest.mark.unit
