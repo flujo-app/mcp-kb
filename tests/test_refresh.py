@@ -188,6 +188,28 @@ def test_a_source_that_keeps_failing_the_same_way_is_not_a_change(skills_dir, ca
 
 
 @pytest.mark.unit
+def test_an_unreadable_file_in_one_source_fails_only_that_source(skills_dir, cache, monkeypatch):
+    """I2: a `PermissionError` (any `OSError`) out of one source's harvest must
+    become a failed record for that source, not abort the whole refresh pass --
+    `snapshot.py`'s own docstring says a failed source is a record, not an
+    exception that empties the catalogue of everything else.
+    """
+    school = School(make_config(skills_dir), cache)
+    real_load_skills = snapshot.load_skills
+
+    def flaky(dirs, *, pack, source, root, tags=()):
+        if source == "flatsource":
+            raise PermissionError("[Errno 13] Permission denied: SKILL.md")
+        return real_load_skills(dirs, pack=pack, source=source, root=root, tags=tags)
+
+    monkeypatch.setattr(snapshot, "load_skills", flaky)
+
+    assert school.refresh(force=True) == ["deepsource", "flatsource"]
+    assert school.status["flatsource"]["status"] == "failed"
+    assert school.status["deepsource"]["status"] == "ok"
+
+
+@pytest.mark.unit
 def test_persistence_failure_does_not_leave_records_ahead_of_the_snapshot(
     skills_dir, cache, monkeypatch
 ):
@@ -390,6 +412,28 @@ async def test_can_remember_is_true_only_with_a_session_header(skills_dir, cache
 
     assert without_header.json()["can_remember"] is False
     assert with_header.json()["can_remember"] is True
+
+
+@pytest.mark.unit
+async def test_reindex_answers_with_an_error_payload_instead_of_a_500(
+    skills_dir, cache, monkeypatch
+):
+    """I2: the only manual recovery lever this server has must still answer,
+    even when a refresh raises something `build_source` did not turn into a
+    failed record.
+    """
+    school = School(make_config(skills_dir), cache)
+
+    async def boom(**kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(school, "refresh_async", boom)
+    transport = httpx.ASGITransport(app=school.mcp.http_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://school") as http:
+        response = await http.post("/reindex")
+
+    assert response.status_code == 500
+    assert response.json()["status"] == "error"
 
 
 @pytest.mark.unit

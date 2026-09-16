@@ -11,6 +11,7 @@ right now.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from fastmcp import FastMCP
@@ -19,6 +20,8 @@ from starlette.responses import JSONResponse
 
 if TYPE_CHECKING:
     from .server import School
+
+log = logging.getLogger(__name__)
 
 
 def register(mcp: FastMCP, school: School) -> None:
@@ -61,8 +64,19 @@ def register(mcp: FastMCP, school: School) -> None:
         takes no input: it re-reads exactly the sources the config already
         names, which the background loop would re-read on its own anyway. There
         is nothing here to authorise that the config has not already decided.
-        The response is ``/health`` plus ``rebuilt``, the source names whose
-        harvest actually changed.
+        The response is ``/health`` plus ``rebuilt``, the source names actually
+        rebuilt this pass -- with ``force=True`` that is every source that did
+        not fail identically to how it already had, changed or not, not only
+        the ones whose content moved.
+
+        A rebuild that raises something ``build_source`` did not already turn
+        into a failed record must still answer: this is the only manual
+        recovery lever the server has, and an unhandled 500 would take it away
+        for good.
         """
-        rebuilt = await school.refresh_async(force=True)
+        try:
+            rebuilt = await school.refresh_async(force=True)
+        except Exception as exc:
+            log.exception("reindex failed")
+            return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
         return JSONResponse({**report(), "rebuilt": rebuilt})
