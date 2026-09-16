@@ -21,7 +21,7 @@ file is safe to commit and to publish as a ConfigMap.
 from __future__ import annotations
 
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 import yaml
@@ -66,6 +66,21 @@ class Include(Strict):
     instructions: list[str] | None = None
     agents: list[str] | None = None
     files: list[str] | None = None
+
+    @field_validator(
+        "skills", "prompts", "instructions", "agents", "files", mode="after"
+    )
+    @classmethod
+    def _relative(cls, patterns: list[str] | None) -> list[str] | None:
+        # harvest.py's glob() would otherwise hand an absolute pattern straight
+        # to Path.glob(), which raises NotImplementedError rather than failing
+        # the config -- and a ".." pattern is the same escape harvest.files()
+        # already guards against, caught here instead so it never reaches glob.
+        for p in patterns or []:
+            if not p or p.startswith("/") or ".." in PurePosixPath(p).parts:
+                msg = f"include pattern {p!r} must be a relative path without '..'"
+                raise ValueError(msg)
+        return patterns
 
 
 class Library(Strict):

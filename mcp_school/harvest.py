@@ -72,6 +72,8 @@ def files(root: Path, kind: str, include: Include) -> list[Path]:
             # A pattern like "../**" can walk out of base and straight back in
             # -- resolve() then quietly collapses the ".." and the hit looks
             # like a plain interior file. Reject the escape before resolving.
+            # config.py's Include validator refuses such a pattern before it
+            # ever reaches here; this is defence in depth, not the first line.
             if ".." in hit.relative_to(base).parts:
                 continue
             target = hit.resolve()

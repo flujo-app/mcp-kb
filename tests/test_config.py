@@ -83,6 +83,26 @@ def test_a_missing_file_is_a_config_error(tmp_path):
         load_config(tmp_path / "nope.yaml")
 
 
+def test_an_absolute_include_pattern_is_refused(tmp_path):
+    text = "sources:\n- name: a\n  url: file:///a\n  include:\n    files: ['/etc/**']\n"
+    with pytest.raises(ConfigError, match="relative"):
+        load_config(write(tmp_path, text))
+
+
+def test_a_parent_relative_include_pattern_is_refused(tmp_path):
+    text = "sources:\n- name: a\n  url: file:///a\n  include:\n    skills: ['../**']\n"
+    with pytest.raises(ConfigError):
+        load_config(write(tmp_path, text))
+
+
+def test_a_normal_include_pattern_still_loads(tmp_path):
+    text = (
+        "sources:\n- name: a\n  url: file:///a\n  include:\n    files: ['shared/**']\n"
+    )
+    config = load_config(write(tmp_path, text))
+    assert config.sources[0].include.files == ["shared/**"]
+
+
 def test_an_env_ref_resolves_to_a_secret(monkeypatch):
     monkeypatch.setenv("TOKEN", "hunter2")
     secret = EnvRef(env="TOKEN").resolve()

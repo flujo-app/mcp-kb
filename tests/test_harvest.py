@@ -80,8 +80,12 @@ def test_a_file_inside_a_skill_is_never_a_pack_file(tree):
 
 
 def test_a_glob_cannot_escape_the_source(tree, tmp_path):
+    # config.py's Include validator already refuses "../**" at construction;
+    # model_construct bypasses it so this test exercises harvest.files()'s own
+    # defence-in-depth guard directly, independent of that outer validation.
     (tmp_path.parent / "outside.md").write_text("no\n")
-    assert pack_files(tree, Include(files=["../**"]), []) == []
+    include = Include.model_construct(files=["../**"])
+    assert pack_files(tree, include, []) == []
 
 
 def test_the_group_is_the_containing_directory_unless_that_is_a_skill_root(tree):
