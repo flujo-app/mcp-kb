@@ -7,6 +7,10 @@ from mcp_school.config import Config, Include
 from mcp_school.prompts import load_prompts
 from mcp_school.skills import PackResources, load_skills
 
+# The WebDAV server fixture lives in its own module -- it is a server, not a
+# tree -- and is registered here so a test can ask for `webdav` by name.
+from tests.webdav_server import webdav  # noqa: F401 - a fixture, used by name
+
 FLAT = {"alpha": "First skill.", "beta": "Second skill."}
 NESTED = {"plugin-a": {"gamma": "Third skill."}, "plugin-b": {"delta": "Fourth skill."}}
 

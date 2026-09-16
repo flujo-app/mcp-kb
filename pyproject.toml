@@ -36,6 +36,10 @@ dependencies = [
   # and a lower floor resolves to one of those and dies with an AttributeError.
   # It is also the first release to require 3.11, which sets requires-python.
   "pygit2>=1.19",
+  # webdav sources. The fsspec extra is what gives WebdavFileSystem; webdav4
+  # brings httpx<1, which coexists with FastMCP's httpx2. 0.10 is the floor
+  # where ls(detail=True) passes the ETag through, which is the whole design.
+  "webdav4[fsspec]>=0.10",
 ]
 
 [project.optional-dependencies]
@@ -57,6 +61,10 @@ test = [
   # not httpx, so this has to be declared or the suite only passes where
   # something else happened to install it.
   "httpx",
+  # tests/webdav_server.py runs a real WebDAV server that demands Basic auth —
+  # imported directly, so declared here or CI fails where the pod passed.
+  "wsgidav",
+  "cheroot",
 ]
 
 [build-system]

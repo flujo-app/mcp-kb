@@ -26,7 +26,7 @@ import pytest
 from mcp_school import School
 from mcp_school.config import Config, GitSource
 from mcp_school.sources import SourceError, fingerprint, materialise
-from mcp_school.sources import git as gitsource
+from mcp_school.sources import export as exports
 from mcp_school.sources.git import COMMIT_FILE, resolve
 
 SIGNATURE = pygit2.Signature("Test", "test@example.com", 1700000000, 0)
@@ -261,7 +261,7 @@ def test_a_crashed_export_leaves_nothing_at_a_commit_path(origin, tmp_path):
     never a half tree at the name of the commit a later export would trust."""
     source = _source(origin)
     home = tmp_path / "src" / "pack"
-    half = home / (gitsource.WORK_PREFIX + origin.second)
+    half = home / (exports.WORK_PREFIX + origin.second)
     (half / "skills").mkdir(parents=True)
     (half / "skills" / "leftover.md").write_text("never finished\n")
 
@@ -285,7 +285,7 @@ def test_superseded_exports_are_collected_once_nothing_can_be_reading_them(
     previous = materialise(source, tmp_path)
     _advance(origin, "fourth")
     for export in (oldest, previous):
-        aged = export.stat().st_mtime - gitsource.GRACE_SECONDS - 60
+        aged = export.stat().st_mtime - exports.GRACE_SECONDS - 60
         os.utime(export, (aged, aged))
 
     newest = materialise(source, tmp_path)
