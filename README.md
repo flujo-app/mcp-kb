@@ -4,11 +4,14 @@ A resource and prompt gateway for MCP. Serves [Agent Skills](https://code.claude
 and prompts over MCP, so any client can discover and read them — including clients that only
 speak tools.
 
-Skills are declared as pinned dependencies in `skills.toml` and fetched at image build
-time. Nothing is fetched at runtime.
+The image bakes nothing. A source is a dependency, declared in a config file and
+fetched at container start — see `examples/config.yaml`, the four packs this
+image used to bake, now read straight from GitHub:
 
 ```
-docker run -p 8000:8000 kubed/mcp-school:latest
+docker run -p 8000:8000 -v mcp-school-cache:/var/cache/mcp-school \
+  -v $PWD/examples/config.yaml:/etc/mcp-school/config.yaml:ro \
+  kubed/mcp-school:latest
 ```
 
 ## One address space
@@ -79,11 +82,9 @@ A deployment that should serve less gets a config that lists less.
 ## Prompts
 
 A prompt is a template a person picks and fills in before the model sees anything —
-Claude Code lists them as slash commands. They live in this repo, one folder per pack:
-
-```
-prompts/grafana/debug-logs.md    →  prompt grafana_debug-logs
-```
+Claude Code lists them as slash commands. A source serves them like anything
+else it ships: `prompts/**/*.md` by convention, or an explicit `include.prompts`
+glob, named `<pack>_<file-stem>`.
 
 Each is YAML frontmatter declaring its arguments, then a body with `{{ placeholders }}`:
 
@@ -102,34 +103,38 @@ Investigate the logs of **{{ app }}** over the last {{ since }}.
 Double braces, because prompt bodies are full of LogQL and JSON. `X-Skill-Pack`
 scopes prompts exactly as it scopes skills.
 
-## Skills as dependencies
+## Sources
 
-`skills.toml` is the source of truth:
+A source is a dependency, declared like one in the config file:
 
-```toml
-[[source]]
-name = "superpowers"
-repo = "https://github.com/obra/superpowers.git"
-ref  = "b36e0829c6d0140e93cfef2ca599b1b07d4a7797"
-path = "skills"
+```yaml
+sources:
+- name: superpowers
+  url: github://obra/superpowers
+  ref: b36e0829c6d0140e93cfef2ca599b1b07d4a7797
+  include:
+    skills: ["skills/*/SKILL.md"]
 ```
 
-`ref` is a commit, so an image is reproducible. `path` is the subdirectory holding the
-skill folders — not the repo root. `skills/` is gitignored; upstream markdown is never
-vendored into this repo, so a skill bump reviews as a one-line ref change.
+| scheme | backend |
+| --- | --- |
+| `file://` | a directory on this machine, served in place — must be absolute (`file:///path`) |
+| `git+https://`, `git+http://`, `git+file://` | a git remote, cloned bare and shallow |
+| `github://org/repo` | shorthand for `git+https://github.com/org/repo.git` |
+
+`ref` is a branch, tag or commit; pin a commit and an image is reproducible, leave
+it unset and the source tracks the remote's default branch. `subdirectory` narrows
+the harvest to a path within the clone — the shipped example reaches the same
+effect with `include` globs like `skills/*/SKILL.md` instead, without setting one.
+`auth` supplies HTTP Basic credentials for a private remote as `{username, password:
+{env: NAME}}` — GitHub wants `x-access-token` and a `GITHUB_TOKEN`-style PAT.
 
 A pack that factors shared material up out of its skills — penpot references `shared/*`
-from 190 places — declares those directories as `extras`, and they are served at
+from 190 places — adds those directories to `include.files`, and they are served at
 `skill://<pack>/<path>` alongside the skills that cite them.
 
-Fetch them locally:
-
-```
-python scripts/fetch_skills.py            # fetch at the pinned refs
-python scripts/fetch_skills.py --update   # repin everything to upstream HEAD
-```
-
-The **Update Skills** workflow runs that weekly and opens a PR.
+A git source is cloned once and re-exported on its `refresh` interval (`30s`, `5m`,
+`1h`); left unset, it is read once at boot and only rebuilt on restart.
 
 ## Configuration
 
@@ -152,12 +157,10 @@ configured source's own status.
 
 ## Deploying
 
-```
-kubectl apply -k .
-```
-
-Runs in the `flow` namespace as `mcp-school:8000`. There is no authentication: every
-skill served is public markdown, the server has no write path and holds no credentials.
+The image is the whole artifact: point `CONFIG` at a config file and `CACHE_DIR` at a
+writable volume, and it serves whatever the config names. Kubernetes manifests, node
+placement and everything else about running this somewhere are the installer's
+concern — this repo ships none of its own.
 
 ## Development
 

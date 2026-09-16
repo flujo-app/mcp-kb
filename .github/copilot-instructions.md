@@ -4,10 +4,11 @@
 
 You are reviewing pull requests for a **Python MCP server** that serves
 [Agent Skills](https://code.claude.com/docs/en/skills) — `SKILL.md` packages —
-over HTTP, so clients that cannot read a filesystem can still use them. Skills
-are **fetched at build time** from pinned upstream repos and baked into the
-image; nothing is fetched at runtime. The package is `mcp_school`; it ships
-as a container image (`kubed/mcp-school`) deployed to the `flow` namespace.
+over HTTP, so clients that cannot read a filesystem can still use them. The
+image bakes nothing: a source is a dependency declared in a config file and
+fetched at container start, into a cache volume. The package is `mcp_school`;
+it ships as a container image (`kubed/mcp-school`) with no deployment manifest
+of its own — that lives with whoever installs it.
 
 **Read these repo files first — they are the source of truth, and you should back
 your comments with them:**
@@ -15,7 +16,8 @@ your comments with them:**
 - **`AGENTS.md`** — the architectural non-negotiables and the reasoning behind
   them. This is the most important file in the repo for a reviewer.
 - **`mcp_school/uris.py`** — the `skill://` grammar, which is the API.
-- **`skills.toml`** — the pack manifest, and the only file you edit to add a pack.
+- **`examples/config.yaml`** — the worked example, and the file you edit to add
+  a pack to it.
 
 Prefer these over assumptions. When a convention is undocumented, the sibling
 repo `kubed-io/selenium-flow` sets the house style for CI, release flow and the
@@ -107,14 +109,16 @@ to ignore you.
 
 ## Project non-negotiables — do not approve changes that break these
 
-- **`skills/` is a build artifact and is gitignored.** Upstream markdown is never
-  vendored. A PR that commits a fetched skill is wrong; the change belongs in
-  `skills.toml` as a one-line `ref` bump.
-- **Pin a SHA, not a branch.** None of the upstreams tag releases, so a branch
-  ref makes the image irreproducible and a pack can change under you.
-- **`path` must be the directory that *contains* skill folders, never the repo
-  root.** `grafana/skills` ships a `template/SKILL.md` at the top level that would
-  otherwise be served as a skill named "template".
+- **A fetched source is never committed.** It is cache, materialised at start
+  under `CACHE_DIR`. A PR that commits fetched skill content is wrong; the
+  change belongs in a config file as a one-line `ref` bump.
+- **Pin a SHA, not a branch, unless a `refresh` is declared alongside it.** None
+  of the upstreams in `examples/config.yaml` tag releases, so an unpinned,
+  unrefreshed source makes the image irreproducible and a pack can change under
+  you with no signal that it did.
+- **`include` globs must reach *into* the directory that contains skill
+  folders, never the repo root.** `grafana/skills` ships a `template/SKILL.md`
+  at the top level that would otherwise be served as a skill named "template".
 - **Do not reach for `ResourcesAsTools`, or back for `SkillsDirectoryProvider`.**
   Both enumerate every skill on every listing call, and the second also keys a
   skill on its folder name alone, so two packs shipping the same name collapse
@@ -164,9 +168,9 @@ heading.
 
 ## What not to flag (settled — these are the recurring false positives)
 
-- **Serving arbitrary markdown from the image is the product.** The skills are
-  public upstream content baked in at build time. Don't raise it as untrusted
-  input to the server; it is the payload.
+- **Serving arbitrary markdown is the product.** The skills are public upstream
+  content, fetched at start from sources the config names. Don't raise it as
+  untrusted input to the server; it is the payload.
 - **There is no authentication, deliberately.** Every skill served is public
   markdown already on GitHub, the server has no write path, and it holds no
   credentials. Don't ask for a token without a concrete threat.

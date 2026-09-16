@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- `git+https://`, `git+http://`, `git+file://` and `github://` sources — cloned bare and shallow with pygit2, exported into the cache with fsspec's `GitFileSystem`, and fingerprinted by the resolved commit so a pinned SHA costs no network call while a branch or tag costs one `list_heads`.
+- `git+https://`, `git+http://`, `git+file://` and `github://org/repo` sources: cloned bare and shallow with pygit2, read at `ref` (a branch, tag or commit), exported into the cache; `subdirectory` and `auth` per PEP 610.
 - A `refresh` interval per source (`30s`, `5m`, `1h`) and `sources.fingerprint()`, a cheap file-count/bytes/newest-mtime summary used to detect a changed source without re-harvesting it — not yet wired to a refresh loop.
 - `mcp_school.index`: an on-disk index of what each source yielded (`Index`, `SourceRecord`, `SkillRow`, `PromptRow`) — not yet used by the server.
 - `mcp-school schema` prints the config JSON Schema.
@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Node affinity keeping the pod off the control-plane nodes, which carry no taint in this cluster and would otherwise be scheduled onto.
 
 ### Changed
+- **BREAKING:** the image bakes nothing. Sources are fetched at start into `CACHE_DIR`; `examples/config.yaml` ships the four upstream packs as `github://` sources. `skills.toml`, `scripts/fetch_skills.py`, the Update Skills workflow, the bundled prompts, the Kubernetes manifests and the Deploy workflow are gone — installation lives with the installer.
 - **BREAKING:** the catalogue is a config file of sources (`CONFIG`, default `/etc/mcp-school/config.yaml`, schema in `config.schema.json`); `SKILLS_DIR`, `PROMPTS_DIR` and `SKILL_PACKS` are gone. Sources join libraries, every resource and prompt carries tags, and `/health` reports each source.
 - **BREAKING:** renamed to `mcp-school` — distribution `mcp-school`, package `mcp_school`, console script `mcp-school`, image `kubed/mcp-school`, Kubernetes resources `mcp-school`. The `skill://` URIs, tools, headers and env vars are unchanged.
 - **BREAKING:** the tool surface is now two tools — `list_resources()` and `read_resource(uri)` — which mirror `resources/list` and `resources/read` exactly, replacing `list_packs` / `list_skills` / `read_skill` / `read_pack_file`. A client that can drive MCP resources can drive this server without learning a second vocabulary for the same act.
