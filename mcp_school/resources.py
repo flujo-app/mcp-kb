@@ -25,7 +25,7 @@ available.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from fastmcp import FastMCP
 from fastmcp.resources import TextResource
@@ -49,14 +49,18 @@ class CatalogueProvider(Provider):
     resource. That conflation is deliberate and matches ``SkillIndex``: a pinned
     client must not be able to confirm another pack's contents from the shape of
     an error.
+
+    The catalogue arrives as a getter, not a value. A refresh builds a new one
+    and swaps the server's snapshot; a provider holding the old object would
+    serve the generation it was registered in for the life of the process.
     """
 
-    def __init__(self, catalogue: Catalogue):
+    def __init__(self, catalogue: Callable[[], Catalogue]):
         super().__init__()
         self._catalogue = catalogue
 
     async def _list_resources(self) -> Sequence[Resource]:
-        entries = self._catalogue.entries(requested_pack(), full=full_listing())
+        entries = self._catalogue().entries(requested_pack(), full=full_listing())
         return [
             TextResource(
                 uri=entry.uri,
@@ -75,13 +79,14 @@ class CatalogueProvider(Provider):
     async def _get_resource(
         self, uri: str, version: VersionSpec | None = None
     ) -> Resource | None:
-        body = self._catalogue.read(uri, requested_pack())
+        catalogue = self._catalogue()
+        body = catalogue.read(uri, requested_pack())
         if body is None:
             return None
         return TextResource(
             uri=uri,
             name=uri.removeprefix("skill://"),
-            mime_type=self._catalogue.mime(uri),
+            mime_type=catalogue.mime(uri),
             text=body,
         )
 
@@ -115,6 +120,6 @@ class HideMirrorTools(Middleware):
         return [tool for tool in tools if tool.name not in self.names]
 
 
-def register(mcp: FastMCP, catalogue: Catalogue) -> None:
-    """Publish the catalogue as ``skill://`` resources."""
+def register(mcp: FastMCP, catalogue: Callable[[], Catalogue]) -> None:
+    """Publish the catalogue as ``skill://`` resources, read per request."""
     mcp.add_provider(CatalogueProvider(catalogue))

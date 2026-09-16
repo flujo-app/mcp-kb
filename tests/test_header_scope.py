@@ -259,11 +259,16 @@ def test_health_reports_the_catalogue(server_url):
     assert sorted(body["libraries"]) == ["deepsource", "flatsource"]
     assert body["skills"] == 4
     assert body["prompts"] == 2
-    assert body["sources"]["flatsource"] == {
+    flatsource = body["sources"]["flatsource"]
+    assert body["generation"] == 0
+    assert {
+        k: flatsource[k] for k in ("status", "library", "skills", "prompts", "files")
+    } == {
         "status": "ok",
         "library": "flatsource",
         "skills": 2,
         "prompts": 0,
         "files": 0,
     }
+    assert flatsource["built"] and flatsource["fingerprint"]["files"] == 3
     assert body["sources"]["deepsource-prompts"]["status"] == "ok"

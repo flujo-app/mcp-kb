@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import frontmatter
@@ -52,8 +52,14 @@ PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
 
 class FilePrompt(Prompt):
-    """One prompt file, rendered by substituting its placeholders."""
+    """One prompt file, rendered by substituting its placeholders.
 
+    ``path`` is where it was read from. It is carried on the prompt rather than
+    only known to the harvester so a rebuild can record it in the index and
+    re-parse exactly the files a source yielded last time.
+    """
+
+    path: Path
     pack: str
     source: str = ""
     template: str
@@ -138,6 +144,7 @@ def load_prompt(
         raise ValueError(f"placeholders with no argument: {', '.join(undeclared)}")
 
     return FilePrompt(
+        path=path,
         name=f"{pack}_{path.stem}",
         description=" ".join(str(meta.get("description", "")).split()) or None,
         arguments=arguments,
@@ -174,25 +181,38 @@ class PromptProvider(Provider):
     Only the listing is overridden. FastMCP's default ``_get_prompt`` looks a
     name up in that same listing, so a prompt outside this client's scope is
     unknown to ``prompts/get`` too, not merely unlisted.
+
+    Both collaborators arrive as getters, not values. A refresh replaces the
+    server's whole snapshot, and a provider holding the prompts it was built
+    with would keep serving the generation it was born in.
     """
 
-    def __init__(self, prompts: Sequence[FilePrompt], index: SkillIndex):
+    def __init__(
+        self,
+        prompts: Callable[[], Sequence[FilePrompt]],
+        index: Callable[[], SkillIndex],
+    ):
         super().__init__()
-        self._prompts = list(prompts)
+        self._prompts = prompts
         self._index = index
 
     def visible(self, pinned: str = "") -> list[FilePrompt]:
+        prompts = list(self._prompts())
         if not pinned:
-            return list(self._prompts)
+            return prompts
         # A prompt belongs to a pack, not a group, so a group pin sees its pack's
         # prompts -- the same rule pack-level files follow.
-        packs = {s.pack for s in self._index.visible(pinned)}
-        return [p for p in self._prompts if p.pack in packs]
+        packs = {s.pack for s in self._index().visible(pinned)}
+        return [p for p in prompts if p.pack in packs]
 
     async def _list_prompts(self) -> Sequence[Prompt]:
         return self.visible(requested_pack())
 
 
-def register(mcp: FastMCP, prompts: Sequence[FilePrompt], index: SkillIndex) -> None:
-    """Publish the prompts."""
+def register(
+    mcp: FastMCP,
+    prompts: Callable[[], Sequence[FilePrompt]],
+    index: Callable[[], SkillIndex],
+) -> None:
+    """Publish the prompts, read through ``prompts`` on every listing."""
     mcp.add_provider(PromptProvider(prompts, index))

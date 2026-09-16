@@ -3,6 +3,7 @@
 from .prompts import FilePrompt, load_prompts
 from .server import School
 from .skills import PackResources, Skill, SkillIndex, load_skills
+from .snapshot import Snapshot
 from .uris import Catalogue, Entry
 
 __all__ = [
@@ -13,6 +14,7 @@ __all__ = [
     "School",
     "Skill",
     "SkillIndex",
+    "Snapshot",
     "load_prompts",
     "load_skills",
 ]

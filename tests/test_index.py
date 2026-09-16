@@ -48,6 +48,7 @@ def _source_record(**overrides):
             PromptRow.of(
                 Path("/skills/flatsource/debug.md"),
                 FilePrompt(
+                    path=Path("/skills/flatsource/debug.md"),
                     name="flatsource_debug",
                     pack="flatsource",
                     source="flatsource",
