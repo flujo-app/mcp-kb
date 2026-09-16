@@ -11,12 +11,13 @@ import pytest
 
 from mcp_school.skills import PackResources, SkillIndex, load_skills
 from mcp_school.uris import Catalogue, parse, uri_for
+from tests.conftest import build_pack_resources, load_all_skills
 
 
 @pytest.fixture
 def catalogue(skills_dir):
-    skills = load_skills(skills_dir)
-    return Catalogue(SkillIndex(skills), PackResources(skills_dir, skills))
+    skills = load_all_skills(skills_dir)
+    return Catalogue(SkillIndex(skills), build_pack_resources(skills_dir))
 
 
 # -- grammar ------------------------------------------------------------------
@@ -151,8 +152,8 @@ def test_skill_names_collide_across_packs_and_both_survive(skills_dir):
     """
     for pack in ("flatsource", "deepsource"):
         _write_skill(skills_dir, pack, "twin", f"from {pack}")
-    skills = load_skills(skills_dir)
-    cat = Catalogue(SkillIndex(skills), PackResources(skills_dir, skills))
+    skills = load_all_skills(skills_dir)
+    cat = Catalogue(SkillIndex(skills), build_pack_resources(skills_dir))
     assert "from flatsource" in cat.read("skill://flatsource/twin")
     assert "from deepsource" in cat.read("skill://deepsource/twin")
 
@@ -219,13 +220,16 @@ def test_a_group_pin_still_reaches_its_packs_shared_material(catalogue):
 
 @pytest.mark.unit
 def test_the_pin_blocks_shared_material_of_another_pack(catalogue):
-    assert catalogue.read("skill://deepsource/shared/guide.md", pinned="flatsource") is None
+    assert (
+        catalogue.read("skill://deepsource/shared/guide.md", pinned="flatsource")
+        is None
+    )
     assert catalogue.read("skill://deepsource/_files", pinned="flatsource") is None
 
 
 @pytest.mark.unit
 def test_uri_for_is_the_address_the_catalogue_answers(catalogue, skills_dir):
-    skill = next(s for s in load_skills(skills_dir) if s.name == "gamma")
+    skill = next(s for s in load_all_skills(skills_dir) if s.name == "gamma")
     assert uri_for(skill) == "skill://deepsource/gamma"
     assert catalogue.read(uri_for(skill)) is not None
     assert catalogue.read(uri_for(skill, "_manifest")) is not None
@@ -235,4 +239,32 @@ def test_uri_for_is_the_address_the_catalogue_answers(catalogue, skills_dir):
 def test_mime_types_follow_the_content(catalogue):
     assert catalogue.mime("skill://deepsource") == "text/markdown"
     assert catalogue.mime("skill://flatsource/alpha/_manifest") == "application/json"
-    assert catalogue.mime("skill://deepsource/shared/nested/schema.json") == "application/json"
+    assert (
+        catalogue.mime("skill://deepsource/shared/nested/schema.json")
+        == "application/json"
+    )
+
+
+# -- tags -----------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_an_index_row_is_tagged_with_its_pack(tmp_path):
+    """A pack index row is tagged with its own pack and "index", sorted."""
+    skill_dir = tmp_path / "loki"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("---\nname: loki\ndescription: d\n---\n")
+    skills = load_skills([skill_dir], pack="grafana", source="grafana", root=tmp_path)
+    resources = PackResources()
+    cat = Catalogue(SkillIndex(skills), resources)
+    assert cat.entries()[0].tags == ("grafana", "index")
+
+
+@pytest.mark.unit
+def test_a_full_row_carries_the_skills_own_tags(catalogue, skills_dir):
+    """The full listing is a per-skill row, so it carries that skill's tags."""
+    skill = next(s for s in load_all_skills(skills_dir) if s.name == "gamma")
+    row = next(
+        e for e in catalogue.entries(full=True) if e.uri == uri_for(skill, "SKILL.md")
+    )
+    assert row.tags == tuple(sorted(skill.tags))

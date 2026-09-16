@@ -11,8 +11,10 @@ except ModuleNotFoundError:  # pragma: no cover - 3.10 only
 import pytest
 from fastmcp import Client
 
-from mcp_school import School
+from mcp_school import School, harvest
+from mcp_school.config import Include
 from mcp_school.prompts import load_prompt, load_prompts
+from tests.conftest import load_all_prompts, load_pack_prompts
 
 pytestmark = pytest.mark.unit
 
@@ -53,25 +55,26 @@ def test_every_shipped_prompt_belongs_to_a_real_pack():
 
 def test_the_name_is_pack_qualified(prompts_dir):
     """A file outside a pack folder is not a prompt at all."""
-    assert {p.name for p in load_prompts(prompts_dir)} == {
+    assert {p.name for p in load_all_prompts(prompts_dir)} == {
         "flatsource_hello",
         "deepsource_check",
     }
 
 
 def test_packs_hard_scope_the_prompts(prompts_dir):
-    names = {p.name for p in load_prompts(prompts_dir, packs=["flatsource"])}
+    names = {p.name for p in load_pack_prompts(prompts_dir, "flatsource")}
     assert names == {"flatsource_hello"}
 
 
 def test_an_undeclared_placeholder_is_skipped_loudly(tmp_path, caplog):
     """Rendered blank, a typo reads fine and asks the model for the wrong thing."""
     (tmp_path / "flatsource").mkdir()
-    (tmp_path / "flatsource" / "typo.md").write_text(
+    typo = tmp_path / "flatsource" / "typo.md"
+    typo.write_text(
         "---\ndescription: typo\narguments:\n- name: name\n---\nHi {{ nmae }}\n"
     )
     with caplog.at_level(logging.WARNING):
-        assert load_prompts(tmp_path) == []
+        assert load_prompts([typo], pack="flatsource", source="flatsource") == []
     assert "nmae" in caplog.text
 
 
@@ -85,7 +88,9 @@ def test_a_required_argument_cannot_have_a_default(tmp_path):
 
 
 def test_a_missing_directory_is_no_prompts(tmp_path):
-    assert load_prompts(tmp_path / "nope") == []
+    """Harvest yields no files for a missing source; loading an empty list loads none."""
+    files = harvest.prompt_files(tmp_path / "nope", Include())
+    assert load_prompts(files, pack="flatsource", source="flatsource") == []
 
 
 # -- over MCP ------------------------------------------------------------------
@@ -104,9 +109,13 @@ async def test_a_client_sees_the_prompt_and_its_arguments(skills_dir, prompts_di
 
 async def test_rendering_fills_arguments_and_defaults(skills_dir, prompts_dir):
     async with Client(School(skills_dir, prompts_dir=prompts_dir).mcp) as client:
-        given = await client.get_prompt("flatsource_hello", {"who": "Dr K", "greeting": "Hi"})
+        given = await client.get_prompt(
+            "flatsource_hello", {"who": "Dr K", "greeting": "Hi"}
+        )
         defaulted = await client.get_prompt("flatsource_hello", {"who": "Dr K"})
-        blank = await client.get_prompt("flatsource_hello", {"who": "Dr K", "greeting": ""})
+        blank = await client.get_prompt(
+            "flatsource_hello", {"who": "Dr K", "greeting": ""}
+        )
     assert text(given) == "Hi, Dr K.\n"
     assert text(defaulted) == "Hello, Dr K.\n"
     # A picker sends a field left empty as "", which must not beat the default.

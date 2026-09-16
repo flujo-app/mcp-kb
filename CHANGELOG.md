@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The image build hands a venv from builder to runner and installs dependencies before the source, so the runner no longer reinstalls every dependency out of the wheel and a source-only commit reuses the cached dependency layer.
 - The image runs Python 3.14, matching the version CI gates pull requests on.
 - Ruff lints the whole checkout, tests and scripts included, with the rule set selenium-flow uses.
+- `python-frontmatter` replaces the two hand-written frontmatter parsers in `skills.py` and `prompts.py`; every skill and prompt now also carries its library, its source and its kind as tags.
 
 ### Fixed
 - `resources/list` answers in milliseconds instead of ~5 seconds: pack-level files are scanned once at startup rather than on every call, which also stops the listing from freezing every other request, health probes included, while it ran.
