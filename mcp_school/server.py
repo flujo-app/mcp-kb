@@ -181,9 +181,7 @@ class School:
         mirrors = tools.register(self.mcp, lambda: self.snapshot.catalogue)
         self.mcp.add_middleware(resources.HideMirrorTools(mirrors))
         self.mcp.add_middleware(AnnounceChanges(self))
-        prompts.register(
-            self.mcp, lambda: self.snapshot.prompts, lambda: self.snapshot.index
-        )
+        prompts.register(self.mcp, lambda: self.snapshot)
         routes.register(self.mcp, self)
 
     # -- what the snapshot currently holds -----------------------------------

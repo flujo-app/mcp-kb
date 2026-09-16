@@ -2,6 +2,7 @@
 
 import json
 import os
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -131,11 +132,35 @@ def test_the_write_is_atomic(tmp_path, monkeypatch):
 
     _index().write(path)
 
-    assert [(str(src), str(dst)) for src, dst in calls] == [
-        (str(path) + ".tmp", str(path))
-    ]
-    assert not (tmp_path / "index.json.tmp").exists()
+    assert len(calls) == 1
+    src, dst = calls[0]
+    assert Path(src).parent == tmp_path
+    assert Path(dst) == path
+    assert not Path(src).exists()  # renamed away by os.replace
     assert path.exists()
+
+
+@pytest.mark.unit
+def test_two_writers_in_the_same_directory_do_not_share_a_temp_name(
+    tmp_path, monkeypatch
+):
+    """M4: a fixed `.tmp` sibling races across processes; `mkstemp` cannot."""
+    path = tmp_path / "index.json"
+    names = []
+    real_mkstemp = tempfile.mkstemp
+
+    def recording_mkstemp(*args, **kwargs):
+        fd, name = real_mkstemp(*args, **kwargs)
+        names.append(name)
+        return fd, name
+
+    monkeypatch.setattr("mcp_school.index.tempfile.mkstemp", recording_mkstemp)
+
+    _index().write(path)
+    _index().write(path)
+
+    assert len(names) == 2
+    assert names[0] != names[1]
 
 
 @pytest.mark.unit
