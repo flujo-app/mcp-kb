@@ -2,7 +2,7 @@
   "$defs": {
     "BasicAuth": {
       "additionalProperties": false,
-      "description": "Credentials for a git remote that requires them.",
+      "description": "Credentials for a remote that requires them: a git host, a WebDAV server.",
       "properties": {
         "username": {
           "title": "Username",
@@ -307,6 +307,83 @@
       ],
       "title": "Library",
       "type": "object"
+    },
+    "WebdavSource": {
+      "additionalProperties": false,
+      "description": "A WebDAV folder -- Nextcloud above all -- copied into the cache.\n\nThe URL names the folder itself, so ``base_url`` is the client's root and\nevery path under it is relative: a Nextcloud share is\n``webdav+https://cloud/remote.php/dav/files/<user>/<folder>``. ``auth`` is\nrequired, because WebDAV has no useful anonymous mode and an omitted\ncredential is a typo rather than a choice -- a Nextcloud *app password*,\nnever the account's own.\n\n``cache`` is the dial. ``snapshot`` is every other mirrored source: the\nfolder is copied at index time and read from disk thereafter, so a request\ntouches no network at all. ``live`` keeps that copy and revalidates a file\nagainst the server by ETag as it is read, so an edit made in Nextcloud is\nserved on the next read -- a file that did not exist at index time still\nneeds a refresh, because a URI only exists for what was harvested.",
+      "properties": {
+        "name": {
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$",
+          "title": "Name",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        },
+        "library": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Library"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "include": {
+          "$ref": "#/$defs/Include",
+          "default": {
+            "skills": null,
+            "prompts": null,
+            "instructions": null,
+            "agents": null,
+            "files": null
+          }
+        },
+        "refresh": {
+          "anyOf": [
+            {
+              "pattern": "^[1-9]\\d*[smh]$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Refresh"
+        },
+        "auth": {
+          "$ref": "#/$defs/BasicAuth"
+        },
+        "cache": {
+          "default": "snapshot",
+          "enum": [
+            "snapshot",
+            "live"
+          ],
+          "title": "Cache",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "url",
+        "auth"
+      ],
+      "title": "WebdavSource",
+      "type": "object"
     }
   },
   "additionalProperties": false,
@@ -327,6 +404,9 @@
           },
           {
             "$ref": "#/$defs/GitSource"
+          },
+          {
+            "$ref": "#/$defs/WebdavSource"
           }
         ]
       },

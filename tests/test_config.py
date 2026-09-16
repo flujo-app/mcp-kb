@@ -11,6 +11,7 @@ from mcp_school.config import (
     FileSource,
     GitSource,
     Include,
+    WebdavSource,
     load_config,
 )
 
@@ -299,3 +300,81 @@ def test_a_url_with_no_credential_in_it_is_reported_as_it_is(tmp_path):
         load_config(write(tmp_path, "sources:\n- name: p\n  url: github://a/b/c\n"))
 
     assert "github://a/b/c" in str(raised.value)
+
+
+# -- webdav --------------------------------------------------------------------
+
+
+def test_a_webdav_source_parses_with_auth(tmp_path):
+    text = (
+        "sources:\n- name: notes\n  url: webdav+https://cloud.example/remote.php/dav/files/me/notes\n"
+        "  auth:\n    username: me\n    password:\n      env: NEXTCLOUD_APP_PASSWORD\n"
+    )
+    config = load_config(write(tmp_path, text))
+    [source] = config.sources
+    assert isinstance(source, WebdavSource)
+    assert source.auth.username == "me"
+    assert source.auth.password == EnvRef(env="NEXTCLOUD_APP_PASSWORD")
+    assert source.cache == "snapshot"  # the dial's default: copied, read from disk
+
+
+def test_a_webdav_source_without_auth_is_refused(tmp_path):
+    """WebDAV is an authenticated backend; an anonymous one is a typo, not a mode."""
+    text = "sources:\n- name: notes\n  url: webdav+https://cloud.example/dav/notes\n"
+    with pytest.raises(ConfigError, match="auth"):
+        load_config(write(tmp_path, text))
+
+
+def test_the_cache_dial_accepts_live(tmp_path):
+    config = load_config(write(tmp_path, _webdav("  cache: live\n")))
+    assert config.sources[0].cache == "live"
+
+
+def test_an_unknown_cache_mode_is_refused(tmp_path):
+    with pytest.raises(ConfigError, match="cache"):
+        load_config(write(tmp_path, _webdav("  cache: sometimes\n")))
+
+
+def test_cache_is_not_a_field_on_a_git_source(tmp_path):
+    """The dial is WebDAV's alone in this epic -- on git it is silently nothing,
+    so it has to be refused rather than accepted and ignored."""
+    text = "sources:\n- name: a\n  url: github://o/r\n  cache: live\n"
+    with pytest.raises(ConfigError, match="cache"):
+        load_config(write(tmp_path, text))
+
+
+def test_the_base_url_drops_only_the_webdav_prefix(tmp_path):
+    text = (
+        "sources:\n"
+        "- name: a\n  url: webdav+https://h/dav/a\n"
+        "  auth: {username: u, password: {env: P}}\n"
+        "- name: b\n  url: webdav+http://h:8080/dav/b\n"
+        "  auth: {username: u, password: {env: P}}\n"
+    )
+    config = load_config(write(tmp_path, text))
+    assert config.sources[0].base_url == "https://h/dav/a"
+    assert config.sources[1].base_url == "http://h:8080/dav/b"
+
+
+def test_a_credential_embedded_in_a_webdav_url_is_refused(tmp_path):
+    """A WebDAV URL reaches httpx and the errors /health publishes; the password
+    belongs in `auth`, where it stays a reference to an environment variable."""
+    text = (
+        "sources:\n- name: notes\n  url: webdav+https://me:hunter2@cloud.example/dav\n"
+        "  auth: {username: me, password: {env: P}}\n"
+    )
+    with pytest.raises(ConfigError, match="credential") as raised:
+        load_config(write(tmp_path, text))
+    assert "hunter2" not in str(raised.value)
+
+
+def test_refresh_is_still_accepted_on_a_webdav_source(tmp_path):
+    config = load_config(write(tmp_path, _webdav("  refresh: 10m\n")))
+    assert config.sources[0].refresh_seconds == 600
+
+
+def _webdav(extra: str = "") -> str:
+    return (
+        "sources:\n- name: notes\n  url: webdav+https://cloud.example/dav/notes\n"
+        "  auth:\n    username: me\n    password:\n      env: P\n" + extra
+    )

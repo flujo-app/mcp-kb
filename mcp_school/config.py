@@ -23,7 +23,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path, PurePosixPath
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 import yaml
@@ -108,6 +108,19 @@ class SourceBase(Strict):
     library: str | None = Field(default=None, pattern=NAME)
     tags: list[str] = Field(default_factory=list)
 
+    @field_validator("url")
+    @classmethod
+    def _no_embedded_credential(cls, url: str) -> str:
+        # A URL is handed to a client and interpolated into the errors /health
+        # publishes, and git saves it verbatim into the clone's config. Whatever
+        # the backend, a credential belongs in `auth`, where it stays a
+        # reference to an environment variable rather than a value on disk.
+        parts = urlsplit(url)
+        if parts.username or parts.password:
+            msg = "a source URL must not embed a credential; use auth instead"
+            raise ValueError(msg)
+        return url
+
     @property
     def library_name(self) -> str:
         return self.library or self.name
@@ -147,7 +160,7 @@ class FileSource(MirrorSource):
 
 
 class BasicAuth(Strict):
-    """Credentials for a git remote that requires them."""
+    """Credentials for a remote that requires them: a git host, a WebDAV server."""
 
     username: str
     password: EnvRef
@@ -165,12 +178,6 @@ class GitSource(MirrorSource):
     @classmethod
     def _well_formed(cls, url: str) -> str:
         parts = urlsplit(url)
-        if parts.username or parts.password:
-            # pygit2 saves the remote URL verbatim into the clone's config, and
-            # source.url is interpolated into the errors /health publishes. A
-            # credential belongs in `auth`, where it stays a reference.
-            msg = "a source URL must not embed a credential; use auth instead"
-            raise ValueError(msg)
         if parts.scheme == "github":
             org = parts.netloc
             repo = parts.path.lstrip("/")
@@ -204,16 +211,49 @@ class GitSource(MirrorSource):
         return self.url.removeprefix("git+")
 
 
+class WebdavSource(MirrorSource):
+    """A WebDAV folder -- Nextcloud above all -- copied into the cache.
+
+    The URL names the folder itself, so ``base_url`` is the client's root and
+    every path under it is relative: a Nextcloud share is
+    ``webdav+https://cloud/remote.php/dav/files/<user>/<folder>``. ``auth`` is
+    required, because WebDAV has no useful anonymous mode and an omitted
+    credential is a typo rather than a choice -- a Nextcloud *app password*,
+    never the account's own.
+
+    ``cache`` is the dial. ``snapshot`` is every other mirrored source: the
+    folder is copied at index time and read from disk thereafter, so a request
+    touches no network at all. ``live`` keeps that copy and revalidates a file
+    against the server by ETag as it is read, so an edit made in Nextcloud is
+    served on the next read -- a file that did not exist at index time still
+    needs a refresh, because a URI only exists for what was harvested.
+    """
+
+    auth: BasicAuth
+    cache: Literal["snapshot", "live"] = "snapshot"
+
+    @property
+    def base_url(self) -> str:
+        # webdav+https://h/p -> https://h/p ; webdav+http -> http
+        return self.url.removeprefix("webdav+")
+
+
 SCHEMES: dict[str, str] = {  # url scheme -> union tag
     "file": "file",
     "git+https": "git",
     "git+http": "git",
     "git+file": "git",
     "github": "git",
+    "webdav+https": "webdav",
+    "webdav+http": "webdav",
 }
 # Not read yet: the union's tags are the keys, and E6's backend registry is
 # written against this mapping rather than against a second copy of it.
-MODELS: dict[str, type[SourceBase]] = {"file": FileSource, "git": GitSource}
+MODELS: dict[str, type[SourceBase]] = {
+    "file": FileSource,
+    "git": GitSource,
+    "webdav": WebdavSource,
+}
 
 
 def _tag(value: object) -> str | None:
@@ -222,7 +262,9 @@ def _tag(value: object) -> str | None:
 
 
 Source = Annotated[
-    Annotated[FileSource, Tag("file")] | Annotated[GitSource, Tag("git")],
+    Annotated[FileSource, Tag("file")]
+    | Annotated[GitSource, Tag("git")]
+    | Annotated[WebdavSource, Tag("webdav")],
     Discriminator(_tag),
 ]
 

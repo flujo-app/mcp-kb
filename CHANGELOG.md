@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `webdav+https://` and `webdav+http://` sources in the config: a WebDAV folder (Nextcloud) with a required `auth` whose password is an `{env:}` reference, and a `cache: snapshot|live` dial — `snapshot` copies the folder like any mirror, `live` will revalidate a file by ETag as it is read.
 - `git+https://`, `git+http://`, `git+file://` and `github://org/repo` sources: cloned bare and shallow with pygit2, read at `ref` (a branch, tag or commit), exported into the cache; `subdirectory` and `auth` per PEP 610.
 - `mcp_school.index`: an on-disk index of what each source yielded (`Index`, `SourceRecord`, `SkillRow`, `PromptRow`), written to `<CACHE_DIR>/index.json`. The server starts from it without touching any source, then verifies each source's fingerprint (`sources.fingerprint()`, a cheap file-count/bytes/newest-mtime summary) in the background and rebuilds only what changed; a `refresh: <duration>` (`30s`, `5m`, `1h`) per source schedules those re-checks, `POST /reindex` forces one immediately, and a session that persists across requests is told the catalogue changed next time it asks — MCP 2026-07-28 has no sessions, so a sessionless client relies on the advertised `cache_ttl` instead.
 - Listings are memoised per scope, so `resources/list` is a dict lookup.
