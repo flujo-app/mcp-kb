@@ -1,17 +1,26 @@
 """Entry point: turn CLI flags and environment into a running server.
 
 Every flag has an environment fallback because the container is configured with
-env vars while a developer reaches for flags. Nothing else in the package reads
-the environment, so this file is the whole configuration surface.
+env vars while a developer reaches for flags. The config file, `CONFIG`, says
+*what* to serve; these flags say *how* to run it (transport, port, cache
+directory), and the split never blurs. The one other reader of the environment
+is `EnvRef.resolve` in `config.py`, which resolves a source's credential where
+it is declared rather than passing it through a plain `str` on the way.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import sys
 from pathlib import Path
 
-from .server import DEFAULT_PROMPTS_DIR, DEFAULT_SKILLS_DIR, School
+from .config import ConfigError, load_config, schema
+from .server import School
+
+DEFAULT_CONFIG = Path("/etc/mcp-school/config.yaml")
+DEFAULT_CACHE_DIR = Path("/var/cache/mcp-school")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -19,21 +28,23 @@ def build_parser() -> argparse.ArgumentParser:
         prog="mcp-school", description="Serve Agent Skills over MCP."
     )
     parser.add_argument(
-        "--skills-dir",
-        type=Path,
-        default=Path(os.environ.get("SKILLS_DIR", DEFAULT_SKILLS_DIR)),
-        help="directory to scan for skills (env: SKILLS_DIR)",
+        "command",
+        nargs="?",
+        default="serve",
+        choices=["serve", "schema"],
+        help="serve the catalogue, or print its config JSON Schema (default: serve)",
     )
     parser.add_argument(
-        "--prompts-dir",
+        "--config",
         type=Path,
-        default=Path(os.environ.get("PROMPTS_DIR", DEFAULT_PROMPTS_DIR)),
-        help="directory holding <pack>/<name>.md prompts (env: PROMPTS_DIR)",
+        default=Path(os.environ.get("CONFIG", DEFAULT_CONFIG)),
+        help="config file listing the sources to serve (env: CONFIG)",
     )
     parser.add_argument(
-        "--packs",
-        default=os.environ.get("SKILL_PACKS", ""),
-        help="comma-separated packs to serve; empty serves all (env: SKILL_PACKS)",
+        "--cache-dir",
+        type=Path,
+        default=Path(os.environ.get("CACHE_DIR", DEFAULT_CACHE_DIR)),
+        help="directory a non-file:// source materialises into (env: CACHE_DIR)",
     )
     parser.add_argument(
         "--transport",
@@ -58,8 +69,16 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     """Entry point for the ``mcp-school`` console script."""
     args = build_parser().parse_args(argv)
-    packs = [p.strip() for p in args.packs.split(",") if p.strip()] or None
-    server = School(args.skills_dir, packs, args.prompts_dir)
+    if args.command == "schema":
+        print(json.dumps(schema(), indent=2))
+        return
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        # A bad config must fail loudly at boot, not silently serve nothing.
+        print(f"mcp-school: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    server = School(config, args.cache_dir)
     server.run(transport=args.transport, host=args.host, port=args.port)
 
 

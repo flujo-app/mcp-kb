@@ -61,6 +61,7 @@ def _count(n: int, noun: str = "skill") -> str:
     """``3 skills`` / ``1 skill`` -- an index row is prose, so it reads as prose."""
     return f"{n} {noun}" + ("" if n == 1 else "s")
 
+
 mimetypes.add_type("text/markdown", ".md")
 
 
@@ -68,14 +69,20 @@ mimetypes.add_type("text/markdown", ".md")
 class Entry:
     """One row of a resource listing -- the shape both halves publish.
 
-    Deliberately the four fields ``resources/list`` returns, so the tool mirror
-    is the same rows and not a translation of them.
+    ``uri``, ``name``, ``description`` and ``mime_type`` are the four fields
+    ``resources/list`` returns, so the tool mirror is the same rows and not a
+    translation of them. ``tags`` rides alongside for ``resources.py`` to carry
+    onto the ``TextResource`` it builds; it is not one of the four and never
+    appears in ``as_dict``. An index row is tagged with its pack and
+    ``"index"``; a full row (one skill, in the ``full=True`` listing) carries
+    that skill's own tags.
     """
 
     uri: str
     name: str
     description: str
     mime_type: str
+    tags: tuple[str, ...] = ()
 
     def as_dict(self) -> dict:
         return {
@@ -181,6 +188,7 @@ class Catalogue:
         entries: list[Entry] = []
         for pack in sorted({s.pack for s in visible}):
             in_pack = [s for s in visible if s.pack == pack]
+            index_tags = tuple(sorted({pack, "index"}))
             # A flat pack's group is just the pack again, so it names nothing new.
             groups = sorted({s.group for s in in_pack} - {pack})
             summary = _count(len(in_pack))
@@ -192,6 +200,7 @@ class Catalogue:
                     pack,
                     f"The {pack} pack — {summary}.",
                     "text/markdown",
+                    index_tags,
                 )
             )
             entries += [
@@ -201,6 +210,7 @@ class Catalogue:
                     f"{_count(sum(1 for s in in_pack if s.group == group))}"
                     f" in the {pack} pack.",
                     "text/markdown",
+                    index_tags,
                 )
                 for group in groups
             ]
@@ -212,6 +222,7 @@ class Catalogue:
                         f"Files the {pack} pack ships outside any skill, which"
                         " its skills reference.",
                         "text/markdown",
+                        index_tags,
                     )
                 )
 
@@ -222,6 +233,7 @@ class Catalogue:
                     f"{skill.qualified}/{MAIN_FILE}",
                     skill.description,
                     "text/markdown",
+                    tuple(sorted(skill.tags)),
                 )
                 for skill in sorted(visible, key=lambda s: s.qualified)
             ]
@@ -284,9 +296,7 @@ class Catalogue:
         # Not a skill, so it is pack-level material. PackResources applies its
         # own scoping, but the pin has to be checked here too: it knows which
         # packs exist, not which this caller may see.
-        if pinned and not any(
-            s.pack == pack for s in self._index.visible(pinned)
-        ):
+        if pinned and not any(s.pack == pack for s in self._index.visible(pinned)):
             return None
         return self._resources.read(pack, path)
 

@@ -9,6 +9,7 @@ These tests run the ASGI app on a real port for that reason.
 import json
 import socket
 import threading
+import urllib.request
 
 import pytest
 import uvicorn
@@ -17,6 +18,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.utilities.skills import download_skill, get_skill_manifest, list_skills
 
 from mcp_school import School
+from tests.conftest import make_config
 
 
 def _free_port() -> int:
@@ -29,9 +31,10 @@ def _free_port() -> int:
 def server_url(skills_dir_module, prompts_dir_module):
     """Serve the skills app on a loopback port for the duration of the module."""
     port = _free_port()
-    app = School(skills_dir_module, prompts_dir=prompts_dir_module).mcp.http_app()
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
-    server = uvicorn.Server(config)
+    config = make_config(skills_dir_module, prompts_dir_module)
+    app = School(config, skills_dir_module / "_cache").mcp.http_app()
+    uvicorn_config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
+    server = uvicorn.Server(uvicorn_config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     for _ in range(100):
@@ -172,9 +175,10 @@ async def test_the_pin_still_allows_its_own_pack(server_url):
 async def test_a_group_pin_cannot_widen_to_the_whole_pack(server_url):
     """Pinning to one group must not hand over its siblings."""
     async with _client(server_url, {"X-Skill-Pack": "plugin-a"}) as client:
-        assert "Third skill." in (
-            await client.read_resource("skill://deepsource/gamma")
-        )[0].text
+        assert (
+            "Third skill."
+            in (await client.read_resource("skill://deepsource/gamma"))[0].text
+        )
         with pytest.raises(Exception, match=r"nknown|not found"):
             await client.read_resource("skill://deepsource/delta")
 
@@ -240,3 +244,26 @@ async def test_the_default_listing_gives_sync_helpers_nothing(server_url):
     """Why the flag exists: the cheap listing has no /SKILL.md rows to find."""
     async with _client(server_url) as client:
         assert await list_skills(client) == []
+
+
+# -- /health --------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_health_reports_the_catalogue(server_url):
+    """/health is plain HTTP outside the MCP protocol, so it is fetched directly."""
+    url = server_url.removesuffix("/mcp") + "/health"
+    with urllib.request.urlopen(url) as response:
+        body = json.loads(response.read())
+    assert body["status"] == "ok"
+    assert sorted(body["libraries"]) == ["deepsource", "flatsource"]
+    assert body["skills"] == 4
+    assert body["prompts"] == 2
+    assert body["sources"]["flatsource"] == {
+        "status": "ok",
+        "library": "flatsource",
+        "skills": 2,
+        "prompts": 0,
+        "files": 0,
+    }
+    assert body["sources"]["deepsource-prompts"]["status"] == "ok"

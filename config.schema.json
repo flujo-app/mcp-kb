@@ -1,0 +1,186 @@
+{
+  "$defs": {
+    "FileSource": {
+      "additionalProperties": false,
+      "description": "A directory on this machine, served in place.",
+      "properties": {
+        "name": {
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$",
+          "title": "Name",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        },
+        "library": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Library"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "include": {
+          "$ref": "#/$defs/Include",
+          "default": {
+            "skills": null,
+            "prompts": null,
+            "instructions": null,
+            "agents": null,
+            "files": null
+          }
+        }
+      },
+      "required": [
+        "name",
+        "url"
+      ],
+      "title": "FileSource",
+      "type": "object"
+    },
+    "Include": {
+      "additionalProperties": false,
+      "description": "Globs per kind, relative to the source root. None means the conventions.",
+      "properties": {
+        "skills": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Skills"
+        },
+        "prompts": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompts"
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instructions"
+        },
+        "agents": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Agents"
+        },
+        "files": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Files"
+        }
+      },
+      "title": "Include",
+      "type": "object"
+    },
+    "Library": {
+      "additionalProperties": false,
+      "description": "A named grouping several sources can join, carrying its own tags.",
+      "properties": {
+        "name": {
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$",
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "Library",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The whole config file: the libraries declared and the sources that join them.",
+  "properties": {
+    "libraries": {
+      "items": {
+        "$ref": "#/$defs/Library"
+      },
+      "title": "Libraries",
+      "type": "array"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/FileSource"
+      },
+      "title": "Sources",
+      "type": "array"
+    }
+  },
+  "title": "Config",
+  "type": "object"
+}

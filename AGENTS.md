@@ -9,10 +9,15 @@ into the image; nothing is fetched at runtime.
 
 | Path | What it is |
 | --- | --- |
-| `skills.toml` | the pack manifest — the source of truth for what gets served |
+| `skills.toml` | the pack manifest — pins what `fetch_skills.py` bakes under `/skills` at build time |
 | `prompts/<pack>/<name>.md` | prompts, committed here — served as `<pack>_<name>` |
 | `scripts/fetch_skills.py` | clones each pinned source at build time; stdlib only |
 | `scripts/requirements.py` | prints the dependency list out of `pyproject.toml` for the image build |
+| `mcp_school/config.py` | the config file's schema — `Config`, `load_config`, `Library`, the sources |
+| `mcp_school/harvest.py` | turns a source's `include` globs into skill dirs, prompt files and pack files |
+| `mcp_school/sources/` | turns a config source into a local directory — `file://` today |
+| `examples/config.yaml` | the catalogue the image ships — the four packs plus this repo's prompts |
+| `config.schema.json` | `Config.model_json_schema()`, committed so an editor can validate a config live |
 | `mcp_school/skills.py` | the catalogue — `Skill`, loading, and `SkillIndex` |
 | `mcp_school/uris.py` | the `skill://` address space — `Catalogue`, the grammar |
 | `mcp_school/resources.py` | the resources, and the mirror-hiding middleware |
@@ -26,43 +31,62 @@ into the image; nothing is fetched at runtime.
 | `kustomization.yaml` | the one kustomization; `newTag` is the deployed version |
 | `skills/` | **gitignored** — build output, never commit it |
 
-## Adding a skill pack
+## Adding a source
 
-The manifest is the only file you edit. A pack is a dependency, pinned like one.
+`examples/config.yaml` — the file the image ships — is what you edit. A source
+is a dependency, declared like one:
 
-```toml
-[[source]]
-name = "penpot"                                        # becomes the pack name
-repo = "https://github.com/penpot/penpot-ai-kit.git"
-ref  = "c63d8e3717323fad859e794848e5a602b155a7ec"      # a commit SHA
-path = "skills"                                        # dir CONTAINING skill folders
+```yaml
+sources:
+- name: penpot
+  url: file:///skills/penpot
+  include:
+    skills: ["*/SKILL.md"]
+    files: ["shared/**/*", "workflows/**/*"]
 ```
 
-Two things go wrong here, both silently:
+`file://` is the only scheme so far, must be absolute (`file:///path`, no
+host), and is served in place — never copied into the cache. `include` is
+globs per kind, relative to the source root; setting one *replaces* its
+convention rather than appending to it (`harvest.DEFAULTS` is what applies
+when `include` is left out entirely), and `[]` turns that kind off. A source
+joins a library — its own name unless it names one with `library:`, which is
+how several sources present as one grouping, the way `grafana-prompts` joins
+`grafana` above. `config.schema.json` is `Config.model_json_schema()`; add a
+`# yaml-language-server: $schema=./config.schema.json` modeline to a config
+file for an editor to validate it live, and regenerate the committed schema
+with `mcp-school schema > config.schema.json` after touching `config.py` —
+`tests/test_schema.py` fails when the two drift.
 
-- **`path` must be the directory that *contains* skill folders, never the repo
-  root.** `grafana/skills` ships a `template/SKILL.md` at the top level that
-  would otherwise be served as a skill named "template".
-- **Pin a SHA, not a branch.** None of these upstreams tag releases. A branch
-  ref makes the image irreproducible and the pack can change under you.
-
-Then verify locally before pushing:
+Then verify locally before pushing. `pytest` no longer reads `CONFIG`, and
+`examples/config.yaml` points at the image's `/skills` and `/prompts` paths, so
+fetch the skills and rewrite those roots to somewhere local first:
 
 ```bash
-python scripts/fetch_skills.py --out /tmp/skills   # clone the packs
-SKILLS_DIR=/tmp/skills python -m pytest -q         # 14 tests
-SKILLS_DIR=/tmp/skills mcp-school --transport stdio
+python scripts/fetch_skills.py --out /tmp/skills
+mkdir -p /tmp/prompts && cp -r prompts/grafana /tmp/prompts/
+sed 's#file:///skills#file:///tmp/skills#; s#file:///prompts#file:///tmp/prompts#' \
+  examples/config.yaml > /tmp/config.yaml
+python3 -m pytest -q
+mcp-school --config /tmp/config.yaml --transport http --port 18000
 ```
 
-Nesting depth does **not** matter. `load_skills` walks for `SKILL.md`, so a flat
-source (`<pack>/<skill>/SKILL.md`, n8n) and a nested one
-(`<pack>/<group>/<skill>/SKILL.md`, grafana) both work. The directory that
-*contains* a skill becomes its `group`, which is why grafana has seven
-selectable groups and n8n has none worth naming.
+Then, from another shell, `curl -s localhost:18000/health` to confirm every
+source is `ok`.
 
-Bumping existing packs is the `🧠 Update Skills` workflow — Mondays 09:00 UTC,
-or dispatch it. It repins every source to upstream HEAD and opens a PR, because
-a bump is new upstream *instruction* content and deserves a read before it ships.
+Nesting depth does **not** matter. `harvest.skill_dirs` walks for `SKILL.md`
+through the `include` globs, so a flat source (`<pack>/<skill>/SKILL.md`,
+n8n) and a nested one (`<pack>/<group>/<skill>/SKILL.md`, grafana) both work.
+`harvest.group_of` turns the directory *containing* a skill into its `group`,
+which is why grafana has seven selectable groups and n8n has none worth
+naming.
+
+Bumping the skill packs themselves — the upstream content a `file://` source
+here points at — is still `skills.toml` and the `🧠 Update Skills` workflow,
+Mondays 09:00 UTC or dispatched by hand. It repins every pack to upstream HEAD
+and opens a PR, because a bump is new upstream *instruction* content and
+deserves a read before it ships; `examples/config.yaml` only decides what is
+served out of what `skills.toml` fetched, not what gets fetched.
 
 ## Shipping a change
 
@@ -183,7 +207,9 @@ namespaces tool names with a prefix, and these three names are the agent's API.
   scope — a handler that reimplemented that filter is how a pinned client ends
   up seeing another pack.
 - **A new flag or env var** → `main.py`, which is the whole configuration
-  surface. Nothing else in the package reads `os.environ`.
+  surface. Nothing else in the package reads `os.environ`, except the
+  `{env: NAME}` resolver in `config.py`, which is the one other reader of the
+  environment.
 
 `skills.py` imports no FastMCP, which is deliberate: the catalogue is testable
 without an MCP client, and `tests/test_skills.py` exercises the scoping rules
@@ -222,9 +248,10 @@ Two ways to hard-scope, both ceilings the model cannot widen past:
   sets `includeSelectors: true`, so a second instance would inherit the same
   selector and the existing Service would load-balance across both. Fixing that
   means changing `spec.selector`, which is immutable and forces a recreate.
-- **`SKILL_PACKS` env**, per deployment. Narrower blast radius but a whole pod.
+- **A config that lists less**, per deployment. A deployment that should serve
+  less gets a config that lists less — narrower blast radius but a whole pod.
 
-They compose: the header narrows within whatever `SKILL_PACKS` allows. Header
+They compose: the header narrows within whatever the config loads. Header
 scoping only exists inside an HTTP request, so it is inert over stdio — the
 tests in `tests/test_header_scope.py` run a real uvicorn server for that reason.
 
@@ -233,11 +260,12 @@ tests in `tests/test_header_scope.py` run a real uvicorn server for that reason.
 ```bash
 kubectl -n flow rollout status deploy/mcp-school
 kubectl -n flow port-forward svc/mcp-school 18000:8000
-curl -s localhost:18000/health   # {"status":"ok","packs":[...],"skills":N}
+curl -s localhost:18000/health   # {"status":"ok","libraries":[...],"skills":N,"prompts":N,"sources":{...}}
 ```
 
-`/health` reports the packs and skill count, which is the fastest way to tell
-which image a pod is actually running.
+`/health` reports the libraries, the skill and prompt counts, and each
+source's own status, which is the fastest way to tell which image a pod is
+actually running and whether every source loaded.
 
 ## House rules that apply here
 

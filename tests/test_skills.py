@@ -7,11 +7,12 @@ rather than only through the tools that call it.
 import pytest
 
 from mcp_school.skills import PackResources, SkillIndex, load_skills
+from tests.conftest import build_pack_resources, load_all_skills
 
 
 @pytest.fixture
 def index(skills_dir):
-    return SkillIndex(load_skills(skills_dir))
+    return SkillIndex(load_all_skills(skills_dir))
 
 
 @pytest.mark.unit
@@ -41,7 +42,10 @@ def test_visible_honours_a_pack_or_a_group(index):
 def test_select_cannot_widen_past_the_pin(index):
     """The model's pack argument narrows within the pin, never past it."""
     assert index.select("flatsource", "deepsource") == []
-    assert {s.name for s in index.select("flatsource", "flatsource")} == {"alpha", "beta"}
+    assert {s.name for s in index.select("flatsource", "flatsource")} == {
+        "alpha",
+        "beta",
+    }
 
 
 @pytest.mark.unit
@@ -72,9 +76,7 @@ def test_empty_index_is_safe(index):
 
 @pytest.fixture
 def resources(skills_dir):
-    from mcp_school.skills import PackResources
-
-    return PackResources(skills_dir, load_skills(skills_dir))
+    return build_pack_resources(skills_dir)
 
 
 @pytest.mark.unit
@@ -122,8 +124,8 @@ def test_listing_never_walks_the_disk_after_startup(skills_dir, monkeypatch):
 
     from mcp_school.uris import Catalogue
 
-    skills = load_skills(skills_dir)
-    resources = PackResources(skills_dir, skills)
+    skills = load_all_skills(skills_dir)
+    resources = build_pack_resources(skills_dir)
     catalogue = Catalogue(SkillIndex(skills), resources)
 
     def forbidden(*_args, **_kwargs):
@@ -145,6 +147,112 @@ def test_a_dot_directory_above_the_catalogue_hides_nothing(tmp_path):
     root = tmp_path / ".cache" / "skills"
     root.mkdir(parents=True)
     _build_tree(root)
-    resources = PackResources(root, load_skills(root))
+    resources = build_pack_resources(root)
     assert "shared/guide.md" in resources.files("deepsource")
     assert resources.read("deepsource", "shared/guide.md") == "shared guidance\n"
+
+
+@pytest.mark.unit
+def test_a_skill_carries_its_library_source_and_kind_as_tags(tmp_path):
+    """The pack is the library; source and "skill" ride along with any extras."""
+    skill_dir = tmp_path / "loki"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("---\nname: loki\ndescription: d\n---\n")
+    skills = load_skills(
+        [skill_dir],
+        pack="grafana",
+        source="grafana-skills",
+        root=tmp_path,
+        tags=["upstream"],
+    )
+    assert skills[0].tags == frozenset(
+        {"grafana", "grafana-skills", "skill", "upstream"}
+    )
+
+
+@pytest.mark.unit
+def test_two_sources_can_serve_pack_files_into_one_library(tmp_path):
+    """Several sources can join one library; files() concatenates their roots."""
+    root_a, root_b = tmp_path / "a", tmp_path / "b"
+    root_a.mkdir()
+    root_b.mkdir()
+    (root_a / "a.md").write_text("from a\n")
+    (root_b / "b.md").write_text("from b\n")
+
+    resources = PackResources()
+    resources.add("lib", root_a, ["a.md"], [])
+    resources.add("lib", root_b, ["b.md"], [])
+
+    assert resources.files("lib") == ["a.md", "b.md"]
+    assert resources.read("lib", "b.md") == "from b\n"
+
+
+@pytest.mark.unit
+def test_read_only_serves_the_harvested_list(tmp_path):
+    """The list add() was given is the contract, not anything else on disk."""
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "shared" / "guide.md").write_text("guidance\n")
+    (tmp_path / "README.md").write_text("exists, but a narrower include skips it\n")
+    (tmp_path / ".env").write_text("SECRET=1\n")
+
+    resources = PackResources()
+    resources.add("lib", tmp_path, ["shared/guide.md"], [])
+
+    assert resources.read("lib", "shared/guide.md") == "guidance\n"
+    # Both exist on disk and are neither dotfiles-inside-a-skill nor traversal
+    # attempts -- only their absence from the harvested list refuses them.
+    assert resources.read("lib", "README.md") is None
+    assert resources.read("lib", ".env") is None
+
+
+@pytest.mark.unit
+def test_read_refuses_an_unregistered_file_that_exists_on_disk(tmp_path):
+    """Pins the allow-list: an existing but never-harvested file stays unreadable,
+    the same way grafana's real `.gitkeep` placeholders do."""
+    (tmp_path / ".gitkeep").write_text("")
+
+    resources = PackResources()
+    resources.add("lib", tmp_path, [], [])
+
+    assert resources.read("lib", ".gitkeep") is None
+
+
+@pytest.mark.unit
+def test_add_refuses_a_file_that_resolves_inside_a_skill_dir(tmp_path):
+    """The defence in depth ``add()``'s docstring promises: a caller that mis-scoped
+    its own file list must not silently publish a skill's own file as a pack file."""
+    skill_dir = tmp_path / "loki"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("---\nname: loki\ndescription: d\n---\n")
+
+    resources = PackResources()
+    with pytest.raises(ValueError, match="skill directory"):
+        resources.add("lib", tmp_path, ["loki/SKILL.md"], [skill_dir])
+
+
+@pytest.mark.unit
+def test_load_skills_drops_an_empty_source_tag(tmp_path):
+    """``source=""`` must not put an empty-string tag in the set."""
+    skill_dir = tmp_path / "loki"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("---\nname: loki\ndescription: d\n---\n")
+
+    skills = load_skills([skill_dir], pack="grafana", source="", root=tmp_path)
+
+    assert "" not in skills[0].tags
+    assert skills[0].tags == frozenset({"grafana", "skill"})
+
+
+@pytest.mark.unit
+def test_read_refuses_a_registered_path_whose_target_escapes_the_root(tmp_path):
+    """The resolve + is_relative_to guard is defence in depth, kept even though
+    ``rel`` is on the harvested list -- a symlink can still point outside."""
+    root = tmp_path / "root"
+    root.mkdir()
+    (tmp_path / "outside.md").write_text("secret\n")
+    (root / "escape.md").symlink_to(tmp_path / "outside.md")
+
+    resources = PackResources()
+    resources.add("lib", root, ["escape.md"], [])
+
+    assert resources.read("lib", "escape.md") is None

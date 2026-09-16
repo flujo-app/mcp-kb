@@ -43,6 +43,9 @@ on:
     # else in this list. tests/test_packaging.py derives this from the
     # Dockerfile's own COPY lines rather than trusting the list.
     - scripts/**
+    # The config file baked into the image: it decides which sources the
+    # running server actually serves.
+    - examples/config.yaml
   workflow_dispatch:
     inputs:
       push:

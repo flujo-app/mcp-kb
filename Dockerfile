@@ -102,6 +102,9 @@ ENV PATH=/opt/venv/bin:$PATH
 COPY --from=skills /skills /skills
 # Prompts live in this repo rather than upstream, so they come from the context.
 COPY prompts /prompts
+# The catalogue the image serves: which sources join which library, and the
+# include globs over the two directories above. See examples/config.yaml.
+COPY examples/config.yaml /etc/mcp-school/config.yaml
 
 # The venv is copied to the SAME path it was created at, which is the one rule.
 # It is this project's node_modules — one self-contained directory you move
@@ -118,8 +121,8 @@ COPY prompts /prompts
 # image has.
 RUN python -c "from mcp_school.server import School"
 
-ENV SKILLS_DIR=/skills \
-    PROMPTS_DIR=/prompts \
+ENV CONFIG=/etc/mcp-school/config.yaml \
+    CACHE_DIR=/var/cache/mcp-school \
     TRANSPORT=http \
     HOST=0.0.0.0 \
     PORT=8000

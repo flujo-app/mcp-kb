@@ -3,8 +3,9 @@
 A skill is read by the model when it decides to. A prompt is picked by a person
 -- Claude Code lists them as slash commands -- who fills in a few arguments
 before the model sees anything. Different primitive, so a different module, but
-organised the way skills are: one folder per pack, ``prompts/<pack>/<name>.md``,
-scoped by the same ``SKILL_PACKS`` and ``X-Skill-Pack`` rules.
+scoped by the same pack (the library) and ``X-Skill-Pack`` rules as skills:
+``harvest.py`` finds the files per source, and this module turns them into
+prompts joined to that source's library.
 
 A file is YAML frontmatter plus a body::
 
@@ -34,6 +35,7 @@ import re
 from collections.abc import Sequence
 from pathlib import Path
 
+import frontmatter
 import yaml
 from fastmcp import FastMCP
 from fastmcp.exceptions import PromptError
@@ -53,6 +55,7 @@ class FilePrompt(Prompt):
     """One prompt file, rendered by substituting its placeholders."""
 
     pack: str
+    source: str = ""
     template: str
     defaults: dict[str, str] = Field(default_factory=dict)
 
@@ -75,29 +78,43 @@ class FilePrompt(Prompt):
         return PLACEHOLDER.sub(lambda m: values.get(m.group(1), ""), self.template)
 
 
-def _split(text: str) -> tuple[dict, str] | None:
-    """Frontmatter and body, or None when there is no frontmatter block."""
-    if not text.startswith("---"):
-        return None
-    _, _, rest = text.partition("---")
-    block, sep, body = rest.partition("\n---")
-    if not sep:
-        return None
-    meta = yaml.safe_load(block) or {}
-    return (meta if isinstance(meta, dict) else {}), body.lstrip("\n")
+def _split(text: str) -> tuple[dict, str]:
+    """Frontmatter and body, raising ValueError when there is no frontmatter block.
+
+    ``frontmatter.loads`` returns empty metadata both for "no block" and for an
+    "empty block" (``---\\n---\\nbody``) -- the latter is valid, so absence is
+    told apart by comparing the stripped content back against the stripped
+    whole text: only "no block at all" (including an unterminated one, which
+    the library also parses as empty metadata over the whole text) leaves them
+    equal. ``.content`` is ``rstrip``-ped by the library, which would silently
+    drop a template's trailing newline; the body is re-sliced from the original
+    text by length instead of by ``str.index``, which would find the first
+    occurrence of the content anywhere -- including inside the frontmatter
+    block itself, when the body text happens to recur there -- so a LogQL line
+    like ``|= "error"\\n`` renders exactly as written.
+    """
+    post = frontmatter.loads(text)
+    if post.metadata == {} and post.content.strip() == text.strip():
+        raise ValueError("no YAML frontmatter")
+    meta = post.metadata if isinstance(post.metadata, dict) else {}
+    if not post.content:
+        return meta, ""
+    start = len(text.rstrip()) - len(post.content)
+    return meta, text[start:]
 
 
-def load_prompt(path: Path, pack: str) -> FilePrompt:
+def load_prompt(
+    path: Path, pack: str, *, source: str = "", tags: Sequence[str] = ()
+) -> FilePrompt:
     """Parse one prompt file, raising ValueError on anything malformed.
 
-    An undeclared placeholder is an error rather than an empty substitution: it
-    is almost always a typo, and rendered blank it produces a prompt that reads
-    fine and asks the model for the wrong thing.
+    ``pack`` is the library this prompt joins; ``source`` and ``tags`` (the
+    library's tags plus the source's, concatenated by the caller) become part
+    of every prompt's own tags. An undeclared placeholder is an error rather
+    than an empty substitution: it is almost always a typo, and rendered blank
+    it produces a prompt that reads fine and asks the model for the wrong thing.
     """
-    split = _split(path.read_text(encoding="utf-8"))
-    if split is None:
-        raise ValueError("no YAML frontmatter")
-    meta, body = split
+    meta, body = _split(path.read_text(encoding="utf-8"))
 
     arguments: list[PromptArgument] = []
     defaults: dict[str, str] = {}
@@ -124,29 +141,28 @@ def load_prompt(path: Path, pack: str) -> FilePrompt:
         name=f"{pack}_{path.stem}",
         description=" ".join(str(meta.get("description", "")).split()) or None,
         arguments=arguments,
-        tags={pack},
+        tags={t for t in (pack, source, "prompt", *tags) if t},
         pack=pack,
+        source=source,
         template=body,
         defaults=defaults,
     )
 
 
-def load_prompts(base: Path, packs: list[str] | None = None) -> list[FilePrompt]:
-    """Every prompt under ``base``, as ``<pack>/<name>.md``.
+def load_prompts(
+    files: Sequence[Path], *, pack: str, source: str, tags: Sequence[str] = ()
+) -> list[FilePrompt]:
+    """Every prompt file ``harvest`` already found for one source, joined to ``pack``.
 
-    A broken file is logged and skipped rather than raised: a bad prompt must not
-    take the skills down with it. ``tests/test_prompts.py`` loads every shipped
-    prompt strictly, so this only ever fires for a file mounted in at runtime.
+    ``pack`` is the library the prompts join. A broken file is logged and
+    skipped rather than raised: a bad prompt must not take the skills down with
+    it. ``tests/test_prompts.py`` loads every shipped prompt strictly, so this
+    only ever fires for a file mounted in at runtime.
     """
-    if not base.is_dir():
-        return []
     prompts: list[FilePrompt] = []
-    for path in sorted(base.glob("*/*.md")):
-        pack = path.parent.name
-        if packs and pack not in packs:
-            continue
+    for path in sorted(files):
         try:
-            prompts.append(load_prompt(path, pack))
+            prompts.append(load_prompt(path, pack, source=source, tags=tags))
         except (OSError, ValueError, yaml.YAMLError) as exc:
             log.warning("skipping prompt %s: %s", path, exc)
     return prompts

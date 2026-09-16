@@ -63,6 +63,7 @@ class CatalogueProvider(Provider):
                 name=entry.name,
                 description=entry.description,
                 mime_type=entry.mime_type,
+                tags=set(entry.tags),
                 # Listing rows are addresses, not content. The body is fetched
                 # when the URI is actually read; putting it here would read the
                 # whole catalogue off disk to answer "what is there?".

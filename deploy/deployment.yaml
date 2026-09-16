@@ -28,9 +28,9 @@ spec:
         imagePullPolicy: Always
         # No auth by design: every skill served here is public markdown already
         # on GitHub, and the server has no write path and no credentials.
-        # SKILL_PACKS hard-scopes an instance to a subset of packs — deploy a
-        # second copy with SKILL_PACKS=n8n to give an n8n agent a catalogue it
-        # cannot widen. Unset here: this instance serves everything.
+        # A config that lists fewer sources hard-scopes an instance — deploy a
+        # second copy with a config naming only n8n to give an n8n agent a
+        # catalogue it cannot widen. The baked-in image config serves everything.
         ports:
         - name: http
           containerPort: 8000
