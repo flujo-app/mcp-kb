@@ -3,9 +3,9 @@
 A git source is a repository read at a ref. It is cloned once -- bare, and
 shallow wherever the transport allows one -- into ``<cache>/git/<name>``, the
 ref is resolved to a commit, and that commit's tree is exported into
-``<cache>/src/<name>``. Everything downstream sees a plain directory, exactly
-as a ``file://`` source hands it one; nothing about the clone, the cache or
-the word "git" reaches a URI, a listing row or a resource body.
+``<cache>/src/<name>/<commit>``. Everything downstream sees a plain directory,
+exactly as a ``file://`` source hands it one; nothing about the clone, the
+cache or the word "git" reaches a URI, a listing row or a resource body.
 
 Three things this module is careful about, each for a reason:
 
@@ -13,17 +13,25 @@ Three things this module is careful about, each for a reason:
   cannot move, so there is nothing to ask. A branch, a tag or a default HEAD
   costs exactly one ``list_heads`` against the remote per check -- the cheapest
   question git has, and far cheaper than a fetch.
-- **Nothing is written into the cache in place.** The clone and the export are
-  both built under a ``.tmp`` sibling and renamed on, so a crash halfway
-  through leaves no tree that the next start would read as complete. The
-  exported commit is written *inside* the temporary tree before the rename,
-  which is what makes "this directory is complete, and it holds that commit"
-  one fact rather than two.
+- **An export is never written where one is being served.** Each commit gets
+  its own directory, built under a dot-prefixed sibling and renamed on in one
+  step. A refresh therefore adds a tree rather than replacing one, so a
+  snapshot built against the old export goes on reading it for as long as a
+  request is in flight, and a crash can only leave an unreferenced work
+  directory. ``_collect`` sweeps those, and the exports nothing can still be
+  reading, on the next pass.
 - **A token is a reference, never a value on disk.** Credentials are resolved
   from the environment into ``RemoteCallbacks`` at the moment of the call. The
-  URL saved as the clone's remote is the one from the config, so nothing that
-  lands under the cache -- or in a log line, or in an error -- carries the
+  URL saved as the clone's remote is the one from the config -- which
+  ``GitSource`` refuses to accept with a credential embedded in it -- so
+  nothing that lands under the cache, in a log line or in an error carries the
   secret.
+
+One backend-visible difference worth knowing: a symlink in a repository is
+exported as a regular file holding the link's target as its text, because
+fsspec's ``GitFileSystem`` does not recreate links. It escapes nothing, but the
+same tree behind ``file://`` is harvested with the link resolved and then
+excluded by the containment guard, so the two backends serve it differently.
 
 Read-only throughout: a source is fetched from and never pushed to, and the
 working copy that would let anything write back is never created.
@@ -31,9 +39,11 @@ working copy that would let anything write back is never created.
 
 from __future__ import annotations
 
+import contextlib
 import re
 import shutil
-from pathlib import Path
+import time
+from pathlib import Path, PurePosixPath
 
 import pygit2
 from fsspec.implementations.git import GitFileSystem
@@ -41,9 +51,21 @@ from fsspec.implementations.git import GitFileSystem
 from ..config import ConfigError, GitSource
 from .errors import SourceError
 
-# Written at the root of an export, naming the commit it holds. Hidden, so
-# harvest.py's dot-file rule keeps it out of every listing by itself.
+# Written at the root of an export: the commit it holds, then how many files it
+# took. Hidden, so harvest.py's dot-file rule keeps it out of every listing by
+# itself.
 COMMIT_FILE = ".mcp-school-commit"
+
+# A directory under <cache>/src/<name>/ that is not an export -- one being
+# built, or one on its way out. Neither prefix can be mistaken for a commit.
+WORK_PREFIX = ".tmp-"
+DISCARD_PREFIX = ".discard-"
+
+# How long an export the current one superseded is kept beyond the newest of
+# them. A request in flight is still reading the tree the pre-swap snapshot was
+# built against and nothing down here can know when the last of those finishes,
+# so the collection waits out anything that could still be running.
+GRACE_SECONDS = 900
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
@@ -64,19 +86,29 @@ def materialise_git(source: GitSource, cache: Path) -> Path:
 
 
 def fingerprint_git(source: GitSource, cache: Path, root: Path) -> dict:
-    """The exported commit, and what ``ref`` points at on the remote right now.
+    """The exported commit and its extent, plus what ``ref`` points at right now.
 
     Two different commits mean the export is behind the remote, which is
     exactly when ``School.refresh`` should rebuild -- and the same two mean it
-    is not, however long ago the clone happened. ``root`` is the harvest root,
-    which ``subdirectory`` may have moved below the export; the export root is
-    known from the cache layout, so it is read from there directly.
+    is not, however long ago the clone happened. ``files`` is what makes the
+    export's own integrity part of the answer: a tree that lost files since it
+    was written has moved as surely as the remote has, and a rebuild is what
+    puts it back.
+
+    Read from ``root`` rather than from the cache layout, because an export is
+    keyed by its commit: the fingerprint has to describe the tree *this record*
+    is served from, not whichever one happens to be newest.
     """
-    del root
-    exported = _exported(cache / "src" / source.name)
+    export = _export_root(source, root)
+    exported = _exported(export)
     if exported is None:
         raise SourceError(f"{source.name}: nothing exported under the cache")
-    return {"commit": exported, "ref": source.ref, "remote": _tip(source, cache)}
+    return {
+        "commit": exported[0],
+        "files": _count(export),
+        "ref": source.ref,
+        "remote": _tip(source, cache),
+    }
 
 
 def resolve(source: GitSource, cache: Path) -> str:
@@ -223,8 +255,14 @@ def _tip(source: GitSource, cache: Path) -> str:
     repo, _ = _repository(source, cache)
     remote = _remote(source, repo)
     try:
-        remote.connect(callbacks=_callbacks(source))
-        heads = {head.name: str(head.oid) for head in remote.list_heads()}
+        # The callbacks go to list_heads, not to a connect() in front of it:
+        # list_heads re-connects unconditionally and with callbacks=None unless
+        # it is given some, which silently discards a credentialed handshake
+        # made on the line above -- and costs a second round trip to do it.
+        heads = {
+            head.name: str(head.oid)
+            for head in remote.list_heads(callbacks=_callbacks(source))
+        }
     except pygit2.GitError as exc:
         raise SourceError(f"{source.name}: cannot reach {source.url}: {exc}") from exc
     for name in wanted:
@@ -237,20 +275,23 @@ def _tip(source: GitSource, cache: Path) -> str:
 
 
 def _export(source: GitSource, cache: Path, bare: str, commit: str) -> Path:
-    """``commit``'s tree at ``<cache>/src/<name>``, built aside and renamed on.
+    """``commit``'s tree at ``<cache>/src/<name>/<commit>``, renamed in whole.
 
-    An export already holding this commit is left exactly as it is. A commit is
-    its tree, so rewriting it would produce the same bytes -- while deleting
-    and recreating the directory underneath a snapshot that is serving from it
-    would, for the length of the rebuild, take those files away from readers.
+    An export already holding this commit is left exactly as it is: a commit is
+    its tree, so rewriting it would produce the same bytes. Every other commit
+    gets a directory of its own, which is what keeps a refresh from writing
+    over the tree a live snapshot is serving -- the record points at the new
+    path and the old one is left for ``_collect``.
     """
-    dest = cache / "src" / source.name
-    if _exported(dest) == commit:
+    home = cache / "src" / source.name
+    dest = home / commit
+    if _complete(dest, commit):
+        _collect(home, dest)
         return dest
 
-    tmp = dest.with_name(dest.name + ".tmp")
+    home.mkdir(parents=True, exist_ok=True)
+    tmp = home / (WORK_PREFIX + commit)
     shutil.rmtree(tmp, ignore_errors=True)
-    dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         fs = GitFileSystem(path=bare, ref=commit, skip_instance_cache=True)
         fs.get("", str(tmp), recursive=True)
@@ -258,18 +299,99 @@ def _export(source: GitSource, cache: Path, bare: str, commit: str) -> Path:
         shutil.rmtree(tmp, ignore_errors=True)
         raise SourceError(f"{source.name}: export of {commit} failed: {exc}") from exc
 
-    # An empty tree exports no directory at all, and the stamp goes in before
-    # the rename so a complete export is never one without it.
+    # An empty tree exports no directory at all, and the stamp goes in last and
+    # *inside* tmp: the rename that publishes the export is the only thing that
+    # creates <commit>/, so the directory never exists half built.
     tmp.mkdir(parents=True, exist_ok=True)
-    (tmp / COMMIT_FILE).write_text(f"{commit}\n", encoding="utf-8")
-    shutil.rmtree(dest, ignore_errors=True)
+    (tmp / COMMIT_FILE).write_text(f"{commit}\n{_count(tmp)}\n", encoding="utf-8")
+    if dest.exists():
+        # Incomplete, or the short-circuit above would have taken it. Nothing
+        # is serving it, and rename refuses a destination that is there.
+        _discard(dest)
     tmp.rename(dest)
+    _collect(home, dest)
     return dest
 
 
-def _exported(dest: Path) -> str | None:
-    """The commit the export at ``dest`` holds, or None when there is no export."""
+def _export_root(source: GitSource, root: Path) -> Path:
+    """The export ``root`` lies in -- itself, unless ``subdirectory`` moved it."""
+    for _ in PurePosixPath(source.subdirectory or "").parts:
+        root = root.parent
+    return root
+
+
+def _complete(dest: Path, commit: str) -> bool:
+    """Whether ``dest`` is an export of ``commit`` with all of it still present.
+
+    Two facts, deliberately: the stamp names the commit, and the tree still
+    holds the number of files that export wrote. A stamp on its own only proves
+    that an export once started here. An interrupted delete leaves one behind,
+    and reusing that tree is how a source goes on reporting ``ok`` while
+    serving nothing at all.
+    """
+    exported = _exported(dest)
+    return exported is not None and exported == (commit, _count(dest))
+
+
+def _count(dest: Path) -> int:
+    """Regular files in the export at ``dest``, its own stamp apart."""
+    stamp = dest / COMMIT_FILE
+    return sum(1 for p in dest.rglob("*") if p != stamp and p.is_file())
+
+
+def _exported(dest: Path) -> tuple[str, int] | None:
+    """The commit and file count the export at ``dest`` claims, or None."""
     try:
-        return (dest / COMMIT_FILE).read_text(encoding="utf-8").strip()
-    except OSError:
+        commit, _, count = (
+            (dest / COMMIT_FILE).read_text(encoding="utf-8").partition("\n")
+        )
+        return commit.strip(), int(count)
+    except (OSError, ValueError):
         return None
+
+
+def _collect(home: Path, keep: Path) -> None:
+    """Drop the exports and work trees nothing can still be reading.
+
+    ``keep`` is the export just made current. The newest of the others is kept
+    unconditionally -- it is the one the live snapshot was built against, and
+    it stays whatever its age, because a source that has not moved in a month
+    is still being served from the tree it exported a month ago. The rest go
+    once ``GRACE_SECONDS`` have passed, which bounds the cache at the commits a
+    source moved through recently instead of every commit it ever saw.
+
+    Best effort: a cache that cannot be tidied is not a reason to fail a build.
+    """
+    with contextlib.suppress(OSError):
+        exports = sorted(
+            (p for p in home.iterdir() if p != keep and SHA.match(p.name)),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        cutoff = time.time() - GRACE_SECONDS
+        doomed = [p for p in exports[1:] if p.stat().st_mtime < cutoff]
+        doomed += [
+            p
+            for p in home.iterdir()
+            if p.name.startswith((WORK_PREFIX, DISCARD_PREFIX))
+        ]
+        for path in doomed:
+            _discard(path)
+
+
+def _discard(path: Path) -> None:
+    """Delete ``path``, taking it out of the commit-named space first.
+
+    A rename is atomic where an ``rmtree`` is not. Interrupt the delete and
+    what is left is a ``.discard-`` directory nothing will ever read again,
+    rather than a truncated tree sitting at the name of a commit some later
+    export would otherwise trust.
+    """
+    if path.name.startswith(DISCARD_PREFIX):
+        shutil.rmtree(path, ignore_errors=True)
+        return
+    grave = path.with_name(DISCARD_PREFIX + path.name)
+    shutil.rmtree(grave, ignore_errors=True)
+    with contextlib.suppress(OSError):
+        path.rename(grave)
+        shutil.rmtree(grave, ignore_errors=True)
