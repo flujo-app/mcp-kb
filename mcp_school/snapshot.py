@@ -31,8 +31,9 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import harvest
-from .config import Config, Source
+from .config import Config, Source, WebdavSource
 from .index import PromptRow, SkillRow, SourceRecord, now
+from .live import Revalidator, is_live
 from .prompts import FilePrompt, load_prompts
 from .skills import PackResources, Skill, SkillIndex, load_skills
 from .sources import SourceError, fingerprint, materialise
@@ -59,6 +60,20 @@ class Snapshot:
     catalogue: Catalogue
     prompts: tuple[FilePrompt, ...]
     status: dict[str, dict] = field(default_factory=dict)
+    # The live sources of this generation, or None when no source is live.
+    # Built here and retired here: a refresh exports a source to a new
+    # directory, so a revalidator that outlived its snapshot would go on
+    # writing into the tree nothing is serving.
+    live: Revalidator | None = None
+
+    def revalidate(self, path: Path) -> None:
+        """Bring ``path`` level with its server, if a live source owns it."""
+        if self.live is not None:
+            self.live.revalidate(path)
+
+    def stats(self, name: str) -> dict:
+        """What live reads of ``name`` have done since this snapshot was built."""
+        return {} if self.live is None else self.live.stats(name)
 
 
 def build_source(config: Config, source: Source, cache: Path) -> SourceRecord:
@@ -142,8 +157,12 @@ def build_snapshot(
     written is logged and skipped by ``load_prompts``, so it simply stops being
     served rather than taking the source down.
     """
+    live_sources = _live_sources(config, records)
+    revalidator = Revalidator(live_sources) if live_sources else None
+    revalidate = None if revalidator is None else revalidator.revalidate
+
     skills: list[Skill] = []
-    resources = PackResources()
+    resources = PackResources(revalidate)
     prompts: list[FilePrompt] = []
     status: dict[str, dict] = {}
 
@@ -168,6 +187,7 @@ def build_snapshot(
             pack=record.library,
             source=record.name,
             tags=[*lib.tags, *source.tags],
+            live=is_live(source),
         )
         prompts += loaded
         status[source.name] = {
@@ -178,6 +198,10 @@ def build_snapshot(
             "files": len(record.files),
             "built": record.built,
             "fingerprint": record.fingerprint,
+            # Config, so it is here rather than in the counters /health merges
+            # in: an operator has to be able to see that a source is live even
+            # before anything has read one of its files.
+            **({"live": True} if is_live(source) else {}),
             # Only a stale record carries one, and an operator reading /health
             # needs to see why what they are being served stopped moving.
             **({"error": record.error} if record.error else {}),
@@ -189,10 +213,31 @@ def build_snapshot(
         built=now(),
         index=index,
         resources=resources,
-        catalogue=Catalogue(index, resources),
+        catalogue=Catalogue(index, resources, revalidate),
         prompts=tuple(prompts),
         status=status,
+        live=revalidator,
     )
+
+
+def _live_sources(
+    config: Config, records: dict[str, SourceRecord]
+) -> list[tuple[WebdavSource, Path]]:
+    """Every live source that has a tree, paired with the tree it is served from.
+
+    Taken from the records rather than from the cache layout, for the same
+    reason ``fingerprint`` is: an export is keyed by its version, and the one
+    to revalidate into is the one *this* snapshot serves.
+    """
+    found = []
+    for source in config.sources:
+        record = records.get(source.name)
+        if not is_live(source) or record is None:
+            continue
+        if record.status not in SERVABLE or record.root is None:
+            continue
+        found.append((source, Path(record.root)))
+    return found
 
 
 def stale(record: SourceRecord, error: str) -> SourceRecord:

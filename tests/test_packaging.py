@@ -3,7 +3,9 @@
 Two questions asked from opposite ends, and they drift apart quietly.
 
 *What rebuilds the image* is `image.yml`'s `paths:` filter; *what is in the
-image* is the Dockerfile's COPY lines and the wheel. A file that the Dockerfile
+image* is the Dockerfile's COPY lines and the wheel — and what is in the wheel
+is the `packages` list, which setuptools takes literally and which a test that
+only reads it back cannot check. A file that the Dockerfile
 copies but the filter does not watch changes the image and builds nothing —
 `:latest` then silently keeps serving the old build. `scripts/requirements.py`
 is exactly that shape: it is not in the wheel, but it decides which
@@ -15,8 +17,11 @@ expensive mistake it replaced — the runner reinstalling every dependency out o
 the wheel the builder had just built — reads as perfectly ordinary Dockerfile.
 """
 
+import os
 import pathlib
 import re
+import shutil
+import subprocess
 import sys
 import tomllib
 
@@ -154,8 +159,83 @@ def test_the_pygit2_floor_has_the_api_the_git_source_calls():
     assert _version(data["project"]["requires-python"].lstrip(">=")) >= (3, 11)
 
 
+def test_the_webdav4_floor_is_the_one_the_suite_was_run_against():
+    """0.11 is a *tested* floor, not a known minimum.
+
+    Nothing here can tell when `ls(detail=True)` started passing the ETag
+    through, and the ETag is the whole of how a WebDAV source decides whether a
+    file moved. 0.11.0 is both the newest release and the version the suite
+    runs against, so CI resolving to newest resolves to what was tested —
+    lowering the floor means proving the lower one works, not guessing.
+    """
+    data = tomllib.loads(PYPROJECT.read_text())
+    pin = next(d for d in data["project"]["dependencies"] if d.startswith("webdav4"))
+    assert _version(pin.rsplit(">=", 1)[1]) >= (0, 11)
+    assert "[fsspec]" in pin, "WebdavFileSystem comes from the extra, not the core"
+
+
 def _version(text: str) -> tuple[int, ...]:
     return tuple(int(part) for part in text.split("."))
+
+
+# --------------------------------------------------------------------------
+# What is in the wheel
+# --------------------------------------------------------------------------
+
+
+def test_every_package_in_the_tree_is_declared():
+    """`packages` is a literal list, and a subpackage is not implied by it.
+
+    `mcp_school.sources` ships only because setuptools_scm's file finder sweeps
+    the checkout, which a build from an exported tarball has no way to do — so
+    the list has to name every package itself, and nothing but this notices
+    when a new one is added.
+    """
+    data = tomllib.loads(PYPROJECT.read_text())
+    declared = set(data["tool"]["setuptools"]["packages"])
+    found = {
+        str(init.parent.relative_to(REPO)).replace("/", ".")
+        for init in REPO.glob("mcp_school/**/__init__.py")
+    }
+    assert found, "no package found in the tree — this test proves nothing"
+    assert found == declared
+
+
+@pytest.mark.integration
+def test_the_built_wheel_imports_with_no_checkout_to_sweep(tmp_path):
+    """The end of the argument: build it, install it, import it.
+
+    Built from a copy with no `.git`, because that is the case the file finder
+    cannot rescue — and installed into a directory of its own, so what imports
+    is the wheel's `mcp_school` and never this repository's.
+    """
+    source = tmp_path / "src"
+    shutil.copytree(
+        REPO,
+        source,
+        ignore=shutil.ignore_patterns(
+            ".git", "dist", "build", "*.egg-info", "__pycache__", ".*_cache"
+        ),
+    )
+    env = {**os.environ, "SETUPTOOLS_SCM_PRETEND_VERSION": "0.0.0"}
+    _run([sys.executable, "-m", "build", "--wheel", "--no-isolation"], source, env)
+    wheel = next((source / "dist").glob("*.whl"))
+
+    installed = tmp_path / "installed"
+    _run(
+        [sys.executable, "-m", "pip", "install", "--no-deps", "-t", str(installed), str(wheel)],
+        tmp_path,
+        env,
+    )
+
+    env["PYTHONPATH"] = os.pathsep.join([str(installed), env.get("PYTHONPATH", "")])
+    _run([sys.executable, "-c", "from mcp_school.server import School"], tmp_path, env)
+
+
+def _run(command, cwd, env):
+    done = subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True)
+    assert done.returncode == 0, f"{command[2:]} failed:\n{done.stdout}\n{done.stderr}"
+    return done
 
 
 # --------------------------------------------------------------------------

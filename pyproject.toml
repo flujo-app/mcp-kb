@@ -36,6 +36,13 @@ dependencies = [
   # and a lower floor resolves to one of those and dies with an AttributeError.
   # It is also the first release to require 3.11, which sets requires-python.
   "pygit2>=1.19",
+  # webdav sources. The fsspec extra is what gives WebdavFileSystem; webdav4
+  # brings httpx<1, which coexists with FastMCP's httpx2. 0.11 is the version
+  # the suite is actually run against -- a tested floor, not a known-minimum:
+  # nothing here can verify when ls(detail=True) started passing the ETag
+  # through, and CI resolves to the newest either way. Lower it only with a
+  # run that proves the lower one works.
+  "webdav4[fsspec]>=0.11",
 ]
 
 [project.optional-dependencies]
@@ -53,10 +60,18 @@ test = [
   "pytest-asyncio",
   "ruff",
   "uvicorn",
+  # tests/test_packaging.py builds a wheel out of a checkout with no .git and
+  # imports from it — the one way to catch a package the metadata forgot.
+  "build",
+  "setuptools_scm",
   # tests/test_refresh.py drives the ASGI app directly. FastMCP pulls in httpx2,
   # not httpx, so this has to be declared or the suite only passes where
   # something else happened to install it.
   "httpx",
+  # tests/webdav_server.py runs a real WebDAV server that demands Basic auth —
+  # imported directly, so declared here or CI fails where the pod passed.
+  "wsgidav",
+  "cheroot",
 ]
 
 [build-system]
@@ -75,7 +90,13 @@ mcp-school = "mcp_school.main:main"
 [tool.setuptools_scm]
 
 [tool.setuptools]
-packages = ["mcp_school"]
+# Every package, spelled out. setuptools takes this list literally and implies
+# no subpackage from it; a subpackage arrives anyway only because
+# setuptools_scm installs a file finder that sweeps everything under version
+# control, and a build from an exported tarball has no such checkout to sweep.
+# tests/test_packaging.py holds this list to the tree and then proves the built
+# wheel imports with no .git present.
+packages = ["mcp_school", "mcp_school.sources"]
 
 [tool.pytest.ini_options]
 minversion = "6.0"

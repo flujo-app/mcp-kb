@@ -60,7 +60,8 @@ def patterns(kind: str, include: Include) -> tuple[str, ...]:
     return tuple(explicit) if explicit is not None else DEFAULTS[kind]
 
 
-def _hidden(rel: Path) -> bool:
+def hidden(rel: Path) -> bool:
+    """Whether a path relative to a source root is one this project ignores."""
     return any(
         part.startswith(".") and part not in CONVENTIONAL_DOTDIRS for part in rel.parts
     )
@@ -82,7 +83,7 @@ def files(root: Path, kind: str, include: Include) -> list[Path]:
             target = hit.resolve()
             if not target.is_file() or not target.is_relative_to(base):
                 continue
-            if _hidden(target.relative_to(base)):
+            if hidden(target.relative_to(base)):
                 continue
             found.add(target)
     return sorted(found)

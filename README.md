@@ -121,6 +121,7 @@ sources:
 | `file://` | a directory on this machine, served in place — must be absolute (`file:///path`) |
 | `git+https://`, `git+http://`, `git+file://` | a git remote, cloned bare and shallow |
 | `github://org/repo` | shorthand for `git+https://github.com/org/repo.git` |
+| `webdav+https://`, `webdav+http://` | a WebDAV folder — Nextcloud above all — copied into the cache |
 
 `ref` is a branch, tag or commit; pin a commit and an image is reproducible, leave
 it unset and the source tracks the remote's default branch. `subdirectory` narrows
@@ -141,6 +142,51 @@ from 190 places — adds those directories to `include.files`, and they are serv
 
 A git source is cloned once and re-exported on its `refresh` interval (`30s`, `5m`,
 `1h`); left unset, it is read once at boot and only rebuilt on restart.
+
+### A WebDAV folder, and `cache: live`
+
+The URL *is* the folder, so a Nextcloud share is the path you see in its web UI
+under `remote.php/dav/files/<user>/`. `auth` is required — WebDAV has no useful
+anonymous mode — and the password is an `{env:}` reference to a Nextcloud **app
+password**, never the account's own:
+
+```yaml
+- name: notes
+  url: webdav+https://cloud.example.com/remote.php/dav/files/drk/Skills
+  auth:
+    username: drk
+    password: {env: NEXTCLOUD_APP_PASSWORD}
+  cache: live
+  refresh: 5m
+  include:
+    skills: ["*/SKILL.md"]
+```
+
+`cache` is the dial. `snapshot`, the default, is every other mirrored source: the
+folder is copied at index time and read from disk thereafter, so a request touches
+no network at all. `cache: live` keeps that copy and revalidates a file as it is
+read — one PROPFIND for its ETag, and a download only if the ETag moved. **A file
+edited in Nextcloud is served on the next read**, with no refresh and no restart.
+
+What live mode does *not* do is notice a **new** file. One that did not exist when
+the folder was indexed has no URI, so nothing ever asks to read it — and the same
+goes for a renamed or deleted one. Nor does it refresh a skill's **description**:
+listing rows come from the harvest, so an edited description appears when the
+source is rebuilt. That is what `refresh: 5m` above is for, and `POST /reindex`
+forces it now. Live mode is for the bodies of the files that are already there.
+
+A server that stops answering is not an outage: a revalidation that fails is logged
+and the read is served from the copy on disk. A server that has gone *quiet* rather
+than refused — accepting connections and never replying — costs one read a bounded
+timeout, and that source is then left unrevalidated for half a minute, so the reads
+behind it come straight off disk. `/health` marks such a source `cooling`, and it
+comes back by itself as soon as the server answers again.
+
+One caveat if the folder is not Nextcloud's. Revalidation is only as sharp as the
+server's ETag — Nextcloud derives one from the content, but a server that derives it
+from mtime and size can miss an edit that changed neither, and one that sends no
+ETag at all falls back to exactly that pair. `cache: snapshot` plus a `refresh`
+interval is the honest setting there.
 
 ## Configuration
 
