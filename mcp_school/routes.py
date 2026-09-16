@@ -26,8 +26,14 @@ def register(mcp: FastMCP, school: School) -> None:
 
     def report() -> dict:
         snapshot = school.snapshot
+        # A stale source is still being served from its last good harvest, so
+        # its library is still here; only a failed one has nothing to list.
         libraries = sorted(
-            {s["library"] for s in snapshot.status.values() if s.get("status") == "ok"}
+            {
+                s["library"]
+                for s in snapshot.status.values()
+                if s.get("status") in ("ok", "stale")
+            }
         )
         return {
             "status": "ok",

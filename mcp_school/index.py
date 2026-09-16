@@ -105,10 +105,15 @@ class SourceRecord:
     ``status``/``error`` carry a failed source the way ``sources.materialise``
     already does elsewhere -- a bad source is a value on the record, not an
     exception that would keep the other sources out of the index.
+
+    ``"stale"`` is the third state and the useful one: everything a ``"ok"``
+    record has -- a root, rows, a fingerprint -- plus the error from the
+    refresh that failed. It is served exactly like ``"ok"``, because the last
+    good harvest is still on disk and still the best answer available.
     """
 
     name: str
-    status: Literal["ok", "failed"]
+    status: Literal["ok", "failed", "stale"]
     library: str
     root: str | None
     fingerprint: dict

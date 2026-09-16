@@ -59,6 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `python-frontmatter` replaces the two hand-written frontmatter parsers in `skills.py` and `prompts.py`; every skill and prompt now also carries its library, its source and its kind as tags.
 
 ### Fixed
+- A refresh that fails now keeps the last good catalogue: the source is marked `stale` in `/health` with the error that broke it and goes on being served, where an unreachable remote used to empty it until the next successful pass.
 - `resources/list` answers in milliseconds instead of ~5 seconds: pack-level files are scanned once at startup rather than on every call, which also stops the listing from freezing every other request, health probes included, while it ran.
 - Pack-level files are no longer hidden when the skills directory itself sits under a dot-directory such as `~/.cache`.
 - `list_resources` and `read_resource` are annotated read-only; unannotated, MCP's defaults advertised them as destructive.
