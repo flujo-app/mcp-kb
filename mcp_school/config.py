@@ -21,6 +21,7 @@ file is safe to commit and to publish as a ConfigMap.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path, PurePosixPath
 from typing import Annotated
 from urllib.parse import urlsplit
@@ -38,6 +39,11 @@ from pydantic import (
 )
 
 NAME = r"^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$"
+
+# The userinfo slot of a URL, which is where a token gets smuggled in. A source
+# URL is refused for carrying one -- but pydantic quotes the offending value
+# back in its error, so the refusal has to be scrubbed before it is reported.
+USERINFO = re.compile(r"(?<=://)[^/\s'\"@]+@")
 
 
 class ConfigError(ValueError):
@@ -159,6 +165,12 @@ class GitSource(MirrorSource):
     @classmethod
     def _well_formed(cls, url: str) -> str:
         parts = urlsplit(url)
+        if parts.username or parts.password:
+            # pygit2 saves the remote URL verbatim into the clone's config, and
+            # source.url is interpolated into the errors /health publishes. A
+            # credential belongs in `auth`, where it stays a reference.
+            msg = "a source URL must not embed a credential; use auth instead"
+            raise ValueError(msg)
         if parts.scheme == "github":
             org = parts.netloc
             repo = parts.path.lstrip("/")
@@ -199,6 +211,8 @@ SCHEMES: dict[str, str] = {  # url scheme -> union tag
     "git+file": "git",
     "github": "git",
 }
+# Not read yet: the union's tags are the keys, and E6's backend registry is
+# written against this mapping rather than against a second copy of it.
 MODELS: dict[str, type[SourceBase]] = {"file": FileSource, "git": GitSource}
 
 
@@ -283,7 +297,7 @@ def load_config(path: Path) -> Config:
     except yaml.YAMLError as exc:
         raise ConfigError(f"{path} is not YAML: {exc}") from exc
     except ValidationError as exc:
-        raise ConfigError(f"{path}: {exc}") from exc
+        raise ConfigError(f"{path}: {USERINFO.sub('***@', str(exc))}") from exc
 
 
 def schema() -> dict:

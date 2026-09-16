@@ -274,3 +274,28 @@ def test_min_refresh_seconds_considers_git_sources_too(tmp_path):
     )
     config = load_config(write(tmp_path, text))
     assert config.min_refresh_seconds == 10
+
+
+def test_a_credential_embedded_in_a_url_is_refused(tmp_path):
+    """`auth` is the one way a credential reaches a remote, and this is why.
+
+    pygit2 saves the clone's remote URL verbatim under `<cache>/git/<name>/config`,
+    and `source.url` is interpolated into the errors `/health` publishes — so a
+    token in the URL is a token on disk and in a served body. Refused at the
+    door instead, and the refusal itself must not repeat it back.
+    """
+    text = "sources:\n- name: p\n  url: git+http://x-access-token:ghp-secret@h/x.git\n"
+
+    with pytest.raises(ConfigError, match="credential") as raised:
+        load_config(write(tmp_path, text))
+
+    assert "ghp-secret" not in str(raised.value)
+    assert "x-access-token" not in str(raised.value)
+
+
+def test_a_url_with_no_credential_in_it_is_reported_as_it_is(tmp_path):
+    """The redaction must not eat an ordinary URL out of an ordinary message."""
+    with pytest.raises(ConfigError, match="github://org/repo") as raised:
+        load_config(write(tmp_path, "sources:\n- name: p\n  url: github://a/b/c\n"))
+
+    assert "github://a/b/c" in str(raised.value)

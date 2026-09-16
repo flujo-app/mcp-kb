@@ -127,7 +127,13 @@ it unset and the source tracks the remote's default branch. `subdirectory` narro
 the harvest to a path within the clone — the shipped example reaches the same
 effect with `include` globs like `skills/*/SKILL.md` instead, without setting one.
 `auth` supplies HTTP Basic credentials for a private remote as `{username, password:
-{env: NAME}}` — GitHub wants `x-access-token` and a `GITHUB_TOKEN`-style PAT.
+{env: NAME}}` — GitHub wants `x-access-token` and a `GITHUB_TOKEN`-style PAT. It is
+the only way in: a URL carrying its own `user:token@` is refused, because git saves
+a remote URL to disk verbatim and the URL is quoted back in what `/health` reports.
+
+One difference between the backends worth knowing: a symlink in a git repository is
+served as a regular file holding the link's target as its text, where the same tree
+behind `file://` leaves it out. Neither reads what the link points at.
 
 A pack that factors shared material up out of its skills — penpot references `shared/*`
 from 190 places — adds those directories to `include.files`, and they are served at
@@ -167,8 +173,9 @@ so a pod restart never has to re-harvest a source that has not changed.
 revisited on its own:
 
 ```yaml
-- name: grafana-prompts
-  url: file:///prompts/grafana
+- name: superpowers-tip
+  url: github://obra/superpowers
+  ref: main
   refresh: 5m
 ```
 
@@ -189,6 +196,12 @@ The image is the whole artifact: point `CONFIG` at a config file and `CACHE_DIR`
 writable volume, and it serves whatever the config names. Kubernetes manifests, node
 placement and everything else about running this somewhere are the installer's
 concern — this repo ships none of its own.
+
+`CACHE_DIR` has to be writable by uid **65534**, which the container runs as. A Docker
+named volume inherits the directory's ownership and needs nothing; a Kubernetes
+`emptyDir` or PVC mounts root-owned, so the pod needs `securityContext.fsGroup: 65534`.
+Without it the server logs that it cannot write `index.json` and re-harvests every
+source on every restart.
 
 ## Development
 
