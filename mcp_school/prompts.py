@@ -32,8 +32,9 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import frontmatter
 import yaml
@@ -44,7 +45,9 @@ from fastmcp.server.providers.base import Provider
 from pydantic import Field
 
 from .request import requested_pack
-from .skills import SkillIndex
+
+if TYPE_CHECKING:
+    from .snapshot import Snapshot
 
 log = logging.getLogger(__name__)
 
@@ -52,8 +55,14 @@ PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
 
 class FilePrompt(Prompt):
-    """One prompt file, rendered by substituting its placeholders."""
+    """One prompt file, rendered by substituting its placeholders.
 
+    ``path`` is where it was read from. It is carried on the prompt rather than
+    only known to the harvester so a rebuild can record it in the index and
+    re-parse exactly the files a source yielded last time.
+    """
+
+    path: Path
     pack: str
     source: str = ""
     template: str
@@ -138,6 +147,7 @@ def load_prompt(
         raise ValueError(f"placeholders with no argument: {', '.join(undeclared)}")
 
     return FilePrompt(
+        path=path,
         name=f"{pack}_{path.stem}",
         description=" ".join(str(meta.get("description", "")).split()) or None,
         arguments=arguments,
@@ -174,25 +184,33 @@ class PromptProvider(Provider):
     Only the listing is overridden. FastMCP's default ``_get_prompt`` looks a
     name up in that same listing, so a prompt outside this client's scope is
     unknown to ``prompts/get`` too, not merely unlisted.
+
+    Takes one getter for the whole ``Snapshot`` rather than one per field. A
+    refresh swaps the server's snapshot with a single assignment; reading the
+    prompts and the index through two separate getters could straddle that
+    swap and mix generations (prompts from N, index from N+1) -- the one thing
+    every other reader in this codebase (``resources.py``, ``routes.py``)
+    already avoids by taking one reference and working off it.
     """
 
-    def __init__(self, prompts: Sequence[FilePrompt], index: SkillIndex):
+    def __init__(self, snapshot: Callable[[], Snapshot]):
         super().__init__()
-        self._prompts = list(prompts)
-        self._index = index
+        self._snapshot = snapshot
 
     def visible(self, pinned: str = "") -> list[FilePrompt]:
+        snapshot = self._snapshot()
+        prompts = list(snapshot.prompts)
         if not pinned:
-            return list(self._prompts)
+            return prompts
         # A prompt belongs to a pack, not a group, so a group pin sees its pack's
         # prompts -- the same rule pack-level files follow.
-        packs = {s.pack for s in self._index.visible(pinned)}
-        return [p for p in self._prompts if p.pack in packs]
+        packs = {s.pack for s in snapshot.index.visible(pinned)}
+        return [p for p in prompts if p.pack in packs]
 
     async def _list_prompts(self) -> Sequence[Prompt]:
         return self.visible(requested_pack())
 
 
-def register(mcp: FastMCP, prompts: Sequence[FilePrompt], index: SkillIndex) -> None:
-    """Publish the prompts."""
-    mcp.add_provider(PromptProvider(prompts, index))
+def register(mcp: FastMCP, snapshot: Callable[[], Snapshot]) -> None:
+    """Publish the prompts, read through ``snapshot`` on every listing."""
+    mcp.add_provider(PromptProvider(snapshot))

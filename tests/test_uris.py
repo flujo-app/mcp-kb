@@ -136,6 +136,21 @@ def test_manifest_carries_path_size_and_hash(catalogue):
 
 
 @pytest.mark.unit
+def test_manifest_excludes_a_file_reached_through_a_symlink(catalogue, skills_dir, tmp_path):
+    """A symlink out of the skill root must not leak the target's path/size/hash.
+
+    Reading it is already refused by ``_skill_file``'s resolve-then-compare, so
+    this is metadata-only, but the manifest should not advertise it either.
+    """
+    secret = tmp_path / "secret.txt"
+    secret.write_text("shh\n")
+    (skills_dir / "flatsource" / "alpha" / "leak.md").symlink_to(secret)
+
+    manifest = json.loads(catalogue.read("skill://flatsource/alpha/_manifest"))
+    assert "leak.md" not in {f["path"] for f in manifest["files"]}
+
+
+@pytest.mark.unit
 def test_pack_files_index_and_one_of_its_files(catalogue):
     index = catalogue.read("skill://deepsource/_files")
     assert "skill://deepsource/shared/guide.md" in index

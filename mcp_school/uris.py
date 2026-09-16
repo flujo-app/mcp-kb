@@ -126,7 +126,9 @@ def _manifest_json(skill: Skill) -> str:
     to disk.
     """
     files = []
-    for path in sorted(p for p in skill.path.rglob("*") if p.is_file()):
+    for path in sorted(
+        p for p in skill.path.rglob("*") if p.is_file() and not p.is_symlink()
+    ):
         digest = hashlib.sha256()
         with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(8192), b""):
@@ -168,6 +170,7 @@ class Catalogue:
     def __init__(self, index: SkillIndex, resources: PackResources):
         self._index = index
         self._resources = resources
+        self._memo: dict[tuple[str, bool], list[Entry]] = {}
 
     # -- listing ------------------------------------------------------------
 
@@ -180,7 +183,27 @@ class Catalogue:
         this server exists to avoid; ``full`` is for the clients that need it
         anyway (``fastmcp.utilities.skills`` finds skills only by scanning the
         listing for ``/SKILL.md``), not for agents.
+
+        Memoised per ``(pinned, full)``. A ``Catalogue`` is built per snapshot
+        and thrown away with it, so the memo cannot outlive the data it
+        summarises -- which is the only reason caching a listing is safe here
+        at all. The list is shared with every other caller of the same scope:
+        read it, never edit it.
         """
+        key = (pinned, full)
+        memo = self._memo.get(key)
+        if memo is not None:
+            return memo
+        entries = self._entries(pinned, full)
+        if not entries and pinned:
+            # An unknown pin yields nothing and cost nothing to find out.
+            # Memoising it would let a client grow this dict one bogus
+            # X-Skill-Pack header at a time.
+            return entries
+        self._memo[key] = entries
+        return entries
+
+    def _entries(self, pinned: str, full: bool) -> list[Entry]:
         visible = self._index.visible(pinned)
         if not visible:
             return []

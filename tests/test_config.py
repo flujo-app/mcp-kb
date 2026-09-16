@@ -4,7 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from mcp_school.config import ConfigError, EnvRef, FileSource, Include, load_config
+from mcp_school.config import (
+    Config,
+    ConfigError,
+    EnvRef,
+    FileSource,
+    Include,
+    load_config,
+)
 
 
 def write(tmp_path: Path, text: str) -> Path:
@@ -103,6 +110,52 @@ def test_a_normal_include_pattern_still_loads(tmp_path):
     )
     config = load_config(write(tmp_path, text))
     assert config.sources[0].include.files == ["shared/**"]
+
+
+def test_a_refresh_interval_in_minutes_is_seconds(tmp_path):
+    text = "sources:\n- name: a\n  url: file:///a\n  refresh: 5m\n"
+    config = load_config(write(tmp_path, text))
+    assert config.sources[0].refresh_seconds == 300
+
+
+def test_a_refresh_interval_in_hours_is_seconds(tmp_path):
+    text = "sources:\n- name: a\n  url: file:///a\n  refresh: 2h\n"
+    config = load_config(write(tmp_path, text))
+    assert config.sources[0].refresh_seconds == 7200
+
+
+def test_no_refresh_interval_means_no_refresh(tmp_path):
+    config = load_config(write(tmp_path, "sources:\n- name: a\n  url: file:///a\n"))
+    assert config.sources[0].refresh is None
+    assert config.sources[0].refresh_seconds is None
+
+
+@pytest.mark.parametrize("refresh", ["0s", "5", "5d", "-5m", "5ms", ""])
+def test_a_malformed_refresh_interval_is_a_config_error(tmp_path, refresh):
+    text = f"sources:\n- name: a\n  url: file:///a\n  refresh: '{refresh}'\n"
+    with pytest.raises(ConfigError):
+        load_config(write(tmp_path, text))
+
+
+def test_min_refresh_seconds_is_the_smallest_among_sources(tmp_path):
+    text = (
+        "sources:\n"
+        "- name: a\n  url: file:///a\n  refresh: 5m\n"
+        "- name: b\n  url: file:///b\n"
+        "- name: c\n  url: file:///c\n  refresh: 30s\n"
+    )
+    config = load_config(write(tmp_path, text))
+    assert config.min_refresh_seconds == 30
+
+
+def test_min_refresh_seconds_is_none_when_no_source_has_one(tmp_path):
+    config = load_config(write(tmp_path, "sources:\n- name: a\n  url: file:///a\n"))
+    assert config.min_refresh_seconds is None
+
+
+def test_config_constructs_from_source_model_instances_not_only_dicts():
+    config = Config(sources=[FileSource(name="a", url="file:///a")])
+    assert config.sources[0].url == "file:///a"
 
 
 def test_an_env_ref_resolves_to_a_secret(monkeypatch):

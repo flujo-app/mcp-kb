@@ -22,6 +22,7 @@ sources:
 - name: grafana-prompts
   library: grafana
   url: file:///prompts/grafana
+  refresh: 1h
   include:
     skills: []
     prompts: ["*.md"]

@@ -25,6 +25,8 @@ Both tools are hidden from a client that reads resources; see
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from fastmcp import FastMCP
 
 from .request import requested_pack
@@ -45,8 +47,13 @@ READ_ONLY = {
 }
 
 
-def register(mcp: FastMCP, catalogue: Catalogue) -> set[str]:
-    """Register the mirror tools; return their names for the listing filter."""
+def register(mcp: FastMCP, catalogue: Callable[[], Catalogue]) -> set[str]:
+    """Register the mirror tools; return their names for the listing filter.
+
+    ``catalogue`` is a getter for the same reason it is one in ``resources.py``:
+    a closure over the object would pin these tools to the generation they were
+    registered in.
+    """
 
     @mcp.tool(annotations={"title": "List skill resources", **READ_ONLY})
     def list_resources() -> list[dict]:
@@ -60,7 +67,7 @@ def register(mcp: FastMCP, catalogue: Catalogue) -> set[str]:
         This returns exactly what an MCP `resources/list` would, so a `uri` from
         here can be read with `read_resource` or with your own resource reader.
         """
-        return [entry.as_dict() for entry in catalogue.entries(requested_pack())]
+        return [entry.as_dict() for entry in catalogue().entries(requested_pack())]
 
     @mcp.tool(annotations={"title": "Read a skill resource", **READ_ONLY})
     def read_resource(uri: str) -> str:
@@ -77,7 +84,7 @@ def register(mcp: FastMCP, catalogue: Catalogue) -> set[str]:
         `references/FOO.md`; citing it does not fetch it, so fetch it only if
         you are going to use it.
         """
-        body = catalogue.read(uri, requested_pack())
+        body = catalogue().read(uri, requested_pack())
         if body is None:
             return (
                 f"No resource at '{uri}'. Call list_resources() for the indexes,"

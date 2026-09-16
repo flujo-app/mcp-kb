@@ -18,16 +18,22 @@ from pathlib import Path
 
 from ..config import Config, FileSource, Source
 from .errors import SourceError
-from .file import materialise_file
+from .file import fingerprint_file, materialise_file
 
 log = logging.getLogger(__name__)
 
-__all__ = ["SourceError", "materialise", "materialise_all"]
+__all__ = ["SourceError", "fingerprint", "materialise", "materialise_all"]
 
 
 def materialise(source: Source, cache: Path) -> Path:
     if isinstance(source, FileSource):
         return materialise_file(source, cache)
+    raise SourceError(f"{source.name}: no handler for {source.url}")  # pragma: no cover
+
+
+def fingerprint(source: Source, cache: Path, root: Path) -> dict:
+    if isinstance(source, FileSource):
+        return fingerprint_file(source, cache, root)
     raise SourceError(f"{source.name}: no handler for {source.url}")  # pragma: no cover
 
 
