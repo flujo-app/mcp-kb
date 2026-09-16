@@ -2,11 +2,18 @@
   "$defs": {
     "BasicAuth": {
       "additionalProperties": false,
-      "description": "Credentials for a remote that requires them: a git host, a WebDAV server.",
+      "description": "Credentials for a remote that requires them: a git host, a WebDAV server.\n\nThe username is usually a literal -- GitHub wants ``x-access-token`` -- so\nit takes one. But a service account's name arrives in the same secret as\nits password, and writing it out here as well is how the two drift apart\nthe day the account is recreated, so it takes an ``{env:}`` reference too.",
       "properties": {
         "username": {
-          "title": "Username",
-          "type": "string"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnvRef"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Username"
         },
         "password": {
           "$ref": "#/$defs/EnvRef"

@@ -128,7 +128,10 @@ it unset and the source tracks the remote's default branch. `subdirectory` narro
 the harvest to a path within the clone — the shipped example reaches the same
 effect with `include` globs like `skills/*/SKILL.md` instead, without setting one.
 `auth` supplies HTTP Basic credentials for a private remote as `{username, password:
-{env: NAME}}` — GitHub wants `x-access-token` and a `GITHUB_TOKEN`-style PAT. It is
+{env: NAME}}` — GitHub wants `x-access-token` and a `GITHUB_TOKEN`-style PAT. The
+username takes an `{env:}` reference too, for the common case where a service
+account's name is issued alongside its password and repeating it here is how the
+two drift apart. It is
 the only way in: a URL carrying its own `user:token@` is refused, because git saves
 a remote URL to disk verbatim and the URL is quoted back in what `/health` reports.
 
@@ -154,8 +157,8 @@ password**, never the account's own:
 - name: notes
   url: webdav+https://cloud.example.com/remote.php/dav/files/drk/Skills
   auth:
-    username: drk
-    password: {env: NEXTCLOUD_APP_PASSWORD}
+    username: {env: NEXTCLOUD_USER}      # or the literal name
+    password: {env: NEXTCLOUD_PASSWORD}
   cache: live
   refresh: 5m
   include:

@@ -162,10 +162,26 @@ class FileSource(MirrorSource):
 
 
 class BasicAuth(Strict):
-    """Credentials for a remote that requires them: a git host, a WebDAV server."""
+    """Credentials for a remote that requires them: a git host, a WebDAV server.
 
-    username: str
+    The username is usually a literal -- GitHub wants ``x-access-token`` -- so
+    it takes one. But a service account's name arrives in the same secret as
+    its password, and writing it out here as well is how the two drift apart
+    the day the account is recreated, so it takes an ``{env:}`` reference too.
+    """
+
+    username: EnvRef | str
     password: EnvRef
+
+    def user(self) -> str:
+        """The username, resolved if it is an ``{env:}`` reference.
+
+        Not a secret, and deliberately a plain ``str``: it is half of a Basic
+        auth pair and every caller hands it straight to a client.
+        """
+        if isinstance(self.username, EnvRef):
+            return self.username.resolve().get_secret_value()
+        return self.username
 
 
 class GitSource(MirrorSource):

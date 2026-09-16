@@ -219,6 +219,32 @@ def test_a_missing_env_variable_fails_before_the_first_request(
     assert webdav.requests == []
 
 
+def test_a_missing_username_variable_fails_only_its_own_source(
+    webdav, tmp_path, monkeypatch
+):
+    """The username may be an `{env:}` reference too, so it has the same way of
+    being unset -- and resolving it outside the guard would make that a plain
+    `ConfigError`, which `materialise_all` does not catch. One unset variable
+    would then abort the whole pass instead of failing the source that declared
+    it, which is the invariant every other failure here respects.
+    """
+    monkeypatch.setenv(ENV, PASSWORD)
+    monkeypatch.delenv("WEBDAV_USER", raising=False)
+    source = WebdavSource(
+        name="notes",
+        url=webdav.url,
+        auth={"username": {"env": "WEBDAV_USER"}, "password": {"env": ENV}},
+        include={"skills": ["skills/*/SKILL.md"]},
+    )
+    webdav.requests.clear()
+
+    with pytest.raises(SourceError) as raised:
+        materialise(source, tmp_path)
+
+    assert "WEBDAV_USER" in str(raised.value)
+    assert webdav.requests == []
+
+
 def test_the_password_never_lands_under_the_cache(webdav, tmp_path):
     materialise(_source(webdav), tmp_path)
 

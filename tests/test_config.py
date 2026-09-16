@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from mcp_school.config import (
+    BasicAuth,
     Config,
     ConfigError,
     EnvRef,
@@ -391,3 +392,30 @@ def _webdav(extra: str = "") -> str:
         "sources:\n- name: notes\n  url: webdav+https://cloud.example/dav/notes\n"
         "  auth:\n    username: me\n    password:\n      env: P\n" + extra
     )
+
+
+@pytest.mark.unit
+def test_a_username_can_be_a_literal_or_an_env_reference(monkeypatch):
+    """A service account's name arrives in the same secret as its password.
+
+    Writing it out in the config as well is how the two drift apart the day the
+    account is recreated, so `{env:}` has to be accepted on both halves of the
+    pair -- while GitHub's literal `x-access-token` keeps working.
+    """
+    monkeypatch.setenv("ACCOUNT", "mcp-school")
+    monkeypatch.setenv("SECRET", "hunter2")
+
+    literal = BasicAuth(username="x-access-token", password={"env": "SECRET"})
+    assert literal.user() == "x-access-token"
+
+    referenced = BasicAuth(username={"env": "ACCOUNT"}, password={"env": "SECRET"})
+    assert referenced.user() == "mcp-school"
+    assert referenced.password.resolve().get_secret_value() == "hunter2"
+
+
+@pytest.mark.unit
+def test_a_username_env_reference_that_is_unset_is_an_error(monkeypatch):
+    monkeypatch.delenv("ABSENT", raising=False)
+    auth = BasicAuth(username={"env": "ABSENT"}, password={"env": "ABSENT"})
+    with pytest.raises(ConfigError):
+        auth.user()

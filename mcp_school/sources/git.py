@@ -158,12 +158,14 @@ def _callbacks(source: GitSource) -> pygit2.RemoteCallbacks | None:
     if source.auth is None:
         return None
     try:
+        user = source.auth.user()
         password = source.auth.password.resolve().get_secret_value()
     except ConfigError as exc:
+        # Both halves can be {env:} references, so both can be unset. Outside
+        # this guard a ConfigError is not a SourceError, and one unset variable
+        # would abort the whole pass instead of failing its own source.
         raise SourceError(f"{source.name}: {exc}") from exc
-    return pygit2.RemoteCallbacks(
-        credentials=pygit2.UserPass(source.auth.username, password)
-    )
+    return pygit2.RemoteCallbacks(credentials=pygit2.UserPass(user, password))
 
 
 # -- the ref -------------------------------------------------------------------
