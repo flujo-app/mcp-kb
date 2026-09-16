@@ -1488,6 +1488,26 @@ two new fields are one line each and do not change its shape.
 
 ---
 
+### §C1.21 — An idea, not built: prompts as `prompt://` resources
+
+Weighed while designing the prompt mirror (2026-09-16), and set aside on purpose.
+
+The appeal was real. Listing prompts as resources — `prompt://grafana` an index,
+`prompt://grafana/debug-logs` the template with its argument schema, and
+`?app=nextcloud` on the URI to render it — would put prompts in the one discovery
+surface every resource-reading client already has. A model using Claude Code's
+resource tools would find them with no new tools at all. `library` and `tags` would
+filter them through the same code path as skills, and there would be two mirror
+tools rather than four.
+
+It was set aside because the protocol keeps prompts and resources apart for a
+reason. A prompt is role-tagged messages, possibly several — it can seed a
+conversation, assistant turns included — where a resource read is content. Folding
+one into the other flattens exactly what makes it a prompt. So the mirror is
+FastMCP's own `PromptsAsTools`, which keeps that shape, and prompts stay a separate
+kind. Worth revisiting only if a client appears that reads resources but will never
+call a prompt tool.
+
 ## Closing questions for Dr K
 
 Answered in the second pass: the name is `mcp-school` (§C1.16); `git+https://`

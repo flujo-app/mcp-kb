@@ -139,6 +139,9 @@ tag it chooses.
   in `tests/test_packaging.py`, because the shape they replaced — builder builds
   a wheel, runner installs it and every dependency a second time — reads as
   perfectly ordinary Dockerfile.
+- **The prompt mirror is FastMCP's `PromptsAsTools`, subclassed only to add read-only
+  annotations.** Keep it FastMCP's: a prompt is role-tagged messages, which a
+  resource or a hand-written tool would flatten to text.
 - **Do not reach for `ResourcesAsTools`, or back for `SkillsDirectoryProvider`.**
   Both enumerate every skill on every listing call — `resources/list` was 77KB
   for this catalogue before `Catalogue` replaced it with a dozen indexes.
@@ -249,14 +252,19 @@ Reads return **only** what was asked for. A skill body may cite
 keep it when changing this code.
 
 A client declares it cannot read resources with `?resources=off` or
-`X-MCP-Resources: off`, and only then is the mirror listed. It stays callable
+`X-MCP-Resources: off`, and only then is the resource mirror listed; prompts work
+the same way with `?prompts=off`. There is no protocol signal for either — prompts
+are a server capability, so a client cannot advertise using them. It stays callable
 either way: hiding a tool from a listing is presentation, refusing to run one
 would be a different and worse contract.
 
 Two ways to hard-scope, both ceilings the model cannot widen past:
 
-- **`X-Skill-Pack` header**, per client. One deployment serves many single-pack
-  agents; in n8n it is a Header Auth credential on the MCP Client Tool node.
+- **A `Scope`, per client** — `?library=` / `?tags=` or the `X-Skill-Library` /
+  `X-Skill-Tags` headers (`X-Skill-Pack` is an alias). One deployment serves many
+  narrow agents; in n8n it is a Header Auth credential on the MCP Client Tool node.
+  Every listing and read takes a `Scope` and must decide about it, so a new code
+  path cannot forget one.
   Prefer this — a second copy of the server is a whole extra pod for no reason
   a header could not solve first.
 - **A config that lists less**, per deployment. A deployment that should serve

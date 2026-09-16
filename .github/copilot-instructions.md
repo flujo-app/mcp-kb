@@ -64,9 +64,10 @@ to ignore you.
 
 ## Review priorities (highest first)
 
-1. **Scope enforcement** — `X-Skill-Pack` pins a client to one pack or group, and
-   it is a ceiling the model cannot widen past. Every `Catalogue` method takes
-   `pinned` for that reason: there is no method that can be called without
+1. **Scope enforcement** — a `Scope` (`?library=`, `?tags=`, or the
+   `X-Skill-Library` / `X-Skill-Tags` / `X-Skill-Pack` headers) narrows a client,
+   and it is a ceiling the model cannot widen past. Every `Catalogue`, `SkillIndex`
+   and `PromptProvider` read takes a `Scope` for that reason: there is no method that can be called without
    deciding about the scope. A new path that reads content without threading it
    is a finding even when it looks correct, because **filtering a listing is not
    enough** — every URI here is guessable by design, so an unfiltered read is
