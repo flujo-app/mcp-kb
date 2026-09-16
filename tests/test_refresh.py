@@ -12,6 +12,7 @@ from fastmcp.server.context import Context
 import mcp_school.server
 from mcp_school import School, snapshot
 from mcp_school.config import Config
+from mcp_school.server import _can_remember
 from tests.conftest import make_config
 
 
@@ -187,6 +188,29 @@ def test_a_source_that_keeps_failing_the_same_way_is_not_a_change(skills_dir, ca
 
 
 @pytest.mark.unit
+def test_persistence_failure_does_not_leave_records_ahead_of_the_snapshot(
+    skills_dir, cache, monkeypatch
+):
+    """M5: `_write_index` is best-effort and must run after the commit, not
+    inside it -- otherwise a raise there leaves `_records` advanced while
+    `snapshot` stays on the old generation forever.
+    """
+    school = School(make_config(skills_dir), cache)
+
+    def boom():
+        raise TypeError("boom")
+
+    monkeypatch.setattr(school, "_write_index", boom)
+
+    with pytest.raises(TypeError):
+        school.refresh(force=True)
+
+    # The swap already happened; only persisting it to disk failed.
+    assert school.generation == 1
+    assert school.snapshot.status["deepsource"]["built"] == school._records["deepsource"].built
+
+
+@pytest.mark.unit
 def test_a_snapshot_is_swapped_not_mutated(skills_dir, cache):
     school = School(make_config(skills_dir), cache)
     old = school.snapshot
@@ -279,6 +303,93 @@ async def test_the_loop_keeps_rebuilding_a_source_whose_refresh_is_due(
         assert await _until(lambda: school.generation >= 1)
 
     assert school.status["flatsource"]["status"] == "ok"
+
+
+@pytest.mark.unit
+async def test_an_unchanged_source_is_examined_once_per_interval_not_every_tick(
+    skills_dir, cache, monkeypatch
+):
+    """I1: `refresh: 1s` on an unchanged tree must mean "check once a second",
+    not "check every tick forever". The bug: `_due()` scheduled off
+    `record.built`, which only moves when a rebuild actually replaces a
+    record -- so a source that is checked and found unchanged never advances
+    it, and is due again on the very next tick, forever.
+    """
+    monkeypatch.setattr(mcp_school.server, "TICK_SECONDS", 0.02)
+    raw = {
+        "sources": [
+            {**s.model_dump(mode="json"), "refresh": "1s"}
+            for s in make_config(skills_dir).sources
+        ]
+    }
+    school = School(Config.model_validate(raw), cache)
+
+    # The fingerprint walk, not `materialise`, is the expensive step an
+    # unchanged source repeats -- `build_source` (and `materialise` with it)
+    # is only ever reached once a fingerprint actually moves.
+    real_fingerprint = mcp_school.server.fingerprint
+    calls = []
+
+    def counting_fingerprint(source, cache_dir, root):
+        calls.append(source.name)
+        return real_fingerprint(source, cache_dir, root)
+
+    monkeypatch.setattr(mcp_school.server, "fingerprint", counting_fingerprint)
+
+    async with Client(school.mcp):
+        await asyncio.sleep(1.3)  # a little over one interval, at 50 ticks/s
+
+    # ~1 interval elapsed for 2 sources: a handful of walks is right. A
+    # per-tick walk over 1.3s at TICK_SECONDS=0.02 would be ~130.
+    assert len(calls) <= 8
+    assert school.generation == 0
+
+
+@pytest.mark.unit
+async def test_a_persistently_failing_source_is_not_retried_every_tick(
+    skills_dir, cache, monkeypatch
+):
+    """I1's second face: `_same_failure` skips storing the fresh record, so a
+    source that keeps failing the same way never advances `built` either --
+    which must not turn into a per-tick retry storm once a source is remote.
+    """
+    monkeypatch.setattr(mcp_school.server, "TICK_SECONDS", 0.02)
+    raw = {"sources": [s.model_dump(mode="json") for s in make_config(skills_dir).sources]}
+    raw["sources"].append(
+        {"name": "gone", "url": f"file://{skills_dir / 'nope'}", "refresh": "1s"}
+    )
+    school = School(Config.model_validate(raw), cache)
+    seen = _counting_materialise(monkeypatch)
+
+    async with Client(school.mcp):
+        await asyncio.sleep(1.3)
+
+    assert len([n for n in seen if n == "gone"]) <= 4
+    assert school.status["gone"]["status"] == "failed"
+
+
+@pytest.mark.unit
+async def test_can_remember_is_true_only_with_a_session_header(skills_dir, cache):
+    """M3: `_can_remember()` must actually read the `mcp-session-id` header --
+    replacing its whole body with `return True` left all 206 tests green.
+    """
+    school = School(make_config(skills_dir), cache)
+
+    @school.mcp.custom_route("/can-remember", methods=["GET"])
+    async def can_remember(_request):
+        from starlette.responses import JSONResponse
+
+        return JSONResponse({"can_remember": _can_remember()})
+
+    transport = httpx.ASGITransport(app=school.mcp.http_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://school") as http:
+        without_header = await http.get("/can-remember")
+        with_header = await http.get(
+            "/can-remember", headers={"mcp-session-id": "abc123"}
+        )
+
+    assert without_header.json()["can_remember"] is False
+    assert with_header.json()["can_remember"] is True
 
 
 @pytest.mark.unit
