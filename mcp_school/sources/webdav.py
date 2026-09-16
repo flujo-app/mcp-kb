@@ -60,13 +60,17 @@ VERSION_FILE = ".mcp-school-version"
 VERSION = re.compile(r"^[0-9a-f]{64}$")
 
 
-def client(source: WebdavSource) -> WebdavFileSystem:
+def client(source: WebdavSource, *, timeout: float | None = None) -> WebdavFileSystem:
     """A client for this source, credentials resolved at the moment of building it.
 
     ``skip_instance_cache`` keeps it out of fsspec's global instance cache:
     nothing carrying a password belongs in a process-wide dictionary, and a
     fresh instance is also a fresh view of a server whose whole point is that
     it changes underneath us.
+
+    ``timeout`` is per HTTP operation and left to httpx's own default here --
+    an index-time copy of a large folder is allowed to take its time. A read
+    is not, and ``live.py`` passes one; see ``REVALIDATE_TIMEOUT``.
     """
     try:
         password = source.auth.password.resolve().get_secret_value()
@@ -74,10 +78,12 @@ def client(source: WebdavSource) -> WebdavFileSystem:
         # Config, not authentication: the variable was never set, so there is
         # nothing to ask the server and no 401 to report.
         raise SourceError(f"{source.name}: {exc}") from exc
+    opts = {} if timeout is None else {"timeout": timeout}
     return WebdavFileSystem(
         source.base_url,
         auth=(source.auth.username, password),
         skip_instance_cache=True,
+        **opts,
     )
 
 

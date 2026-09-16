@@ -170,11 +170,17 @@ edited in Nextcloud is served on the next read**, with no refresh and no restart
 
 What live mode does *not* do is notice a **new** file. One that did not exist when
 the folder was indexed has no URI, so nothing ever asks to read it — and the same
-goes for a renamed or deleted one. That is what `refresh: 5m` above is for, and
-`POST /reindex` forces it now. Live mode is for the files that are already there.
+goes for a renamed or deleted one. Nor does it refresh a skill's **description**:
+listing rows come from the harvest, so an edited description appears when the
+source is rebuilt. That is what `refresh: 5m` above is for, and `POST /reindex`
+forces it now. Live mode is for the bodies of the files that are already there.
 
-A server that stops answering is not an outage either: a revalidation that fails is
-logged and the read is served from the copy on disk.
+A server that stops answering is not an outage: a revalidation that fails is logged
+and the read is served from the copy on disk. A server that has gone *quiet* rather
+than refused — accepting connections and never replying — costs one read a bounded
+timeout, and that source is then left unrevalidated for half a minute, so the reads
+behind it come straight off disk. `/health` marks such a source `cooling`, and it
+comes back by itself as soon as the server answers again.
 
 One caveat if the folder is not Nextcloud's. Revalidation is only as sharp as the
 server's ETag — Nextcloud derives one from the content, but a server that derives it

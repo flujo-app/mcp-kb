@@ -15,11 +15,15 @@ Two quirks of the server under test:
   microseconds. The one test about the TTL turns it back on.
 """
 
+import socket
+import threading
+import time
+
 import httpx
 import pytest
 
 from mcp_school import School, live
-from mcp_school.config import Config
+from mcp_school.config import Config, WebdavSource
 from mcp_school.prompts import PromptProvider
 from tests.webdav_server import PASSWORD, USERNAME
 
@@ -185,6 +189,105 @@ def test_a_failed_revalidation_says_nothing_about_the_credentials(
     assert USERNAME not in caplog.text
 
 
+def test_a_failed_revalidation_names_the_source_once(webdav, tmp_path, caplog):
+    """fetch_file's error already carries the source, and the log line adds it:
+    `notes: revalidating … failed: notes: …` reads as two sources."""
+    school = _school(webdav, tmp_path)
+    school.catalogue.read(URI)
+    webdav.stop()
+
+    with caplog.at_level("WARNING"):
+        school.catalogue.read(URI)
+
+    assert caplog.text.count("notes:") == 1
+    assert caplog.text.count("skills/x/SKILL.md") == 1
+
+
+def test_a_server_that_hangs_is_asked_once_and_then_left_alone(
+    tmp_path, black_hole, monkeypatch, caplog
+):
+    """The measured collapse: every read paid httpx's 5s default against a 2s
+    TTL, and repeats of the *same* file paid it too.
+
+    Two things stop it. The revalidation client has a timeout well under the
+    TTL, so one read costs a bounded moment; and a failure puts the source in a
+    cooldown, so nothing after the first pays anything at all.
+    """
+    monkeypatch.setattr(live, "REVALIDATE_TIMEOUT", 0.2)
+    monkeypatch.setattr(live, "COOLDOWN_SECONDS", 60.0)
+    school = black_hole(tmp_path)
+
+    with caplog.at_level("WARNING"):
+        first = _elapsed(school, URI)
+        after = [_elapsed(school, URI) for _ in range(5)]
+        other = _elapsed(school, GUIDE)
+
+    assert "first" in school.catalogue.read(URI), "the cached copy is still served"
+    assert first < 1.0, f"one read must not cost the httpx default: {first:.2f}s"
+    assert max(after) < 0.05, f"a wedged server must cost nothing twice: {after}"
+    assert other < 0.05, "the cooldown covers the source, not the one file"
+    assert caplog.text.count("revalidating") == 1
+
+
+async def test_health_says_a_live_source_is_cooling_after_a_failure(
+    webdav, tmp_path, monkeypatch
+):
+    """An operator reading /health has to be able to tell "nothing changed"
+    from "we stopped asking"."""
+    school = _school(webdav, tmp_path)
+    school.catalogue.read(URI)
+    monkeypatch.setattr(live, "fetch_file", _wedged)
+    school.catalogue.read(URI)
+
+    transport = httpx.ASGITransport(app=school.mcp.http_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://school") as http:
+        body = (await http.get("/health")).json()
+
+    assert body["sources"]["notes"]["cooling"] is True
+
+
+def test_a_source_that_answers_again_stops_cooling(webdav, tmp_path, monkeypatch):
+    """The cooldown is a pause, not a verdict: a folder comes back by itself."""
+    monkeypatch.setattr(live, "COOLDOWN_SECONDS", 0.05)
+    school = _school(webdav, tmp_path)
+    answering = live.fetch_file
+    monkeypatch.setattr(live, "fetch_file", _wedged)
+    school.catalogue.read(URI)
+    assert school.snapshot.stats("notes")["cooling"] is True
+
+    monkeypatch.setattr(live, "fetch_file", answering)
+    time.sleep(0.1)
+    school.catalogue.read(URI)
+
+    assert "cooling" not in school.snapshot.stats("notes")
+
+
+def test_the_ttl_runs_from_the_answer_and_not_from_the_question(
+    webdav, tmp_path, monkeypatch
+):
+    """Stamped before the request but measured against elapsed time, a request
+    slower than the TTL leaves the same file due for another the instant it
+    comes back -- so a slow server is asked once per read, not once per TTL."""
+    monkeypatch.setattr(live, "TTL_SECONDS", 0.3)
+    school = _school(webdav, tmp_path)
+    school.catalogue.read(URI)
+    answering = live.fetch_file
+
+    def slow(*args, **kwargs):
+        time.sleep(0.4)
+        return answering(*args, **kwargs)
+
+    time.sleep(0.35)
+    monkeypatch.setattr(live, "fetch_file", slow)
+    school.catalogue.read(URI)
+
+    monkeypatch.setattr(live, "fetch_file", answering)
+    webdav.requests.clear()
+    school.catalogue.read(URI)
+
+    assert webdav.requests == [], "the TTL must bound a slow server too"
+
+
 # -- the machinery ------------------------------------------------------------
 
 
@@ -213,9 +316,9 @@ def test_one_client_serves_every_live_read(webdav, tmp_path, monkeypatch):
     built = []
     original = live.client
 
-    def counted(source):
+    def counted(source, **kwargs):
         built.append(source.name)
-        return original(source)
+        return original(source, **kwargs)
 
     monkeypatch.setattr(live, "client", counted)
 
@@ -262,3 +365,56 @@ def test_a_snapshot_source_reports_no_live_fields(webdav, tmp_path):
     school = _school(webdav, tmp_path, cache="snapshot")
 
     assert "live" not in school.status["notes"]
+
+
+# -- helpers -------------------------------------------------------------------
+
+
+def _wedged(*args, **kwargs):
+    """A revalidation against a server that never answers."""
+    raise TimeoutError("timed out")
+
+
+def _elapsed(school, uri: str) -> float:
+    start = time.monotonic()
+    school.catalogue.read(uri)
+    return time.monotonic() - start
+
+
+@pytest.fixture
+def black_hole(webdav, monkeypatch):
+    """A school whose revalidations go to a socket that accepts and never answers.
+
+    Not "refused", which is instant and is what the flaky-server test already
+    covers. This is the Nextcloud failure mode that costs a timeout. The folder
+    is indexed against the real server, so the copy on disk is whole and only
+    the revalidation is wedged -- which is exactly the shape of the failure:
+    every byte is already on disk and the server is what has gone quiet.
+    """
+
+    def build(tmp_path):
+        school = _school(webdav, tmp_path)
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(16)
+        accepted: list[socket.socket] = []
+
+        def accept():
+            while True:
+                try:
+                    accepted.append(listener.accept()[0])
+                except OSError:
+                    return
+
+        threading.Thread(target=accept, daemon=True).start()
+        void = WebdavSource(
+            name="notes",
+            url=f"webdav+http://127.0.0.1:{listener.getsockname()[1]}",
+            auth={"username": USERNAME, "password": {"env": ENV}},
+        )
+        answering = live.client
+        monkeypatch.setattr(live, "client", lambda _, **kwargs: answering(void, **kwargs))
+        monkeypatch.setattr(live, "TTL_SECONDS", 0.0)
+        return school
+
+    return build
