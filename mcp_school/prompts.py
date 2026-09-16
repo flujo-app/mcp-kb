@@ -42,12 +42,16 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import PromptError
 from fastmcp.prompts import Prompt, PromptArgument
 from fastmcp.server.providers.base import Provider
+from fastmcp.server.transforms import PromptsAsTools
+from fastmcp.tools.base import Tool
 from fastmcp.utilities.versions import VersionSpec
+from mcp_types import ToolAnnotations
 from pydantic import Field
 
 from .request import requested_scope
 from .scope import EVERYTHING, Scope
 from .skills import SkillIndex
+from .tools import READ_ONLY
 
 if TYPE_CHECKING:
     from .snapshot import Snapshot
@@ -263,9 +267,44 @@ class PromptProvider(Provider):
         return prompt
 
 
-def register(mcp: FastMCP, snapshot: Callable[[], Snapshot]) -> None:
-    """Publish the prompts, read through ``snapshot`` on every listing."""
+class ReadOnlyPromptsAsTools(PromptsAsTools):
+    """FastMCP's prompt tools, annotated as the read-only calls they are.
+
+    Its generated tools carry no annotations, and unannotated MCP defaults
+    advertise a tool as destructive and non-idempotent -- the same mistake the
+    resource mirror was corrected for. Only the annotations change; what the
+    tools do and return is FastMCP's.
+    """
+
+    def _make_list_prompts_tool(self) -> Tool:
+        return _annotate(super()._make_list_prompts_tool(), "List prompts")
+
+    def _make_get_prompt_tool(self) -> Tool:
+        return _annotate(super()._make_get_prompt_tool(), "Get a prompt")
+
+
+def _annotate(tool: Tool, title: str) -> Tool:
+    return tool.model_copy(
+        update={"annotations": ToolAnnotations(title=title, **READ_ONLY)}
+    )
+
+
+# FastMCP's PromptsAsTools names. Its tools route through the server's own
+# prompts/list and prompts/get, so this provider's scoping applies to them too.
+PROMPT_TOOLS = frozenset({"list_prompts", "get_prompt"})
+
+
+def register(mcp: FastMCP, snapshot: Callable[[], Snapshot]) -> set[str]:
+    """Publish the prompts, and their tool mirror; return the mirror's names.
+
+    The mirror is FastMCP's own ``PromptsAsTools`` rather than one written here:
+    it keeps what a prompt actually is -- role-tagged messages, several of them
+    if the prompt has several -- which a resource or a hand-rolled tool would
+    flatten to text.
+    """
     mcp.add_provider(PromptProvider(snapshot))
+    mcp.add_transform(ReadOnlyPromptsAsTools(mcp))
+    return set(PROMPT_TOOLS)
 
 
 def _library_of(selector: str, index: SkillIndex) -> str:

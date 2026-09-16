@@ -34,7 +34,7 @@ from fastmcp.server.middleware import Middleware
 from fastmcp.server.providers.base import Provider
 from fastmcp.utilities.versions import VersionSpec
 
-from .request import client_reads_resources, full_listing, requested_scope
+from .request import full_listing, requested_scope
 from .uris import Catalogue
 
 
@@ -92,13 +92,14 @@ class CatalogueProvider(Provider):
 
 
 class HideMirrorTools(Middleware):
-    """Drop the resource-mirroring tools from ``tools/list`` for clients that
-    read resources.
+    """Drop the mirroring tools from ``tools/list`` for clients that have the
+    native feature each one mirrors.
 
-    Every tool this server has is a mirror: it exists only because some clients
-    cannot read resources. Advertising both shapes to a client that has
-    resources is noise -- two ways to ask one question, and the model has to
-    pick one.
+    Every tool this server has is a mirror: ``list_resources``/``read_resource``
+    stand in for MCP resources and ``list_prompts``/``get_prompt`` for MCP
+    prompts, for clients that cannot use those. Advertising both shapes to a
+    client that has the real one is noise -- two ways to ask one question, and
+    the model has to pick one.
 
     Filtering the listing rather than registering conditionally is what keeps
     one server object correct for every client at once. The decision depends on
@@ -110,14 +111,17 @@ class HideMirrorTools(Middleware):
     be a different and worse contract.
     """
 
-    def __init__(self, names: set[str]):
-        self.names = set(names)
+    def __init__(self, mirrors: dict[str, Callable[[], bool]]):
+        # tool name -> "does this client have the native feature it mirrors?"
+        self.mirrors = dict(mirrors)
 
     async def on_list_tools(self, context, call_next):
         tools = await call_next(context)
-        if not self.names or not client_reads_resources():
-            return tools
-        return [tool for tool in tools if tool.name not in self.names]
+        return [
+            tool
+            for tool in tools
+            if tool.name not in self.mirrors or not self.mirrors[tool.name]()
+        ]
 
 
 def register(mcp: FastMCP, catalogue: Callable[[], Catalogue]) -> None:

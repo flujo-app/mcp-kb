@@ -101,14 +101,19 @@ async def test_a_failed_source_does_not_take_the_others_down(skills_dir):
 
 
 @pytest.mark.unit
-async def test_the_mirror_is_two_tools_whatever_the_catalogue_holds(skills_dir):
-    """Adding sources must never add tools; the address space absorbs them."""
+async def test_the_mirrors_are_four_tools_whatever_the_catalogue_holds(skills_dir):
+    """Adding sources or prompts must never add tools; the mirrors absorb them."""
     server = School(make_config(skills_dir), skills_dir / "_cache")
     # Skip the middleware, which is the thing that hides these. What is
     # registered is what an ?resources=off client is shown; what a resource
     # client sees is covered over real HTTP in test_header_scope.
     registered = await server.mcp.list_tools(run_middleware=False)
-    assert sorted(t.name for t in registered) == ["list_resources", "read_resource"]
+    assert sorted(t.name for t in registered) == [
+        "get_prompt",
+        "list_prompts",
+        "list_resources",
+        "read_resource",
+    ]
 
 
 @pytest.mark.unit
