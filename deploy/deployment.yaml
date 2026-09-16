@@ -19,6 +19,16 @@ spec:
             - matchExpressions:
               - key: node-role.kubernetes.io/control-plane
                 operator: DoesNotExist
+      volumes:
+      # index.json, at CACHE_DIR — disposable: a restart rebuilds it from the
+      # sources, which is also what a restart is for. Sized so a runaway
+      # source cannot fill the node.
+      - name: cache
+        emptyDir:
+          sizeLimit: 1Gi
+      - name: tmp
+        emptyDir:
+          sizeLimit: 64Mi
       containers:
       - name: mcp-school
         image: kubed/mcp-school
@@ -34,8 +44,14 @@ spec:
         ports:
         - name: http
           containerPort: 8000
-        # The skills are baked into the image, so this is a read-only,
-        # stateless process — nothing to write anywhere.
+        volumeMounts:
+        - name: cache
+          mountPath: /var/cache/mcp-school
+        - name: tmp
+          mountPath: /tmp
+        # The skills are baked into the image and everything else here is
+        # read-only — except CACHE_DIR, index.json, which is this process's
+        # one write, and the reason for the cache volume above.
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
