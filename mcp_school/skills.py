@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import frontmatter
 import yaml
@@ -98,7 +98,6 @@ class _Root:
 
     base: Path
     files: tuple[str, ...]
-    skill_dirs: frozenset[Path]
 
 
 class PackResources:
@@ -113,13 +112,15 @@ class PackResources:
     So they get their own addressable space, keyed by pack. A pack can be fed by
     several sources -- ``add`` is called once per source -- so each pack holds a
     list of roots rather than one; ``files`` concatenates them in order and
-    ``read`` tries them in order, returning the first hit. Membership within one
-    root is decided by exclusion (anything not inside a skill directory) rather
-    than by directory name, so it holds however a kit chooses to lay itself out.
+    ``read`` tries them in order, returning the first hit. Membership is the
+    list ``harvest.pack_files()`` produced from the source's ``include.files``
+    globs, not "anything under the root that isn't inside a skill directory" --
+    a source that only asked for ``shared/**`` must not let a client read
+    ``README.md`` or ``.env`` by guessing its path.
 
     Nothing here scans a directory. ``harvest.py`` already applied the include
-    globs and the dotfile rule to produce ``files``; this class only stores and
-    serves what it is handed.
+    globs, the dotfile rule and the skill-directory exclusion to produce
+    ``files``; this class only stores and serves what it is handed.
     """
 
     def __init__(self) -> None:
@@ -132,18 +133,13 @@ class PackResources:
         files: Sequence[str],
         skill_dirs: Sequence[Path],
     ) -> None:
-        entry = _Root(
-            base=root.resolve(),
-            files=tuple(files),
-            skill_dirs=frozenset(d.resolve() for d in skill_dirs),
-        )
+        # skill_dirs is accepted for interface stability with harvest's output
+        # (and in case a future check needs it again) but is not stored: read()
+        # no longer excludes by directory, since harvest already excluded these
+        # files from ``files`` before handing them here.
+        del skill_dirs
+        entry = _Root(base=root.resolve(), files=tuple(files))
         self._roots.setdefault(pack, []).append(entry)
-
-    def _in_skill(self, resolved: Path, skill_dirs: frozenset[Path]) -> bool:
-        """Whether a resolved path is a skill directory or lies inside one."""
-        return resolved in skill_dirs or any(
-            parent in skill_dirs for parent in resolved.parents
-        )
 
     def files(self, pack: str) -> list[str]:
         """Every pack-level file, as paths relative to whichever root holds it."""
@@ -155,16 +151,23 @@ class PackResources:
     def read(self, pack: str, rel: str) -> str | None:
         """Read one pack-level file, or None when it is absent or off-limits.
 
-        Resolves before comparing so ``../`` and symlinks cannot walk out of the
-        root, and refuses anything inside a skill directory -- a skill's own
-        files are served as part of that skill, which applies its own scoping.
-        Tries each root added for ``pack`` in order and returns the first hit.
+        ``rel`` must be exactly one of the paths ``add()`` registered for this
+        pack -- the harvested list is the contract, so a file that exists on
+        disk but was never harvested (an unregistered sibling, a dotfile, a
+        file outside every configured ``include.files`` glob) is refused even
+        though nothing here walks the directory to find that out. A registered
+        path is still resolved and checked against its root before being read,
+        as defence in depth against a symlink pointing outside the tree; there
+        is no separate "inside a skill directory" check because harvest never
+        registers one of those. Tries each root added for ``pack`` in order and
+        returns the first hit.
         """
+        target_rel = PurePosixPath(rel).as_posix()
         for entry in self._roots.get(pack, ()):
+            if target_rel not in entry.files:
+                continue
             target = (entry.base / rel).resolve()
             if not target.is_relative_to(entry.base) or not target.is_file():
-                continue
-            if self._in_skill(target, entry.skill_dirs):
                 continue
             return target.read_text(encoding="utf-8", errors="replace")
         return None

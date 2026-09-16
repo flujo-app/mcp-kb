@@ -185,3 +185,36 @@ def test_two_sources_can_serve_pack_files_into_one_library(tmp_path):
 
     assert resources.files("lib") == ["a.md", "b.md"]
     assert resources.read("lib", "b.md") == "from b\n"
+
+
+@pytest.mark.unit
+def test_read_only_serves_the_harvested_list(tmp_path):
+    """The list add() was given is the contract, not anything else on disk."""
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "shared" / "guide.md").write_text("guidance\n")
+    (tmp_path / "README.md").write_text("exists, but a narrower include skips it\n")
+    (tmp_path / ".env").write_text("SECRET=1\n")
+
+    resources = PackResources()
+    resources.add("lib", tmp_path, ["shared/guide.md"], [])
+
+    assert resources.read("lib", "shared/guide.md") == "guidance\n"
+    # Both exist on disk and are neither dotfiles-inside-a-skill nor traversal
+    # attempts -- only their absence from the harvested list refuses them.
+    assert resources.read("lib", "README.md") is None
+    assert resources.read("lib", ".env") is None
+
+
+@pytest.mark.unit
+def test_read_refuses_a_registered_path_whose_target_escapes_the_root(tmp_path):
+    """The resolve + is_relative_to guard is defence in depth, kept even though
+    ``rel`` is on the harvested list -- a symlink can still point outside."""
+    root = tmp_path / "root"
+    root.mkdir()
+    (tmp_path / "outside.md").write_text("secret\n")
+    (root / "escape.md").symlink_to(tmp_path / "outside.md")
+
+    resources = PackResources()
+    resources.add("lib", root, ["escape.md"], [])
+
+    assert resources.read("lib", "escape.md") is None
