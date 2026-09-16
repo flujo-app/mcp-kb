@@ -267,12 +267,14 @@ tests in `tests/test_header_scope.py` run a real uvicorn server for that reason.
 ```bash
 kubectl -n flow rollout status deploy/mcp-school
 kubectl -n flow port-forward svc/mcp-school 18000:8000
-curl -s localhost:18000/health   # {"status":"ok","libraries":[...],"skills":N,"prompts":N,"sources":{...}}
+curl -s localhost:18000/health   # {"status":"ok","generation":N,"built":"...","libraries":[...],"skills":N,"prompts":N,"sources":{...}}
+curl -sX POST localhost:18000/reindex   # the same payload, plus "rebuilt":[names]
 ```
 
-`/health` reports the libraries, the skill and prompt counts, and each
-source's own status, which is the fastest way to tell which image a pod is
-actually running and whether every source loaded.
+`/health` reports the libraries, the skill and prompt counts, the catalogue's
+generation and when it was built, and each source's own status and
+fingerprint — the fastest way to tell which image a pod is running, whether
+every source loaded, and whether a refresh has picked up an edit yet.
 
 ## House rules that apply here
 
