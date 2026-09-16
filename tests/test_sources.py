@@ -94,3 +94,20 @@ def test_a_fingerprint_skips_hidden_directories_except_conventional_ones(tmp_pat
     fp = fingerprint(source, tmp_path / "cache", tmp_path)
 
     assert fp["files"] == 1
+
+
+def test_a_fingerprint_does_not_follow_a_symlink_out_of_the_tree(tmp_path):
+    """A link is not a file the source owns; counting it counts foreign bytes."""
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "a.txt").write_text("hi")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("a much longer file that lives somewhere else")
+
+    source = FileSource(name="kubed", url=f"file://{root}")
+    before = fingerprint(source, tmp_path / "cache", root)
+
+    (root / "link.txt").symlink_to(outside)
+    after = fingerprint(source, tmp_path / "cache", root)
+
+    assert after == before

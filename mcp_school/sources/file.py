@@ -24,6 +24,12 @@ def fingerprint_file(source: FileSource, cache: Path, root: Path) -> dict:
     is accepted only to keep the same signature every backend's fingerprint
     shares. Walked with ``os.walk`` (no globs), skipping hidden directories
     except the conventional agent-tooling ones, same as ``harvest.files``.
+
+    Only regular files count, and ``os.lstat`` is what decides: a ``stat`` would
+    resolve a symlink and fold a file outside the tree -- its size, its mtime --
+    into this source's fingerprint, so an unrelated edit elsewhere on the disk
+    would trigger a rebuild here. ``os.walk`` already declines to descend a
+    symlinked directory for the same reason.
     """
     del source, cache
     files = 0
@@ -35,7 +41,7 @@ def fingerprint_file(source: FileSource, cache: Path, root: Path) -> dict:
         ]
         for name in filenames:
             try:
-                st = (Path(dirpath) / name).stat()
+                st = os.lstat(Path(dirpath) / name)
             except OSError:
                 continue
             if not stat.S_ISREG(st.st_mode):
