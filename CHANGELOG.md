@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `mcp_school.config`: a validated config file of sources and libraries (`Config`, `FileSource`, `{env:}` secrets), published as `config.schema.json` and printable via `mcp-school schema` — not yet wired into the server.
+- `mcp_school.harvest` and `mcp_school.sources`: convention-based globs turn a `file://` source directory into skill dirs, prompt files and pack-level files, with a traversal guard so a glob like `../**` finds nothing — not yet wired into the server.
 - MCP prompts, served from `prompts/<pack>/<name>.md` with declared arguments and scoped by `SKILL_PACKS` and `X-Skill-Pack` like skills — starting with `grafana_debug-logs`, which walks the Grafana MCP server through debugging a workload's Loki logs.
 - `superpowers` skill pack from `obra/superpowers` (14 skills) — brainstorming, TDD, systematic debugging, writing plans and the rest of the workflow discipline set.
 - `?skills=full` (or `X-Skill-Listing: full`) enumerates every skill in the listing, for clients that sync skills to disk and can only find them by scanning for `/SKILL.md`.
