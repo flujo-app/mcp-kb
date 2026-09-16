@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The server starts from `<CACHE_DIR>/index.json` without touching any source, then verifies each source's fingerprint in the background and rebuilds only what changed; `refresh: <duration>` per source schedules re-checks, `POST /reindex` forces one, and a session that persists across requests is told the catalogue changed next time it asks — MCP 2026-07-28 has no sessions, so a sessionless client relies on the advertised `cache_ttl` instead.
+- Listings are memoised per scope, so `resources/list` is a dict lookup.
 - A `refresh` interval per source (`30s`, `5m`, `1h`) and `sources.fingerprint()`, a cheap file-count/bytes/newest-mtime summary used to detect a changed source without re-harvesting it — not yet wired to a refresh loop.
 - `mcp_school.index`: an on-disk index of what each source yielded (`Index`, `SourceRecord`, `SkillRow`, `PromptRow`) — not yet used by the server.
 - `mcp-school schema` prints the config JSON Schema.

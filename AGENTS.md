@@ -15,7 +15,8 @@ into the image; nothing is fetched at runtime.
 | `scripts/requirements.py` | prints the dependency list out of `pyproject.toml` for the image build |
 | `mcp_school/config.py` | the config file's schema — `Config`, `load_config`, `Library`, the sources |
 | `mcp_school/harvest.py` | turns a source's `include` globs into skill dirs, prompt files and pack files |
-| `mcp_school/sources/` | turns a config source into a local directory — `file://` today |
+| `mcp_school/sources/` | turns a config source into a local directory — `file://` today; also the fingerprint used to detect a changed one |
+| `mcp_school/index.py` | `Index`/`SourceRecord`, the on-disk `index.json` cold start reads instead of re-harvesting |
 | `examples/config.yaml` | the catalogue the image ships — the four packs plus this repo's prompts |
 | `config.schema.json` | `Config.model_json_schema()`, committed so an editor can validate a config live |
 | `mcp_school/skills.py` | the catalogue — `Skill`, loading, and `SkillIndex` |
@@ -24,8 +25,9 @@ into the image; nothing is fetched at runtime.
 | `mcp_school/tools.py` | the two mirror tools |
 | `mcp_school/request.py` | what the current request says about itself |
 | `mcp_school/prompts.py` | loads, renders and scopes the prompts |
-| `mcp_school/routes.py` | plain HTTP endpoints (`/health`) |
-| `mcp_school/server.py` | `School` — wiring only, no tool bodies |
+| `mcp_school/routes.py` | plain HTTP endpoints (`/health`, `/reindex`) |
+| `mcp_school/snapshot.py` | `Snapshot`, `build_snapshot` — the immutable view of the catalogue every request reads |
+| `mcp_school/server.py` | `School` — wiring, cold start, refresh, no tool bodies |
 | `mcp_school/main.py` | CLI and env parsing; the only file reading `os.environ` |
 | `deploy/` | raw Deployment + Service |
 | `kustomization.yaml` | the one kustomization; `newTag` is the deployed version |
@@ -174,6 +176,9 @@ deploy` will not work, and is not meant to.
   `SkillsDirectoryProvider` also keys a skill on its folder name alone, so two
   packs shipping a `testing/` collapse into one and the loser vanishes from the
   server entirely. Neither failure raises anything.
+- **A provider that stores a `Catalogue` serves the old generation forever** —
+  read through the getter (`lambda: school.snapshot.catalogue`), never a
+  captured reference.
 
 ## Where code goes
 
@@ -210,6 +215,8 @@ namespaces tool names with a prefix, and these three names are the agent's API.
   surface. Nothing else in the package reads `os.environ`, except the
   `{env: NAME}` resolver in `config.py`, which is the one other reader of the
   environment.
+- **Anything that changes what the catalogue holds** goes through
+  `School.refresh` and produces a new `Snapshot`; never mutate one.
 
 `skills.py` imports no FastMCP, which is deliberate: the catalogue is testable
 without an MCP client, and `tests/test_skills.py` exercises the scoping rules
