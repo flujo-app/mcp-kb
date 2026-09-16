@@ -22,8 +22,10 @@ Three things this module is careful about:
   and nothing more.
 - **A live read replaces one file, atomically.** ``fetch_file`` is the other
   half of ``cache: live``: one PROPFIND, and only if the ETag moved, one GET
-  into a temporary file in the same directory that is then renamed over the
-  local copy. A reader holding the old file reads the old file to its end.
+  into a temporary file in ``.work/`` beside the export that is then renamed
+  over the local copy. A reader holding the old file reads the old file to its
+  end, and a download that is killed half way through leaves nothing inside
+  the export for the next pass to read as a missing file.
 
 Read-only throughout: a source is copied from and never written to.
 """
@@ -44,7 +46,7 @@ from webdav4.fsspec import WebdavFileSystem
 
 from ..config import ConfigError, WebdavSource
 from .errors import SourceError
-from .export import WORK_PREFIX, Exports
+from .export import WORK_PREFIX, Exports, workspace
 
 # Written at the root of an export: what every file's ETag was when it was
 # copied, which is what a live read revalidates against. Hidden, so harvest.py's
@@ -161,7 +163,11 @@ def fetch_file(
         return current
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    handle, name = tempfile.mkstemp(dir=target.parent, prefix=WORK_PREFIX)
+    # Staged beside the export, never inside it: a download killed part way
+    # through would otherwise leave a file the export's own count includes and
+    # the collector cannot reach, which makes a whole tree look truncated for
+    # good. Same filesystem, so the replace below is still one atomic step.
+    handle, name = tempfile.mkstemp(dir=workspace(root.parent), prefix=WORK_PREFIX)
     os.close(handle)
     tmp = Path(name)
     try:

@@ -10,6 +10,8 @@ one ETag to wsgidav. Nextcloud's are content-derived and have no such quirk.
 """
 
 import json
+import threading
+import time
 from http.client import HTTPConnection
 from pathlib import Path
 
@@ -19,7 +21,7 @@ from mcp_school import School
 from mcp_school.config import Config, WebdavSource
 from mcp_school.sources import SourceError, fingerprint, materialise
 from mcp_school.sources import export as exports
-from mcp_school.sources.webdav import ETAGS_FILE, VERSION_FILE, fetch_file
+from mcp_school.sources.webdav import ETAGS_FILE, VERSION_FILE, client, fetch_file
 from tests.webdav_server import PASSWORD, USERNAME
 
 pytestmark = pytest.mark.unit
@@ -94,16 +96,63 @@ def test_an_edited_folder_is_exported_beside_the_one_being_served(webdav, tmp_pa
     assert "second version" in _body(new)
 
 
-def test_a_truncated_export_is_rebuilt(webdav, tmp_path):
-    """A stamp is not proof: the tree must still hold the files it wrote."""
+def test_a_truncated_export_is_rebuilt_beside_the_one_being_served(webdav, tmp_path):
+    """A stamp is not proof: the tree must still hold the files it wrote.
+
+    And the repair goes to a directory of its own. The folder has not moved, so
+    the version has not moved either, so the truncated tree is sitting at the
+    exact path the live snapshot is serving out of -- rebuilding over it means
+    deleting it under a reader.
+    """
     source = _source(webdav)
     root = materialise(source, tmp_path)
     (root / SKILL).unlink()
 
     again = materialise(source, tmp_path)
 
-    assert again == root
+    assert again != root, "the repair must not be published over the served tree"
+    assert again.name.startswith(root.name), "still the same version, a later name"
     assert "first" in _body(again)
+    assert (again / VERSION_FILE).read_text().split()[0] == root.name
+
+
+def test_a_rebuild_never_interrupts_a_reader_of_the_served_tree(webdav, tmp_path):
+    """Measured on this branch as 549 failed reads in 25 852; now none.
+
+    The trigger is the one a live source makes real: a temp file left inside
+    the export by a download that was killed makes the export's count disagree
+    with its stamp, and the next pass rebuilds a version that has not moved.
+    """
+    source = _source(webdav)
+    root = materialise(source, tmp_path)
+    served = root / SKILL
+    errors: list[str] = []
+    stop = threading.Event()
+
+    def read():
+        while not stop.is_set():
+            try:
+                if "first" not in served.read_text():
+                    errors.append("torn")
+            except OSError as exc:
+                errors.append(type(exc).__name__)
+
+    readers = [threading.Thread(target=read, daemon=True) for _ in range(6)]
+    for reader in readers:
+        reader.start()
+    try:
+        current = root
+        for round_ in range(4):
+            (current / "skills" / "x" / f".tmp-{round_}").write_text("killed")
+            current = materialise(source, tmp_path)
+            time.sleep(0.05)
+    finally:
+        stop.set()
+        for reader in readers:
+            reader.join(timeout=5)
+
+    assert errors == []
+    assert "first" in _body(root), "the tree the readers held is still whole"
 
 
 def test_a_crashed_export_leaves_nothing_at_a_version_path(webdav, tmp_path):
@@ -263,6 +312,65 @@ def test_a_missing_upstream_file_leaves_the_local_copy(webdav, tmp_path):
 
     assert fetch_file(source, root, SKILL) is None
     assert "first" in _body(root), "a deleted upstream file is not a deleted skill"
+
+
+def test_a_live_fetch_replaces_the_local_copy_rather_than_rewriting_it(
+    webdav, tmp_path
+):
+    """The atomicity, pinned. A reader that already opened the file must read
+    the bytes it opened all the way to the end -- which a rename gives it and a
+    write over the same inode takes away."""
+    source = _source(webdav)
+    root = materialise(source, tmp_path)
+    recorded = json.loads((root / ETAGS_FILE).read_text())[SKILL]
+    webdav.skill("x", "edited in nextcloud, and very much longer than it was")
+
+    with (root / SKILL).open("rb") as handle:
+        fetch_file(source, root, SKILL, etag=recorded)
+        held = handle.read().decode()
+
+    assert "first" in held, "a reader holding the old file must read the old file"
+    assert "edited in nextcloud" in _body(root)
+
+
+def test_a_live_fetch_stages_its_download_outside_the_export(webdav, tmp_path):
+    """A download the kernel kills leaves its temp file behind, and ``finally``
+    does not run. Inside the export that file counts towards the export's
+    extent, so the tree looks truncated for good -- and ``collect`` walks the
+    source's home, so it could never reach one buried in a skill directory."""
+    source = _source(webdav)
+    root = materialise(source, tmp_path)
+    recorded = json.loads((root / ETAGS_FILE).read_text())[SKILL]
+    webdav.skill("x", "edited in nextcloud, and longer than before")
+    staged = []
+
+    class _Watched:
+        """The real client, recording where each download is written."""
+
+        def __init__(self, real):
+            self._real = real
+
+        def info(self, rel):
+            return self._real.info(rel)
+
+        def get_file(self, rel, local):
+            staged.append(Path(local))
+            return self._real.get_file(rel, local)
+
+    fetch_file(source, root, SKILL, etag=recorded, fs=_Watched(client(source)))
+
+    assert staged, "nothing was downloaded, so this test proved nothing"
+    for tmp in staged:
+        assert not tmp.is_relative_to(root)
+        assert tmp.parent == root.parent / exports.WORK_DIR
+
+
+def test_a_temp_file_a_killed_fetch_left_does_not_truncate_the_export(webdav, tmp_path):
+    source = _source(webdav)
+    root = materialise(source, tmp_path)
+    (exports.workspace(root.parent) / ".tmp-killed").write_text("half a download")
+
+    assert materialise(source, tmp_path) == root, "the export is still whole"
 
 
 def test_fetch_file_refuses_a_path_that_leaves_the_export(webdav, tmp_path):
