@@ -1335,6 +1335,11 @@ backend and re-downloads only changed bytes. Chained onto the source URL
 conditional request and no transfer. That is the off-the-shelf part Dr K asked
 for, and it is why `live` is a config value rather than a second code path.
 
+*Built otherwise — see E4. `filecache` stores files under hashed names in a
+directory of its own, where everything downstream here needs a real tree of
+`Path`s, so `live` is a per-file ETag revalidation written over webdav4; and a
+source that is down degrades to the cached copy rather than failing the read.*
+
 **What `live` does *not* buy is a new file appearing.** A file that did not exist
 at index time has no URI, so it cannot be read by name. That is what `refresh`
 is for:

@@ -9,9 +9,9 @@ file, and it is cloned or read at container **start**, into a cache volume.
 
 | Path | What it is |
 | --- | --- |
-| `mcp_school/config.py` | the config file's schema — `Config`, `load_config`, `Library`, `FileSource`, `GitSource` |
+| `mcp_school/config.py` | the config file's schema — `Config`, `load_config`, `Library`, `FileSource`, `GitSource`, `WebdavSource` |
 | `mcp_school/harvest.py` | turns a source's `include` globs into skill dirs, prompt files and pack files |
-| `mcp_school/sources/` | turns a config source into a local directory — `file://` and `git+…`/`github://` — and fingerprints it, to detect a changed one |
+| `mcp_school/sources/` | turns a config source into a local directory — `file://`, `git+…`/`github://`, `webdav+…` — and fingerprints it, to detect a changed one; `export.py` is the per-version materialise git and WebDAV share |
 | `mcp_school/index.py` | `Index`/`SourceRecord`, the on-disk `index.json` a cold start reads instead of re-harvesting |
 | `scripts/requirements.py` | prints the dependency list out of `pyproject.toml` for the image build |
 | `examples/config.yaml` | the worked example the image ships — the four packs as `github://` sources |
@@ -21,6 +21,7 @@ file, and it is cloned or read at container **start**, into a cache volume.
 | `mcp_school/resources.py` | the resources, and the mirror-hiding middleware |
 | `mcp_school/tools.py` | the two mirror tools |
 | `mcp_school/request.py` | what the current request says about itself |
+| `mcp_school/live.py` | `cache: live` — the `Revalidator` a read goes through before it serves a file |
 | `mcp_school/prompts.py` | loads, renders and scopes the prompts |
 | `mcp_school/routes.py` | plain HTTP endpoints (`/health`, `/reindex`) |
 | `mcp_school/snapshot.py` | `Snapshot`, `build_snapshot` — the immutable view of the catalogue every request reads |
@@ -44,7 +45,11 @@ sources:
 
 `url` picks the backend: `file:///path` (absolute, no host) is served in
 place; `git+https://`, `git+http://` and `git+file://` clone bare and shallow;
-`github://org/repo` is shorthand for `git+https://github.com/org/repo.git`.
+`github://org/repo` is shorthand for `git+https://github.com/org/repo.git`;
+`webdav+https://` and `webdav+http://` copy a WebDAV folder, which needs an
+`auth` (a Nextcloud app password, as `{env: NAME}`) and takes a
+`cache: snapshot|live` dial — see the README for what `live` does and does not
+buy.
 `ref` is a branch, tag or commit — a git source with no `ref` tracks the
 remote's default branch, and one with no `refresh` is read once at boot and
 never rebuilt until the process restarts. `subdirectory` narrows a git source
@@ -142,7 +147,27 @@ tag it chooses.
   server entirely. Neither failure raises anything.
 - **A provider that stores a `Catalogue` serves the old generation forever** —
   read through the getter (`lambda: school.snapshot.catalogue`), never a
-  captured reference.
+  captured reference. A `Revalidator` has the same shape of bug and a nastier
+  symptom: a refresh exports a source to a *new* directory, so one that outlived
+  its snapshot goes on revalidating into a tree nothing is serving, and the edit
+  never appears. It is built in `build_snapshot` and retired with the snapshot.
+- **`live` is a per-file ETag revalidation, not fsspec's `filecache`.** The saga
+  proposed chaining `filecache::webdav+https://…`, which is the off-the-shelf
+  answer and the wrong one: it stores files under hashed names in a cache
+  directory of its own, and everything downstream of a source here — the
+  harvest, the URI grammar, the traversal guard, `_manifest` — needs a real
+  directory tree of `Path`s. ~80 lines over webdav4 is the cost of keeping that
+  invariant.
+- **A fingerprint is published, so it stays small.** `build_snapshot` puts
+  `record.fingerprint` straight into `/health` and `index.py` writes it to
+  `index.json`. A WebDAV source's whole `{path: etag}` map went into both before
+  it was reduced to a digest and a count. Whatever a new backend's fingerprint
+  returns, it is a thing an operator reads and a thing rewritten to disk on
+  every rebuild.
+- **wsgidav's ETag is `inode-mtime-size`.** The test server's, not Nextcloud's,
+  which is content-derived — so a test that edits a served file must change its
+  *length*, or two writes in the same second are one ETag and the revalidation
+  test passes for the wrong reason.
 
 ## Where code goes
 

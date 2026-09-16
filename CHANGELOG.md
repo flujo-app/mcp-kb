@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `cache: live` on a WebDAV source: a read revalidates that one file against the server by ETag and downloads it again only when it moved, so a file edited in Nextcloud is served on the next read — a *new* file still needs a `refresh:` interval or `POST /reindex`, and a server that stops answering degrades to the cached copy instead of failing the read.
 - `webdav+https://` sources (Nextcloud): the folder is copied into the cache at index time and keyed by the digest of its ETags, so an unchanged folder is listed but never downloaded again and a changed one is copied beside the tree being served, never over it — git and WebDAV now share one per-version export mechanism.
 - `webdav+https://` and `webdav+http://` sources in the config: a WebDAV folder (Nextcloud) with a required `auth` whose password is an `{env:}` reference, and a `cache: snapshot|live` dial — `snapshot` copies the folder like any mirror, `live` will revalidate a file by ETag as it is read.
 - `git+https://`, `git+http://`, `git+file://` and `github://org/repo` sources: cloned bare and shallow with pygit2, read at `ref` (a branch, tag or commit), exported into the cache; `subdirectory` and `auth` per PEP 610.
