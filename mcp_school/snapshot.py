@@ -18,11 +18,16 @@ cold start rebuild *nothing* and still serve.
 A failed source is a record, not an exception. One unreachable directory must
 not empty the catalogue of everything else, so the failure rides in
 ``status`` and ``/health`` reports it.
+
+And a source that failed *after* it once succeeded is not a failed source at
+all: ``stale`` keeps the last good record, rows and root intact, and hangs the
+error off it. Only a source that has never been harvested has nothing better to
+serve than its error.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import harvest
@@ -32,6 +37,10 @@ from .prompts import FilePrompt, load_prompts
 from .skills import PackResources, Skill, SkillIndex, load_skills
 from .sources import SourceError, fingerprint, materialise
 from .uris import Catalogue
+
+# The record states that still name a tree worth serving. A "stale" record is
+# one of them: its harvest is the last good one, which is the whole point.
+SERVABLE = ("ok", "stale")
 
 
 @dataclass(frozen=True)
@@ -112,7 +121,7 @@ def record_from_index(
     the tree changed. That answer costs a walk of every source, which is what
     the cold start exists to avoid; the background pass asks it a moment later.
     """
-    if record.status != "ok" or record.root is None:
+    if record.status not in SERVABLE or record.root is None:
         return None
     if record.library != config.library(source.library_name).name:
         return None
@@ -142,7 +151,7 @@ def build_snapshot(
         record = records.get(source.name)
         if record is None:
             continue
-        if record.status != "ok" or record.root is None:
+        if record.status not in SERVABLE or record.root is None:
             status[source.name] = {"status": "failed", "error": record.error}
             continue
         root = Path(record.root)
@@ -162,13 +171,16 @@ def build_snapshot(
         )
         prompts += loaded
         status[source.name] = {
-            "status": "ok",
+            "status": record.status,
             "library": record.library,
             "skills": len(record.skills),
             "prompts": len(loaded),
             "files": len(record.files),
             "built": record.built,
             "fingerprint": record.fingerprint,
+            # Only a stale record carries one, and an operator reading /health
+            # needs to see why what they are being served stopped moving.
+            **({"error": record.error} if record.error else {}),
         }
 
     index = SkillIndex(skills)
@@ -181,6 +193,16 @@ def build_snapshot(
         prompts=tuple(prompts),
         status=status,
     )
+
+
+def stale(record: SourceRecord, error: str) -> SourceRecord:
+    """``record`` still served, marked stale, carrying why the refresh failed.
+
+    ``built`` is left alone on purpose: it dates the harvest being served, and
+    that harvest is the one this record already held. A refresh that fails
+    changes what is *known* about the source, never what is on disk for it.
+    """
+    return replace(record, status="stale", error=error)
 
 
 def _failed(name: str, library: str, error: str) -> SourceRecord:

@@ -21,29 +21,13 @@ from __future__ import annotations
 import argparse
 import pathlib
 import sys
-
-# tomllib is 3.11+, and the image can be built on 3.10: PY_VERSION is an ARG and
-# the project supports it. The backport tomllib was adopted from is the same
-# parser, and the Dockerfile installs it under the same marker before running
-# this.
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - 3.10 only
-    try:
-        import tomli as tomllib
-    except ModuleNotFoundError:
-        tomllib = None  # type: ignore[assignment]
+import tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
 def read(path: pathlib.Path) -> dict:
     """pyproject.toml, parsed."""
-    if tomllib is None:
-        raise SystemExit(
-            "no TOML parser: this is Python 3.10 or older and tomli is not "
-            "installed. `pip install tomli`, or build on 3.11+."
-        )
     return tomllib.loads(path.read_text(encoding="utf-8"))
 
 

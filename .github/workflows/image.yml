@@ -4,7 +4,7 @@ name: 📸 Image Builder
 #   push: main          push :main + :latest          → test :latest in-cluster
 #   workflow_dispatch   manual build (push toggle)
 #   workflow_call       called by publish.yml with a version tag — checks out
-#                       that tag and pushes :vX.Y.Z (stable, pin this to deploy)
+#                       that tag and pushes :vX.Y.Z, the stable release image
 #
 # Deliberately NOT run on pull_request. A ~7-minute two-arch build is most of a
 # pull request's total wait, for a signal that almost never differs from what the
@@ -14,17 +14,16 @@ name: 📸 Image Builder
 # test.yml runs lint + unit tests, so a break in the part that is ours is caught
 # in seconds instead of minutes.
 #
-# What remains uncovered is the skill fetch: a bad `ref` or `path` in skills.toml
-# only fails here, on merge to main. Run `python scripts/fetch_skills.py` by hand
-# when touching the manifest.
+# Nothing is fetched here any more: the image bakes no sources, so a bad `ref`
+# in examples/config.yaml only fails when a running container starts, not in
+# this build.
 #
 # There is deliberately NO `push: tags` trigger. Releases don't rely on a tag
 # push triggering a build; publish.yml calls this workflow (workflow_call) so the
 # image is on Docker Hub BEFORE the GitHub Release is cut.
 #
-# This workflow only ever builds and pushes the image — it does NOT touch the
-# deployed tag. Pinning kustomization.yaml is publish.yml's job, and it only ever
-# writes a semver, so main always carries a stable, deployable version.
+# This workflow only ever builds and pushes the image. There is no deployed tag
+# to touch any more — that manifest lives with the installer, not here.
 
 on:
   push:
@@ -35,16 +34,12 @@ on:
     - pyproject.toml
     - .github/workflows/image.yml
     - mcp_school/**
-    - skills.toml
-    - prompts/**
-    # Not in the wheel, but the Dockerfile COPYs both: fetch_skills.py decides
-    # which packs are baked in, requirements.py decides which dependencies the
-    # venv gets. A change to either changes the image without changing anything
-    # else in this list. tests/test_packaging.py derives this from the
-    # Dockerfile's own COPY lines rather than trusting the list.
+    # Not in the wheel, but the Dockerfile COPYs it: requirements.py decides
+    # which dependencies the venv gets. tests/test_packaging.py derives this
+    # from the Dockerfile's own COPY lines rather than trusting the list.
     - scripts/**
-    # The config file baked into the image: it decides which sources the
-    # running server actually serves.
+    # The worked example shipped in the image: it decides which sources the
+    # image serves out of the box.
     - examples/config.yaml
   workflow_dispatch:
     inputs:

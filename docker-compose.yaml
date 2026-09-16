@@ -28,3 +28,9 @@ services:
       TRANSPORT: ${TRANSPORT:-http}
       HOST: ${HOST:-0.0.0.0}
       PORT: ${PORT:-8000}
+    volumes:
+    - ./examples/config.yaml:/etc/mcp-school/config.yaml:ro
+    - mcp-school-cache:/var/cache/mcp-school
+
+volumes:
+  mcp-school-cache:

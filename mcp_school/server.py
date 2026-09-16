@@ -48,7 +48,14 @@ from .index import INDEX_VERSION, Index, SourceRecord, config_hash, now
 from .prompts import FilePrompt
 from .request import http_request
 from .skills import PackResources, SkillIndex
-from .snapshot import Snapshot, build_snapshot, build_source, record_from_index
+from .snapshot import (
+    SERVABLE,
+    Snapshot,
+    build_snapshot,
+    build_source,
+    record_from_index,
+    stale,
+)
 from .sources import SourceError, fingerprint
 from .uris import Catalogue
 
@@ -302,7 +309,8 @@ class School:
                     and not self._stale(source, current)
                 ):
                     continue
-                fresh = build_source(self.config, source, self.cache)
+                built = build_source(self.config, source, self.cache)
+                fresh = _keep_last_good(current, built)
                 if _same_failure(current, fresh):
                     continue
                 records[source.name] = fresh
@@ -325,7 +333,13 @@ class School:
         return await asyncio.to_thread(self.refresh, **kwargs)
 
     def _stale(self, source: Source, record: SourceRecord) -> bool:
-        """Whether ``source`` has moved on since ``record`` was built."""
+        """Whether ``source`` has moved on since ``record`` was built.
+
+        Anything not ``"ok"`` is due unconditionally, a record already marked
+        stale included. Its fingerprint is the last good one, so a source that
+        came back without changing would still match it and would go on being
+        reported stale forever; only an actual rebuild can clear that.
+        """
         if record.status != "ok" or record.root is None:
             return True
         root = Path(record.root)
@@ -439,16 +453,37 @@ def _can_remember() -> bool:
     return bool(headers.get(SESSION_HEADER))
 
 
+def _keep_last_good(old: SourceRecord | None, new: SourceRecord) -> SourceRecord:
+    """``new``, unless it is a failure over a harvest worth going on serving.
+
+    A refresh reaching a source is a second chance to fail, and a remote that
+    is momentarily unreachable -- a git remote most of all -- must not empty a
+    catalogue that was complete a minute ago. So a failed *rebuild* over an
+    existing record becomes that record, marked stale and carrying the error,
+    and the skills keep being served from the tree already on disk.
+
+    Only the cold start, which has no earlier record, treats a failure as a
+    failed source. The tree is checked because rows naming a directory that is
+    gone would serve nothing: at that point the failure is the better answer.
+    """
+    if new.status != "failed" or old is None or old.status not in SERVABLE:
+        return new
+    if old.root is None or not Path(old.root).is_dir():
+        return new
+    return stale(old, new.error or "refresh failed")
+
+
 def _same_failure(old: SourceRecord | None, new: SourceRecord) -> bool:
     """Whether a rebuild produced the same failure the record already carried.
 
     A source that is still missing has not *changed*, and counting it as a
     rebuild would advance the generation on every single pass -- announcing a
     new catalogue to every client, forever, because one directory is absent.
+    The same holds for a source that is still stale for the same reason.
     """
     return (
         old is not None
-        and old.status == "failed"
-        and new.status == "failed"
+        and new.status in ("failed", "stale")
+        and old.status == new.status
         and old.error == new.error
     )

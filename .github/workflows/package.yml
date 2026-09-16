@@ -21,9 +21,9 @@ name: 🗿 Package
 # byte-for-byte the file that was tested. A PyPI job would slot in the same way —
 # `needs: package`, download the artifact, upload it — without this file changing.
 #
-# The skills are NOT in the wheel. They are fetched at image build time into
-# /skills, so the wheel is the server alone and installs the same whatever the
-# pack manifest says — which is why there is no package-data check here.
+# No skills are in the wheel. They are fetched at container start into the
+# cache volume, so the wheel is the server alone and installs the same whatever
+# a deployment's config names — which is why there is no package-data check here.
 #
 # The version is not an input: setuptools_scm derives it from git, so whatever
 # ref is checked out already carries its own version.

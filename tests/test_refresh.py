@@ -13,6 +13,7 @@ import mcp_school.server
 from mcp_school import School, snapshot
 from mcp_school.config import Config
 from mcp_school.server import _can_remember
+from mcp_school.sources import SourceError
 from tests.conftest import make_config
 
 
@@ -75,6 +76,18 @@ def _counting_materialise(monkeypatch):
 
     monkeypatch.setattr(snapshot, "materialise", spy)
     return seen
+
+
+def _breaking_materialise(monkeypatch, name, error="the remote is unreachable"):
+    """Make one source's ``materialise`` raise, leaving every other source alone."""
+    real = snapshot.materialise
+
+    def broken(source, cache_dir):
+        if source.name == name:
+            raise SourceError(f"{name}: {error}")
+        return real(source, cache_dir)
+
+    monkeypatch.setattr(snapshot, "materialise", broken)
 
 
 # -- cold start ---------------------------------------------------------------
@@ -188,11 +201,32 @@ def test_a_source_that_keeps_failing_the_same_way_is_not_a_change(skills_dir, ca
 
 
 @pytest.mark.unit
-def test_an_unreadable_file_in_one_source_fails_only_that_source(skills_dir, cache, monkeypatch):
+def test_a_failed_refresh_keeps_the_last_good_catalogue(skills_dir, cache, monkeypatch):
+    """An unreachable source must not empty the catalogue it filled a minute ago."""
+    school = School(make_config(skills_dir), cache)
+    served = sorted(s.name for s in school.index.visible())
+
+    _breaking_materialise(monkeypatch, "flatsource")
+    assert school.refresh(force=True, only=["flatsource"]) == ["flatsource"]
+
+    assert sorted(s.name for s in school.index.visible()) == served
+    assert school.status["flatsource"]["status"] == "stale"
+    assert "unreachable" in school.status["flatsource"]["error"]
+    assert school.status["flatsource"]["skills"] == 2
+
+
+@pytest.mark.unit
+def test_an_unreadable_file_in_one_source_fails_only_that_source(
+    skills_dir, cache, monkeypatch
+):
     """I2: a `PermissionError` (any `OSError`) out of one source's harvest must
-    become a failed record for that source, not abort the whole refresh pass --
-    `snapshot.py`'s own docstring says a failed source is a record, not an
-    exception that empties the catalogue of everything else.
+    become a record for that source, not an exception that aborts the refresh
+    pass over every other source.
+
+    The record is `stale` rather than `failed` because this source had a good
+    one to keep: an unreadable file is exactly the transient the stale rule
+    exists for, and the two rules compose. What I2 is really about is that
+    `deepsource` is untouched and nothing escapes.
     """
     school = School(make_config(skills_dir), cache)
     real_load_skills = snapshot.load_skills
@@ -205,11 +239,116 @@ def test_an_unreadable_file_in_one_source_fails_only_that_source(skills_dir, cac
     monkeypatch.setattr(snapshot, "load_skills", flaky)
 
     assert school.refresh(force=True) == ["deepsource", "flatsource"]
-    assert school.status["flatsource"]["status"] == "failed"
+    assert school.status["flatsource"]["status"] == "stale"
+    assert "Permission denied" in school.status["flatsource"]["error"]
     assert school.status["deepsource"]["status"] == "ok"
+    assert sorted(s.name for s in school.index.visible()) == [
+        "alpha",
+        "beta",
+        "delta",
+        "gamma",
+    ]
 
 
 @pytest.mark.unit
+def test_an_unreadable_file_with_no_prior_record_is_a_failed_source(
+    skills_dir, cache, monkeypatch
+):
+    """The other half of I2: with nothing good to keep, an `OSError` is still a
+    failed record and still must not empty the catalogue of everything else.
+    """
+    real_load_skills = snapshot.load_skills
+
+    def flaky(dirs, *, pack, source, root, tags=()):
+        if source == "flatsource":
+            raise PermissionError("[Errno 13] Permission denied: SKILL.md")
+        return real_load_skills(dirs, pack=pack, source=source, root=root, tags=tags)
+
+    monkeypatch.setattr(snapshot, "load_skills", flaky)
+    school = School(make_config(skills_dir), cache)
+
+    assert school.status["flatsource"]["status"] == "failed"
+    assert school.status["deepsource"]["status"] == "ok"
+    assert sorted(s.name for s in school.index.visible()) == ["delta", "gamma"]
+
+
+@pytest.mark.unit
+def test_a_source_that_stays_stale_the_same_way_is_not_a_change(
+    skills_dir, cache, monkeypatch
+):
+    """As with a failure: one unreachable remote must not churn the generation."""
+    school = School(make_config(skills_dir), cache)
+    _breaking_materialise(monkeypatch, "flatsource")
+
+    assert school.refresh(force=True, only=["flatsource"]) == ["flatsource"]
+    assert school.generation == 1
+    assert school.refresh(force=True, only=["flatsource"]) == []
+    assert school.generation == 1
+
+
+@pytest.mark.unit
+def test_a_stale_source_serves_again_once_it_recovers(skills_dir, cache, monkeypatch):
+    """The fingerprint has not moved, so only ``status`` can say it is back."""
+    school = School(make_config(skills_dir), cache)
+    _breaking_materialise(monkeypatch, "flatsource")
+    school.refresh(force=True, only=["flatsource"])
+    assert school.status["flatsource"]["status"] == "stale"
+
+    monkeypatch.undo()
+    assert school.refresh(only=["flatsource"]) == ["flatsource"]
+    assert school.status["flatsource"]["status"] == "ok"
+    assert "error" not in school.status["flatsource"]
+
+
+@pytest.mark.unit
+def test_a_cold_start_with_no_prior_record_still_fails(skills_dir, cache, monkeypatch):
+    """Nothing good to keep, so the failure is a failure and the source is empty."""
+    _breaking_materialise(monkeypatch, "flatsource")
+    school = School(make_config(skills_dir), cache)
+
+    assert school.status["flatsource"]["status"] == "failed"
+    assert sorted(s.name for s in school.index.visible()) == ["delta", "gamma"]
+
+
+@pytest.mark.unit
+async def test_health_reports_a_stale_source_with_its_error(
+    skills_dir, cache, monkeypatch
+):
+    """An operator has to be able to see that what is served is no longer fresh."""
+    school = School(make_config(skills_dir), cache)
+    _breaking_materialise(monkeypatch, "flatsource")
+    school.refresh(force=True, only=["flatsource"])
+
+    transport = httpx.ASGITransport(app=school.mcp.http_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://school") as http:
+        body = (await http.get("/health")).json()
+
+    assert body["status"] == "ok"
+    assert body["skills"] == 4
+    assert body["sources"]["flatsource"]["status"] == "stale"
+    assert "unreachable" in body["sources"]["flatsource"]["error"]
+    assert "flatsource" in body["libraries"]
+
+
+@pytest.mark.unit
+def test_a_restart_keeps_serving_what_a_stale_record_still_names(
+    skills_dir, cache, monkeypatch
+):
+    """The stale record is in ``index.json``; a restart must not discard it."""
+    config = make_config(skills_dir)
+    first = School(config, cache)
+    _breaking_materialise(monkeypatch, "flatsource")
+    first.refresh(force=True, only=["flatsource"])
+
+    school = School(config, cache)
+
+    assert school.status["flatsource"]["status"] == "stale"
+    assert sorted(s.name for s in school.index.visible()) == [
+        "alpha",
+        "beta",
+        "delta",
+        "gamma",
+    ]
 def test_persistence_failure_does_not_leave_records_ahead_of_the_snapshot(
     skills_dir, cache, monkeypatch
 ):

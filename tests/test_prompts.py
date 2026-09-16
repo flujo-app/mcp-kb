@@ -4,11 +4,6 @@ import logging
 import pathlib
 from types import SimpleNamespace
 
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - 3.10 only
-    import tomli as tomllib
-
 import pytest
 from fastmcp import Client
 
@@ -20,36 +15,9 @@ from tests.conftest import load_all_prompts, load_pack_prompts, make_config
 
 pytestmark = pytest.mark.unit
 
-REPO = pathlib.Path(__file__).resolve().parent.parent
-SHIPPED = REPO / "prompts"
-
 
 def text(result):
     return result.messages[0].content.text
-
-
-# -- the shipped prompts -------------------------------------------------------
-
-
-def test_every_shipped_prompt_loads():
-    """Strict here, lenient at runtime.
-
-    The server logs and skips a broken prompt so it cannot take the skills down
-    with it, which means a typo in a shipped one would otherwise ship silently.
-    """
-    paths = sorted(SHIPPED.glob("*/*.md"))
-    assert paths, "no shipped prompts — this test proves nothing"
-    for path in paths:
-        load_prompt(path, path.parent.name)
-
-
-def test_every_shipped_prompt_belongs_to_a_real_pack():
-    """The folder is the pack, and a pack is a skills.toml source."""
-    sources = {
-        s["name"] for s in tomllib.loads((REPO / "skills.toml").read_text())["source"]
-    }
-    folders = {p.parent.name for p in SHIPPED.glob("*/*.md")}
-    assert folders <= sources, f"prompt folders with no pack: {folders - sources}"
 
 
 # -- loading -------------------------------------------------------------------
@@ -185,15 +153,6 @@ async def test_skill_packs_scopes_prompts(skills_dir, prompts_dir):
         assert [p.name for p in await client.list_prompts()] == ["flatsource_hello"]
         with pytest.raises(Exception, match="deepsource_check"):
             await client.get_prompt("deepsource_check", {"service": "api"})
-
-
-async def test_the_shipped_grafana_prompt_renders(skills_dir):
-    server = School(make_config(skills_dir, SHIPPED), skills_dir / "_cache")
-    async with Client(server.mcp) as client:
-        result = await client.get_prompt("grafana_debug-logs", {"app": "nextcloud"})
-    body = text(result)
-    assert "**nextcloud**" in body
-    assert "the last 1h" in body and "{{" not in body
 
 
 # -- reading the snapshot -------------------------------------------------------

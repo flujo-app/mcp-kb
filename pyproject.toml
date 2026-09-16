@@ -3,7 +3,7 @@ name = "mcp-school"
 description = "A resource and prompt gateway for MCP: serves skills, prompts and other agent material from many sources"
 readme = "README.md"
 dynamic = ["version"]
-requires-python = ">=3.10.0"
+requires-python = ">=3.11"
 keywords = ["mcp", "skills", "agent-skills", "fastmcp", "ai"]
 license-files = ["LICENSE"]
 # One entry per interpreter CI actually sweeps, so the metadata and
@@ -15,7 +15,6 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
@@ -29,6 +28,14 @@ dependencies = [
   "fastmcp>=4.0.0,<5",
   "pyyaml>=6.0",
   "python-frontmatter>=1.1",
+  # git sources. pygit2 bundles libgit2, so the image needs no git binary and
+  # no build toolchain; fsspec's GitFileSystem is what exports a tree out of a
+  # bare clone without a working copy.
+  "fsspec>=2024.5",
+  # 1.19 is where Remote.list_heads arrives — 1.15-1.18 have ls_remotes only,
+  # and a lower floor resolves to one of those and dies with an AttributeError.
+  # It is also the first release to require 3.11, which sets requires-python.
+  "pygit2>=1.19",
 ]
 
 [project.optional-dependencies]
@@ -50,9 +57,6 @@ test = [
   # not httpx, so this has to be declared or the suite only passes where
   # something else happened to install it.
   "httpx",
-  # tests/test_packaging.py reads pyproject.toml, and tomllib is 3.11+. It
-  # arrives with pytest today; declared because a test that imports it should.
-  "tomli; python_version < '3.11'",
 ]
 
 [build-system]
@@ -85,7 +89,7 @@ markers = [
 
 [tool.ruff]
 # The oldest interpreter supported, so ruff flags what would break there.
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = [

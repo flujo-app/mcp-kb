@@ -7,15 +7,15 @@ name: 🧪 Test
 # The matrix is event-shaped, and that is the whole design of this file:
 #
 #   pull_request     3.14 only — the fast gate a contributor waits on
-#   push: main       3.10 → 3.14 — the compatibility sweep, run once the change
+#   push: main       3.11 → 3.14 — the compatibility sweep, run once the change
 #                    has already landed, because that is where a break in an old
 #                    interpreter is cheap to find and nobody is blocked on it
 #   workflow_call    full matrix too (the caller's event is not pull_request) —
 #                    publish.yml runs this before it cuts a version, so a release
 #                    never ships an interpreter it has not been tested on
 #
-# pyproject declares requires-python >=3.10. Testing only the newest interpreter
-# would leave four of those five claims unverified, and a release is exactly the
+# pyproject declares requires-python >=3.11. Testing only the newest interpreter
+# would leave three of those four claims unverified, and a release is exactly the
 # moment that matters.
 
 on:
@@ -54,7 +54,7 @@ jobs:
         # A pull request pays for one leg; everything else sweeps the supported
         # range. Keep 3.14 last-listed and present in BOTH arms: `Test (3.14)` is
         # the required status check, so it has to report on every pull request.
-        python-version: ${{ github.event_name == 'pull_request' && fromJSON('["3.14"]') || fromJSON('["3.10", "3.11", "3.12", "3.13", "3.14"]') }}
+        python-version: ${{ github.event_name == 'pull_request' && fromJSON('["3.14"]') || fromJSON('["3.11", "3.12", "3.13", "3.14"]') }}
     steps:
 
     - name: Checkout

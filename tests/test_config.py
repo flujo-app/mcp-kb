@@ -9,6 +9,7 @@ from mcp_school.config import (
     ConfigError,
     EnvRef,
     FileSource,
+    GitSource,
     Include,
     load_config,
 )
@@ -169,3 +170,132 @@ def test_an_unset_env_ref_is_a_config_error(monkeypatch):
     monkeypatch.delenv("NOPE", raising=False)
     with pytest.raises(ConfigError, match="NOPE"):
         EnvRef(env="NOPE").resolve()
+
+
+def test_a_github_source_produces_the_clone_url(tmp_path):
+    config = load_config(
+        write(tmp_path, "sources:\n- name: skills\n  url: github://grafana/skills\n")
+    )
+    [source] = config.sources
+    assert isinstance(source, GitSource)
+    assert source.clone_url == "https://github.com/grafana/skills.git"
+
+
+def test_a_github_url_already_ending_in_git_is_not_double_suffixed(tmp_path):
+    config = load_config(
+        write(
+            tmp_path, "sources:\n- name: skills\n  url: github://grafana/skills.git\n"
+        )
+    )
+    assert config.sources[0].clone_url == "https://github.com/grafana/skills.git"
+
+
+def test_a_github_url_missing_the_repo_is_a_config_error(tmp_path):
+    with pytest.raises(ConfigError, match="github://org/repo"):
+        load_config(
+            write(tmp_path, "sources:\n- name: a\n  url: github://only-org\n")
+        )
+
+
+def test_a_git_plus_https_source_with_a_ref_parses(tmp_path):
+    config = load_config(
+        write(
+            tmp_path,
+            "sources:\n- name: a\n  url: git+https://x/y.git\n  ref: v1\n",
+        )
+    )
+    [source] = config.sources
+    assert isinstance(source, GitSource)
+    assert source.ref == "v1"
+    assert source.clone_url == "https://x/y.git"
+
+
+def test_git_plus_http_and_git_plus_file_clone_urls_drop_only_the_prefix(tmp_path):
+    text = (
+        "sources:\n"
+        "- name: a\n  url: git+http://x/y.git\n"
+        "- name: b\n  url: git+file:///srv/repo.git\n"
+    )
+    config = load_config(write(tmp_path, text))
+    assert config.sources[0].clone_url == "http://x/y.git"
+    assert config.sources[1].clone_url == "file:///srv/repo.git"
+
+
+def test_git_auth_password_must_be_an_env_ref_not_a_literal(tmp_path):
+    text = (
+        "sources:\n- name: a\n  url: github://o/r\n"
+        "  auth:\n    username: x-access-token\n    password: hunter2\n"
+    )
+    with pytest.raises(ConfigError):
+        load_config(write(tmp_path, text))
+
+
+def test_git_auth_with_an_env_ref_password_parses(tmp_path):
+    text = (
+        "sources:\n- name: a\n  url: github://o/r\n"
+        "  auth:\n    username: x-access-token\n    password:\n      env: GITHUB_TOKEN\n"
+    )
+    config = load_config(write(tmp_path, text))
+    assert config.sources[0].auth.username == "x-access-token"
+    assert config.sources[0].auth.password == EnvRef(env="GITHUB_TOKEN")
+
+
+def test_refresh_is_still_accepted_on_a_git_source(tmp_path):
+    config = load_config(
+        write(tmp_path, "sources:\n- name: a\n  url: github://o/r\n  refresh: 5m\n")
+    )
+    assert config.sources[0].refresh_seconds == 300
+
+
+def test_a_file_source_with_a_ref_is_refused_extra_forbidden(tmp_path):
+    with pytest.raises(ConfigError):
+        load_config(
+            write(tmp_path, "sources:\n- name: a\n  url: file:///a\n  ref: v1\n")
+        )
+
+
+def test_a_git_subdirectory_escaping_the_export_is_refused(tmp_path):
+    text = "sources:\n- name: a\n  url: github://o/r\n  subdirectory: ../x\n"
+    with pytest.raises(ConfigError, match="relative"):
+        load_config(write(tmp_path, text))
+
+
+def test_a_git_subdirectory_that_stays_inside_parses(tmp_path):
+    text = "sources:\n- name: a\n  url: github://o/r\n  subdirectory: docs/skills\n"
+    config = load_config(write(tmp_path, text))
+    assert config.sources[0].subdirectory == "docs/skills"
+
+
+def test_min_refresh_seconds_considers_git_sources_too(tmp_path):
+    text = (
+        "sources:\n"
+        "- name: a\n  url: file:///a\n  refresh: 5m\n"
+        "- name: b\n  url: github://o/r\n  refresh: 10s\n"
+    )
+    config = load_config(write(tmp_path, text))
+    assert config.min_refresh_seconds == 10
+
+
+def test_a_credential_embedded_in_a_url_is_refused(tmp_path):
+    """`auth` is the one way a credential reaches a remote, and this is why.
+
+    pygit2 saves the clone's remote URL verbatim under `<cache>/git/<name>/config`,
+    and `source.url` is interpolated into the errors `/health` publishes — so a
+    token in the URL is a token on disk and in a served body. Refused at the
+    door instead, and the refusal itself must not repeat it back.
+    """
+    text = "sources:\n- name: p\n  url: git+http://x-access-token:ghp-secret@h/x.git\n"
+
+    with pytest.raises(ConfigError, match="credential") as raised:
+        load_config(write(tmp_path, text))
+
+    assert "ghp-secret" not in str(raised.value)
+    assert "x-access-token" not in str(raised.value)
+
+
+def test_a_url_with_no_credential_in_it_is_reported_as_it_is(tmp_path):
+    """The redaction must not eat an ordinary URL out of an ordinary message."""
+    with pytest.raises(ConfigError, match="github://org/repo") as raised:
+        load_config(write(tmp_path, "sources:\n- name: p\n  url: github://a/b/c\n"))
+
+    assert "github://a/b/c" in str(raised.value)

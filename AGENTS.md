@@ -2,22 +2,19 @@
 
 An MCP server that serves Agent Skills — `SKILL.md` packages — over HTTP so
 clients that cannot read a filesystem (n8n agents, above all) can still use
-them. Skills are **fetched at build time** from pinned upstream repos and baked
-into the image; nothing is fetched at runtime.
+them. The image bakes nothing: a source is a dependency declared in a config
+file, and it is cloned or read at container **start**, into a cache volume.
 
 ## Layout
 
 | Path | What it is |
 | --- | --- |
-| `skills.toml` | the pack manifest — pins what `fetch_skills.py` bakes under `/skills` at build time |
-| `prompts/<pack>/<name>.md` | prompts, committed here — served as `<pack>_<name>` |
-| `scripts/fetch_skills.py` | clones each pinned source at build time; stdlib only |
-| `scripts/requirements.py` | prints the dependency list out of `pyproject.toml` for the image build |
-| `mcp_school/config.py` | the config file's schema — `Config`, `load_config`, `Library`, the sources |
+| `mcp_school/config.py` | the config file's schema — `Config`, `load_config`, `Library`, `FileSource`, `GitSource` |
 | `mcp_school/harvest.py` | turns a source's `include` globs into skill dirs, prompt files and pack files |
-| `mcp_school/sources/` | turns a config source into a local directory — `file://` today; also the fingerprint used to detect a changed one |
-| `mcp_school/index.py` | `Index`/`SourceRecord`, the on-disk `index.json` cold start reads instead of re-harvesting |
-| `examples/config.yaml` | the catalogue the image ships — the four packs plus this repo's prompts |
+| `mcp_school/sources/` | turns a config source into a local directory — `file://` and `git+…`/`github://` — and fingerprints it, to detect a changed one |
+| `mcp_school/index.py` | `Index`/`SourceRecord`, the on-disk `index.json` a cold start reads instead of re-harvesting |
+| `scripts/requirements.py` | prints the dependency list out of `pyproject.toml` for the image build |
+| `examples/config.yaml` | the worked example the image ships — the four packs as `github://` sources |
 | `config.schema.json` | `Config.model_json_schema()`, committed so an editor can validate a config live |
 | `mcp_school/skills.py` | the catalogue — `Skill`, loading, and `SkillIndex` |
 | `mcp_school/uris.py` | the `skill://` address space — `Catalogue`, the grammar |
@@ -29,52 +26,56 @@ into the image; nothing is fetched at runtime.
 | `mcp_school/snapshot.py` | `Snapshot`, `build_snapshot` — the immutable view of the catalogue every request reads |
 | `mcp_school/server.py` | `School` — wiring, cold start, refresh, no tool bodies |
 | `mcp_school/main.py` | CLI and env parsing; the only file reading `os.environ` |
-| `deploy/` | raw Deployment + Service |
-| `kustomization.yaml` | the one kustomization; `newTag` is the deployed version |
-| `skills/` | **gitignored** — build output, never commit it |
 
 ## Adding a source
 
-`examples/config.yaml` — the file the image ships — is what you edit. A source
-is a dependency, declared like one:
+`examples/config.yaml` — the worked example the image ships — is what you edit
+to try one. A source is a dependency, declared like one:
 
 ```yaml
 sources:
 - name: penpot
-  url: file:///skills/penpot
+  url: github://penpot/penpot-ai-kit
+  ref: c63d8e3717323fad859e794848e5a602b155a7ec
   include:
-    skills: ["*/SKILL.md"]
+    skills: ["skills/*/SKILL.md"]
     files: ["shared/**/*", "workflows/**/*"]
 ```
 
-`file://` is the only scheme so far, must be absolute (`file:///path`, no
-host), and is served in place — never copied into the cache. `include` is
-globs per kind, relative to the source root; setting one *replaces* its
-convention rather than appending to it (`harvest.DEFAULTS` is what applies
-when `include` is left out entirely), and `[]` turns that kind off. A source
-joins a library — its own name unless it names one with `library:`, which is
-how several sources present as one grouping, the way `grafana-prompts` joins
-`grafana` above. `config.schema.json` is `Config.model_json_schema()`; add a
-`# yaml-language-server: $schema=./config.schema.json` modeline to a config
-file for an editor to validate it live, and regenerate the committed schema
-with `mcp-school schema > config.schema.json` after touching `config.py` —
+`url` picks the backend: `file:///path` (absolute, no host) is served in
+place; `git+https://`, `git+http://` and `git+file://` clone bare and shallow;
+`github://org/repo` is shorthand for `git+https://github.com/org/repo.git`.
+`ref` is a branch, tag or commit — a git source with no `ref` tracks the
+remote's default branch, and one with no `refresh` is read once at boot and
+never rebuilt until the process restarts. `subdirectory` narrows a git source
+to a path within the clone; `include` globs (see below) can reach the same
+effect without it, which is what the shipped example does.
+
+`include` is globs per kind, relative to the source root; setting one
+*replaces* its convention rather than appending to it (`harvest.DEFAULTS` is
+what applies when `include` is left out entirely), and `[]` turns that kind
+off. A source joins a library — its own name unless it names one with
+`library:`, which is how several sources present as one grouping. A pack that
+references shared material outside its skills — penpot does, 190 times —
+names those directories in `include.files`, never `skills`, so they are served
+at `skill://<pack>/<path>` rather than indexed as skills themselves.
+`config.schema.json` is `Config.model_json_schema()`; add a `#
+yaml-language-server: $schema=./config.schema.json` modeline to a config file
+for an editor to validate it live, and regenerate the committed schema with
+`mcp-school schema > config.schema.json` after touching `config.py` —
 `tests/test_schema.py` fails when the two drift.
 
-Then verify locally before pushing. `pytest` no longer reads `CONFIG`, and
-`examples/config.yaml` points at the image's `/skills` and `/prompts` paths, so
-fetch the skills and rewrite those roots to somewhere local first:
+Then verify locally before pushing:
 
 ```bash
-python scripts/fetch_skills.py --out /tmp/skills
-mkdir -p /tmp/prompts && cp -r prompts/grafana /tmp/prompts/
-sed 's#file:///skills#file:///tmp/skills#; s#file:///prompts#file:///tmp/prompts#' \
-  examples/config.yaml > /tmp/config.yaml
 python3 -m pytest -q
-mcp-school --config /tmp/config.yaml --transport http --port 18000
+mcp-school --config examples/config.yaml --cache-dir /tmp/mcp-school-cache \
+  --transport http --port 18000
 ```
 
 Then, from another shell, `curl -s localhost:18000/health` to confirm every
-source is `ok`.
+source is `ok`. A git source needs the network for that first run; a pinned
+commit needs it once, to clone, and never again.
 
 Nesting depth does **not** matter. `harvest.skill_dirs` walks for `SKILL.md`
 through the `include` globs, so a flat source (`<pack>/<skill>/SKILL.md`,
@@ -83,22 +84,24 @@ n8n) and a nested one (`<pack>/<group>/<skill>/SKILL.md`, grafana) both work.
 which is why grafana has seven selectable groups and n8n has none worth
 naming.
 
-Bumping the skill packs themselves — the upstream content a `file://` source
-here points at — is still `skills.toml` and the `🧠 Update Skills` workflow,
-Mondays 09:00 UTC or dispatched by hand. It repins every pack to upstream HEAD
-and opens a PR, because a bump is new upstream *instruction* content and
-deserves a read before it ships; `examples/config.yaml` only decides what is
-served out of what `skills.toml` fetched, not what gets fetched.
+## Bumping a pinned ref
+
+Edit `ref` in the config and restart — a git source resolves it fresh on the
+next cold start, and the cache under the old commit is simply superseded. A
+source tracking a floating branch with a `refresh` interval needs no bump at
+all; it repins itself on its own schedule. Either way this is a config change,
+never a code change, and it ships however the config gets to the running
+container — this repo has no opinion on that path.
 
 ## Shipping a change
 
-Two workflows, in this order. Neither runs on a push to main.
+One workflow. It does not run on a push to main.
 
-**1. `🧬 Publish Version`** (`workflow_dispatch`) — five jobs:
+**`🧬 Publish Version`** (`workflow_dispatch`) — four jobs:
 
 ```
-test    → the full 3.10 → 3.14 matrix; gates everything below
-version → pins kustomization.yaml newTag, rolls CHANGELOG, commits + tags main
+test    → the full 3.11 → 3.14 matrix; gates everything below
+version → rolls CHANGELOG, commits + tags main
 image   → checks out that tag, builds and pushes kubed/mcp-school:vX.Y.Z
 package → checks out that tag, builds the sdist + wheel as a GHA artifact
 release → downloads that artifact and cuts the GitHub Release
@@ -109,57 +112,18 @@ tests, computes the next version, and builds both the image and the package
 without pushing any of them. Then run with `push: true`. The dry run is what
 stops a successful tag from stranding on a failed build.
 
-The pin happens *before* the tag, so the tag's tree already references its own
-image. This is the only workflow that writes `newTag`, and it only ever writes a
-semver — so main always sits on something deployable.
-
-**2. `🚀 Deploy`** (`workflow_dispatch`) — runs `kubectl up` against this repo.
-
-`image.yml` on its own only builds. A push to main publishes `:main` and
-`:latest` for testing; it never changes what is deployed.
-
-## Kustomize: build and up
-
-These are this project's custom kubectl commands, not upstream kubectl. They all
-take a directory — the one holding `kustomization.yaml`, which here is the repo
-root. Run them from anywhere; pass the dir explicitly.
-
-```bash
-kubectl build <dir>   # render the manifests to stdout — no cluster contact
-kubectl diff -k <dir> # read-only diff of the render against the live cluster
-kubectl up <dir>      # apply, with applyset pruning
-kubectl down <dir>    # tear the app back down
-```
-
-From the repo root that is `kubectl build .` and `kubectl up .`.
-
-Use them in that order. `build` answers "did kustomize produce what I meant?"
-and is the right check after touching `deploy/` or `kustomization.yaml`; it
-never contacts the cluster. `kubectl diff -k` is the read-only preview and is
-safe to run anytime. `up` is what `deploy.yml` runs, so a clean local diff is a
-faithful preview of what the workflow will do.
-
-`kubectl plan` is documented in the cluster repo's CLAUDE.md but is **not
-installed in the codeserver pod** — `kubectl plugin list` shows `build`, `up`,
-`down`, and friends, with no `plan`. Use `kubectl diff -k` there instead.
-
-There is one kustomization, at the top level. `deploy/` holds the raw
-Deployment and Service and has no kustomization of its own — `kubectl build
-deploy` will not work, and is not meant to.
+`image.yml` on its own, on a push to main, publishes `:main` and `:latest` for
+testing; publish is the only workflow that ever writes a semver tag. Nothing
+here deploys anything — that is the installer's job, against whatever image
+tag it chooses.
 
 ## Things that already cost someone an afternoon
 
-- **`USER` in the Dockerfile must be numeric.** With `runAsNonRoot: true` the
-  kubelet refuses a non-numeric user — `image has non-numeric user (nobody),
-  cannot verify user is non-root` — and the pod sits in
-  `CreateContainerConfigError`. It is `USER 65534`, pinned again as `runAsUser`
-  in the pod spec.
-- **The control-plane nodes carry no taint in this cluster.** Without the node
-  affinity in `deploy/deployment.yaml` the scheduler will put this pod on an
-  etcd/master node; it did exactly that on the first rollout.
-- **`imagePullPolicy: Always` pairs with a floating tag.** While `newTag` is
-  `latest`, `IfNotPresent` pins a node to whatever layer it cached first. Once
-  `publish.yml` pins a semver this is just a cheap registry check.
+- **`USER` in the Dockerfile must be numeric.** A Kubernetes pod spec with
+  `runAsNonRoot: true` refuses a non-numeric user — `image has non-numeric
+  user (nobody), cannot verify user is non-root` — and sits in
+  `CreateContainerConfigError`. It is `USER 65534` here; an installation's own
+  `runAsUser` has to match it.
 - **The image build hands a venv between stages, and it has two rules.**
   `/opt/venv` must be copied to the *same absolute path* it was created at — a
   venv records that path in `pyvenv.cfg` and in every console script's shebang,
@@ -197,12 +161,13 @@ namespaces tool names with a prefix, and these three names are the agent's API.
   halves project from `Catalogue`, so a change there lands on both at once,
   which is the point.
 - **Adding an endpoint** → `routes.py`.
-- **Adding a prompt** → a file at `prompts/<pack>/<name>.md`, where `<pack>` is a
-  `skills.toml` source. No code. Every placeholder must be a declared argument and a
-  required argument cannot have a default; the server skips a file that breaks either
-  rule, so `tests/test_prompts.py` loads every shipped prompt strictly to catch it.
-- **A pack references files outside its skills** → add them to that source's `extras`
-  in `skills.toml`. They are served at `skill://<pack>/<path>` and listed under
+- **Adding a prompt** → a file matching a source's `include.prompts` glob (or the
+  `prompts/**/*.md` convention), named `<pack>_<file-stem>`. No code. Every
+  placeholder must be a declared argument and a required argument cannot have a
+  default; the server skips a file that breaks either rule, so
+  `tests/test_prompts.py` loads a broken one to prove that.
+- **A pack references files outside its skills** → add them to that source's
+  `include.files`. They are served at `skill://<pack>/<path>` and listed under
   `skill://<pack>/_files`, never indexed as skills. The spec says a skill is
   self-contained, so most sources need none — grep the SKILL.md files for
   `shared/`-style paths before reaching for it.
@@ -251,10 +216,8 @@ Two ways to hard-scope, both ceilings the model cannot widen past:
 
 - **`X-Skill-Pack` header**, per client. One deployment serves many single-pack
   agents; in n8n it is a Header Auth credential on the MCP Client Tool node.
-  Prefer this — a second Deployment is not free here, because the kustomization
-  sets `includeSelectors: true`, so a second instance would inherit the same
-  selector and the existing Service would load-balance across both. Fixing that
-  means changing `spec.selector`, which is immutable and forces a recreate.
+  Prefer this — a second copy of the server is a whole extra pod for no reason
+  a header could not solve first.
 - **A config that lists less**, per deployment. A deployment that should serve
   less gets a config that lists less — narrower blast radius but a whole pod.
 
@@ -262,19 +225,18 @@ They compose: the header narrows within whatever the config loads. Header
 scoping only exists inside an HTTP request, so it is inert over stdio — the
 tests in `tests/test_header_scope.py` run a real uvicorn server for that reason.
 
-## Verifying in the cluster
+`GET /health` reports the libraries, the skill and prompt counts, the
+catalogue's generation and when it was built, and each source's own status and
+fingerprint:
 
-```bash
-kubectl -n flow rollout status deploy/mcp-school
-kubectl -n flow port-forward svc/mcp-school 18000:8000
-curl -s localhost:18000/health   # {"status":"ok","generation":N,"built":"...","libraries":[...],"skills":N,"prompts":N,"sources":{...}}
-curl -sX POST localhost:18000/reindex   # the same payload, plus "rebuilt":[names]
+```
+{"status":"ok","generation":N,"built":"...","libraries":[...],"skills":N,"prompts":N,"sources":{...}}
 ```
 
-`/health` reports the libraries, the skill and prompt counts, the catalogue's
-generation and when it was built, and each source's own status and
-fingerprint — the fastest way to tell which image a pod is running, whether
-every source loaded, and whether a refresh has picked up an edit yet.
+`POST /reindex` returns the same payload plus `"rebuilt":[names]`. Between them
+they answer the three questions worth asking of a running instance: did every
+configured source load, which generation is being served, and has a refresh
+picked up an edit yet.
 
 ## House rules that apply here
 
@@ -287,6 +249,6 @@ every source loaded, and whether a refresh has picked up an edit yet.
   Dockerfile and `package.yml` builds the wheel it wraps.
 - `.github/zizmor.yml` and `.hadolint.yaml` record *why* each relaxed rule is
   relaxed. An ignore without a reason does not belong in either.
-- No `Makefile`. Everything is `pyproject.toml` plus the two scripts.
+- No `Makefile`. Everything is `pyproject.toml` plus `scripts/requirements.py`.
 - No auth on this server, by design: every skill it serves is public markdown
   that is already on GitHub. Do not add a token without a reason to.

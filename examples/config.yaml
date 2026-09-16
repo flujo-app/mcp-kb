@@ -1,28 +1,45 @@
 # yaml-language-server: $schema=../config.schema.json
-# The catalogue the image serves: the four packs Dockerfile bakes under /skills,
-# plus this repo's prompts, joined to the grafana library.
+# The catalogue this image used to bake, reproduced as `github://` sources
+# pinned to the same commits — read straight from GitHub at container start.
+#
+# Each source is rooted at a repository root, and an `include` kind left unset
+# falls back to the conventions — so `prompts: []` is what actually keeps an
+# upstream's own `prompts/` out of this pack. Prompts live with the installation.
 sources:
 - name: n8n
-  url: file:///skills/n8n
+  url: github://n8n-io/skills
+  ref: 180b8415e3b73f78828cfa01e908e67f89f2a139
   include:
-    skills: ["*/SKILL.md"]
+    skills: ["skills/*/SKILL.md"]
+    prompts: []
 - name: grafana
-  url: file:///skills/grafana
+  url: github://grafana/skills
+  ref: 51d33e71e191b409bbd25fc7be2684c610d18166
   include:
-    skills: ["*/*/SKILL.md"]
+    skills: ["skills/*/*/SKILL.md"]
+    prompts: []
 - name: penpot
-  url: file:///skills/penpot
+  url: github://penpot/penpot-ai-kit
+  ref: c63d8e3717323fad859e794848e5a602b155a7ec
   include:
-    skills: ["*/SKILL.md"]
+    skills: ["skills/*/SKILL.md"]
+    prompts: []
     files: ["shared/**/*", "workflows/**/*"]
 - name: superpowers
-  url: file:///skills/superpowers
+  url: github://obra/superpowers
+  ref: b36e0829c6d0140e93cfef2ca599b1b07d4a7797
   include:
-    skills: ["*/SKILL.md"]
-- name: grafana-prompts
-  library: grafana
-  url: file:///prompts/grafana
-  refresh: 1h
-  include:
-    skills: []
-    prompts: ["*.md"]
+    skills: ["skills/*/SKILL.md"]
+    prompts: []
+
+# A pinned ref never needs re-checking, which is why none of the above set
+# `refresh:`. Track a branch instead and the server re-resolves it on that
+# interval, rebuilding only if the commit moved:
+#
+# - name: superpowers-tip
+#   url: github://obra/superpowers
+#   ref: main
+#   refresh: 1h
+#   include:
+#     skills: ["skills/*/SKILL.md"]
+#     prompts: []

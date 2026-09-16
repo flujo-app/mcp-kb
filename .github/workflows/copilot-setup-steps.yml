@@ -55,12 +55,6 @@ jobs:
     - name: Install
       run: pip install --editable .[test,build]
 
-    # The tests run against a synthetic tree from conftest.py, but anything the
-    # agent wants to try by hand needs real packs, and they are fetched not
-    # vendored. Cheap, and it is the one step whose absence is confusing.
-    - name: Fetch Skills
-      run: python scripts/fetch_skills.py --out /tmp/skills
-
     # A cheap proof the environment is actually usable, so a broken setup fails
     # here rather than halfway through the agent's first task.
     - name: Verify

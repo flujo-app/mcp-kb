@@ -31,6 +31,3 @@ venv/
 
 # Logs
 *.log
-
-# Skill sources are fetched at build time from skills.toml — never committed.
-/skills/

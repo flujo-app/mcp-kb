@@ -78,7 +78,3 @@ updates:
       update-types:
       - minor
       - patch
-
-# NOTE: the skill sources in skills.toml are NOT tracked here. Dependabot has no
-# ecosystem for a hand-rolled manifest, so bumping those pins is the "Update
-# Skills" workflow's job (.github/workflows/update-skills.yml).
