@@ -267,7 +267,7 @@ class Catalogue:
                 )
                 for group in groups
             ]
-            if self._resources.files(pack):
+            if self._resources.files(pack, scope.tags):
                 entries.append(
                     Entry(
                         f"{SCHEME}{pack}/{PACK_FILES}",
@@ -351,7 +351,7 @@ class Catalogue:
         # packs exist, not which this caller may see.
         if scope and not any(s.pack == pack for s in self._index.visible(scope)):
             return None
-        return self._resources.read(pack, path)
+        return self._resources.read(pack, path, scope.tags)
 
     def _skill_file(self, skill: Skill, file: str) -> str | None:
         if file == MANIFEST:
@@ -376,7 +376,7 @@ class Catalogue:
     def _pack_files(self, pack: str, scope: Scope) -> str | None:
         if scope and not any(s.pack == pack for s in self._index.visible(scope)):
             return None
-        files = self._resources.files(pack)
+        files = self._resources.files(pack, scope.tags)
         if not files:
             return None
         lines = [f"{SCHEME}{pack}/{f}" for f in files]

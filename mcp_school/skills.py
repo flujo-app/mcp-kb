@@ -97,6 +97,12 @@ class _Root:
 
     base: Path
     files: tuple[str, ...]
+    # The same tags this source's skills carry. Two sources can feed one
+    # library, so a tag scope has to be checked per root, not per pack.
+    tags: frozenset[str] = frozenset()
+
+    def admits(self, tags: frozenset[str]) -> bool:
+        return not tags or not tags.isdisjoint(self.tags)
 
 
 class PackResources:
@@ -134,6 +140,7 @@ class PackResources:
         root: Path,
         files: Sequence[str],
         skill_dirs: Sequence[Path],
+        tags: Sequence[str] = (),
     ) -> None:
         """Register one source's contribution to ``pack``.
 
@@ -148,11 +155,13 @@ class PackResources:
             target = (base / rel).resolve()
             if any(target == d or d in target.parents for d in dirs):
                 raise ValueError(f"{rel!r} lies inside a skill directory")
-        entry = _Root(base=base, files=tuple(files))
+        entry = _Root(base=base, files=tuple(files), tags=frozenset(tags))
         self._roots.setdefault(pack, []).append(entry)
 
-    def files(self, pack: str) -> list[str]:
+    def files(self, pack: str, tags: frozenset[str] = frozenset()) -> list[str]:
         """Every pack-level file, as paths relative to whichever root holds it.
+
+        ``tags`` is a request's tag scope: only roots carrying any of them count.
 
         A path registered by two sources of the same library is listed twice --
         known, and not reachable from the shipped config, where no library is
@@ -160,10 +169,13 @@ class PackResources:
         """
         found: list[str] = []
         for entry in self._roots.get(pack, ()):
-            found.extend(entry.files)
+            if entry.admits(tags):
+                found.extend(entry.files)
         return found
 
-    def read(self, pack: str, rel: str) -> str | None:
+    def read(
+        self, pack: str, rel: str, tags: frozenset[str] = frozenset()
+    ) -> str | None:
         """Read one pack-level file, or None when it is absent or off-limits.
 
         ``rel`` must be exactly one of the paths ``add()`` registered for this
@@ -179,7 +191,7 @@ class PackResources:
         """
         target_rel = PurePosixPath(rel).as_posix()
         for entry in self._roots.get(pack, ()):
-            if target_rel not in entry.files:
+            if target_rel not in entry.files or not entry.admits(tags):
                 continue
             target = (entry.base / rel).resolve()
             if not target.is_relative_to(entry.base) or not target.is_file():

@@ -175,13 +175,15 @@ def build_snapshot(
             continue
         root = Path(record.root)
         skills += [row.to_skill() for row in record.skills]
+        lib = config.library(record.library)
         resources.add(
             record.library,
             root,
             record.files,
             [Path(d) for d in record.skill_dirs],
+            # What this source's skills carry, since these files serve them.
+            tags=[record.library, record.name, "skill", *lib.tags, *source.tags],
         )
-        lib = config.library(record.library)
         loaded = load_prompts(
             [Path(row.path) for row in record.prompts],
             pack=record.library,

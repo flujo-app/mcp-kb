@@ -20,6 +20,7 @@ from fastmcp.exceptions import ToolError
 
 from mcp_school import School
 from mcp_school.config import Config
+from mcp_school.scope import Scope
 from tests.test_header_scope import _free_port
 
 pytestmark = pytest.mark.unit
@@ -177,3 +178,77 @@ async def test_the_prompt_tools_are_held_to_the_scope(url):
         with pytest.raises(ToolError, match="observe_debug"):
             await client.call_tool("get_prompt", {"name": "observe_debug"})
     assert listed == []
+
+
+# -- scope across sources and shared group names --------------------------------
+
+
+@pytest.fixture
+def mixed(tmp_path):
+    """One library fed by two differently-tagged sources, and two libraries that
+    share a group name. The shapes the simple fixture above cannot express."""
+    from mcp_school.prompts import PromptProvider
+
+    def skill(root, *parts):
+        d = root.joinpath("skills", *parts)
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text(f"---\nname: {parts[-1]}\ndescription: x\n---\nb\n")
+
+    skill(tmp_path / "ops", "loki")
+    skill(tmp_path / "ui", "palette")
+    (tmp_path / "ui" / "shared").mkdir()
+    (tmp_path / "ui" / "shared" / "tokens.md").write_text("ui-only material")
+    for lib in ("alpha", "beta"):
+        skill(tmp_path / lib, "core", f"{lib}-skill")
+        (tmp_path / lib / "prompts").mkdir()
+        (tmp_path / lib / "prompts" / "p.md").write_text("---\ndescription: p\n---\nhi\n")
+    config = Config.model_validate(
+        {
+            "libraries": [{"name": "obs"}, {"name": "alpha"}, {"name": "beta"}],
+            "sources": [
+                {"name": "ops", "library": "obs", "tags": ["ops"],
+                 "url": f"file://{tmp_path / 'ops'}", "include": {"prompts": []}},
+                {"name": "ui", "library": "obs", "tags": ["ui"],
+                 "url": f"file://{tmp_path / 'ui'}",
+                 "include": {"prompts": [], "files": ["shared/**/*"]}},
+                {"name": "alpha", "url": f"file://{tmp_path / 'alpha'}"},
+                {"name": "beta", "url": f"file://{tmp_path / 'beta'}"},
+            ],
+        }
+    )
+    school = School(config, tmp_path / "cache")
+    return school, PromptProvider(lambda: school.snapshot)
+
+
+def test_a_tag_scope_cannot_read_another_sources_pack_file(mixed):
+    """Two sources feed `obs`; `tokens.md` came from the `ui` one.
+
+    Admitting pack files by library alone let an `ops` scope — which does see a
+    skill in `obs` — read the `ui` source's file by guessing its URI.
+    """
+    school, _ = mixed
+    catalogue = school.snapshot.catalogue
+    ops, ui = Scope(tags=frozenset({"ops"})), Scope(tags=frozenset({"ui"}))
+
+    assert catalogue.read("skill://obs/shared/tokens.md", ops) is None
+    assert catalogue.read("skill://obs/shared/tokens.md", ui) == "ui-only material"
+
+
+def test_a_tag_scope_does_not_list_another_sources_pack_files(mixed):
+    school, _ = mixed
+    catalogue = school.snapshot.catalogue
+    ops, ui = Scope(tags=frozenset({"ops"})), Scope(tags=frozenset({"ui"}))
+
+    assert catalogue.read("skill://obs/_files", ops) is None
+    assert "obs/_files" not in [e.name for e in catalogue.entries(ops)]
+    assert "tokens.md" in catalogue.read("skill://obs/_files", ui)
+
+
+def test_a_group_name_shared_by_two_libraries_selects_both_libraries_prompts(mixed):
+    """Group names are not unique. Resources admitted every library holding a
+    `core` group; prompts stopped at the first one found."""
+    school, prompts = mixed
+    core = Scope("core")
+
+    assert sorted({s.pack for s in school.index.visible(core)}) == ["alpha", "beta"]
+    assert sorted(p.name for p in prompts.visible(core)) == ["alpha_p", "beta_p"]

@@ -241,12 +241,12 @@ class PromptProvider(Provider):
         prompts = list(snapshot.prompts)
         if not scope:
             return prompts
-        library = _library_of(scope.library, snapshot.index)
+        libraries = _libraries_of(scope.library, snapshot.index)
         tags = Scope(tags=scope.tags)
         return [
             p
             for p in prompts
-            if (not library or p.pack == library) and tags.admits(p.pack, p.tags)
+            if (not libraries or p.pack in libraries) and tags.admits(p.pack, p.tags)
         ]
 
     async def _list_prompts(self) -> Sequence[Prompt]:
@@ -307,16 +307,16 @@ def register(mcp: FastMCP, snapshot: Callable[[], Snapshot]) -> set[str]:
     return set(PROMPT_TOOLS)
 
 
-def _library_of(selector: str, index: SkillIndex) -> str:
-    """The library a scope's ``library`` names, for matching prompts.
+def _libraries_of(selector: str, index: SkillIndex) -> frozenset[str]:
+    """The libraries a scope's ``library`` selects, for matching prompts.
 
     A prompt belongs to a library, not a group, so a group name resolves to the
-    library holding that group -- the rule pack-level files follow. A name no
+    libraries holding that group -- every one of them, since group names are
+    not unique across libraries and resources already admit them all. A name no
     skill carries is taken as the library itself, or a library of prompts and
     no skills would show nothing when asked for by name.
     """
     if not selector:
-        return ""
-    for skill in index.visible(Scope(selector)):
-        return skill.pack
-    return selector
+        return frozenset()
+    found = frozenset(s.pack for s in index.visible(Scope(selector)))
+    return found or frozenset({selector})
