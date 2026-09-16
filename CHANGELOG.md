@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `git+https://`, `git+http://`, `git+file://` and `github://` sources — cloned bare and shallow with pygit2, exported into the cache with fsspec's `GitFileSystem`, and fingerprinted by the resolved commit so a pinned SHA costs no network call while a branch or tag costs one `list_heads`.
 - A `refresh` interval per source (`30s`, `5m`, `1h`) and `sources.fingerprint()`, a cheap file-count/bytes/newest-mtime summary used to detect a changed source without re-harvesting it — not yet wired to a refresh loop.
 - `mcp_school.index`: an on-disk index of what each source yielded (`Index`, `SourceRecord`, `SkillRow`, `PromptRow`) — not yet used by the server.
 - `mcp-school schema` prints the config JSON Schema.
