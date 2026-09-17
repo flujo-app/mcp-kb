@@ -65,24 +65,29 @@ def test_every_internal_link_resolves():
 
 @needs_wiki
 def test_no_page_is_shadowed_by_a_file_in_a_subdirectory():
-    """A wiki page is addressed by basename, whatever directory it sits in.
+    """A wiki page is addressed by basename, wherever it sits in the tree.
 
     `wiki/notes/Tools.md` and `wiki/Tools.md` would therefore both answer to
     /wiki/Tools, and GitHub serves the fragment — so the page appears to have
-    lost everything but its prose while the raw file is perfect. The notes live
-    in wiki/notes/ and are suffixed `.notes.md` for exactly that reason; this
-    keeps a bare `<page>.md` from coming back.
+    lost everything but its prose while the raw file is perfect. The same is
+    true of two nested files sharing a stem with each other and no top-level
+    page at all: `wiki/notes/a/Foo.md` and `wiki/notes/b/Foo.md` collide on
+    /wiki/Foo just as surely, and neither is the "top-level page" the old
+    version of this guard checked against. The notes live in wiki/notes/ and
+    are suffixed `.notes.md` for exactly that reason; this keeps any bare
+    `<page>.md` anywhere in the tree from colliding with another.
     """
-    top = _pages()
-    nested = {
-        p: p.stem
-        for p in WIKI.rglob("*.md")
-        if p.parent != WIKI and ".git" not in p.parts
-    }
-    clashes = [str(p.relative_to(WIKI)) for p, stem in nested.items() if stem in top]
-    assert not clashes, (
-        "these files shadow a top-level wiki page by basename: " + ", ".join(clashes)
-    )
+    by_stem: dict[str, list[pathlib.Path]] = {}
+    for page in WIKI.rglob("*.md"):
+        if ".git" in page.parts:
+            continue
+        by_stem.setdefault(page.stem, []).append(page)
+    clashes = [
+        stem + ": " + ", ".join(str(p.relative_to(WIKI)) for p in paths)
+        for stem, paths in sorted(by_stem.items())
+        if len(paths) > 1
+    ]
+    assert not clashes, "these files share a basename: " + "; ".join(clashes)
 
 
 @needs_wiki
