@@ -166,7 +166,7 @@ async def test_a_header_beats_the_same_setting_in_the_url(server_url):
 
 
 @pytest.mark.integration
-async def test_the_pin_blocks_reading_another_librarys_resource(server_url):
+async def test_the_pin_blocks_reading_a_resource_in_another_library(server_url):
     """The hole this closes: filtering a listing leaves guessable URIs readable,
     and every URI here is guessable by design."""
     async with _client(server_url, {"X-Skill-Library": "flatsource"}) as client:

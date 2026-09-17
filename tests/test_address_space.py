@@ -564,3 +564,46 @@ async def test_a_library_file_named_manifest_is_not_labelled_json(tmp_path):
     assert library_file.text == "plain words\n"
     assert library_file.mime_type == "text/markdown"
     assert manifest.mime_type == "application/json"
+
+
+async def test_a_skill_nested_inside_a_skill_is_served_as_the_spec_says(tmp_path):
+    """SEP-2640 allows a skill inside another skill's directory.
+
+    Both are published flat, each at its own URI; the enclosing skill's
+    manifest lists the nested skill's files as its own supporting files; and a
+    URI under both names one file, so reaching it through either skill reads the
+    same bytes. Nothing about the nesting is a conflict, and nothing is skipped.
+    """
+    import json
+
+    from fastmcp import Client
+
+    from kubed.mcp_kb import KnowledgeBase
+    from kubed.mcp_kb.config import Config
+
+    root = tmp_path / "src"
+    (root / "skills" / "x" / "y" / "refs").mkdir(parents=True)
+    (root / "skills" / "x" / "SKILL.md").write_text(
+        "---\nname: x\ndescription: outer\n---\nsee y/refs/a.md\n"
+    )
+    (root / "skills" / "x" / "y" / "SKILL.md").write_text(
+        "---\nname: y\ndescription: inner\n---\ninner body\n"
+    )
+    (root / "skills" / "x" / "y" / "refs" / "a.md").write_text("shared bytes\n")
+    config = Config.model_validate(
+        {"sources": [{"name": "lib", "url": f"file://{root}"}]}
+    )
+    kb = KnowledgeBase(config, tmp_path / "cache")
+
+    async with Client(kb.mcp) as client:
+        index = (await client.read_resource("skill://lib/_index.md"))[0].text
+        inner = (await client.read_resource("skill://lib/x/y/SKILL.md"))[0].text
+        shared = (await client.read_resource("skill://lib/x/y/refs/a.md"))[0].text
+        manifest = (await client.read_resource("skill://lib/x/_manifest"))[0].text
+
+    assert "skill://lib/x/SKILL.md: outer" in index
+    assert "skill://lib/x/y/SKILL.md: inner" in index
+    assert "inner body" in inner
+    assert shared == "shared bytes\n"
+    assert {"y/SKILL.md", "y/refs/a.md"} <= {f["path"] for f in json.loads(manifest)["files"]}
+    assert "skipped" not in kb.snapshot.status["lib"]

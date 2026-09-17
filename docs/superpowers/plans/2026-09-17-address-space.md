@@ -40,8 +40,8 @@ exact values; where it and the saga disagree, the saga wins.
 | manifest | `skill://<library>/<path>/<name>/_manifest` |
 | library index | `skill://<library>/_index.md` |
 | folder index | `skill://<library>/<folder path>/_index.md` |
-| pack-level files index | `skill://<library>/_files.md` |
-| pack-level file | `skill://<library>/<path from source root>` |
+| library-level files index | `skill://<library>/_files.md` |
+| library-level file | `skill://<library>/<path from source root>` |
 | directory addresses | not found; message names `_index.md` or `_manifest` |
 | served vocabulary | "library", "folder" — never "pack", "group" in served text |
 | deleted | `X-Skill-Pack` header alias |
