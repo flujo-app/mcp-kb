@@ -136,6 +136,20 @@ def test_an_instructions_file_is_not_a_prompt(tmp_path):
     assert skipped == [(path, "not a prompt: has `applyTo`")]
 
 
+def test_an_instructions_file_carrying_a_prompts_key_is_still_not_a_prompt(tmp_path):
+    """A VS Code instructions or chatmode file declares `tools:` too, so the
+    key that disqualifies it has to be read before the key that would claim
+    it -- otherwise a rule is published as a command."""
+    path = write(
+        tmp_path / "chat.md",
+        "description: d\ntools: [search]\napplyTo: '**/*.py'\n",
+        "Always type your code.",
+    )
+    skipped = []
+    assert load_prompts([path], library="lib", skipped=skipped) == []
+    assert skipped == [(path, "not a prompt: has `applyTo`")]
+
+
 def test_a_dialect_nothing_here_reads_is_skipped_with_its_name(tmp_path):
     """A config naming a dialect this server has no module for must skip the
     file, the way any other unreadable prompt does -- not take the harvest
@@ -258,6 +272,46 @@ def test_a_dollar_amount_is_not_a_positional(tmp_path):
     assert prompt.render({"arguments": "the job"}) == "Charge $5.00 for the job."
 
 
+def test_a_declared_argument_named_arguments_is_a_name_like_any_other(tmp_path):
+    """It is published once, and the indexes count over it rather than reading
+    it as the free text this dialect appends when a file declares none."""
+    path = write(
+        tmp_path / "deploy.md",
+        "description: d\narguments: [arguments, env]\n",
+        "Deploy $0 to $1, all of it: $ARGUMENTS.",
+    )
+    prompt = load_prompt(path, "lib")
+    assert [a.name for a in prompt.arguments] == ["arguments", "env"]
+    assert (
+        prompt.render({"arguments": "api", "env": "prod"})
+        == "Deploy api to prod, all of it: api."
+    )
+
+
+def test_an_empty_argument_hint_describes_nothing(tmp_path):
+    path = write(
+        tmp_path / "review.md",
+        "description: d\nargument-hint: ''\n",
+        "Review $ARGUMENTS.",
+    )
+    prompt = load_prompt(path, "lib")
+    assert [a.description for a in prompt.arguments] == [
+        "Everything typed after the command."
+    ]
+
+
+def test_an_argument_hint_written_as_a_list_is_one_line(tmp_path):
+    """`argument-hint: [file] [board]` is YAML's list of two, not the line it
+    looks like, and a Python repr is not what its author wrote."""
+    path = write(
+        tmp_path / "penpot.md",
+        "description: d\nargument-hint: [file, board]\n",
+        "Open $ARGUMENTS.",
+    )
+    prompt = load_prompt(path, "lib")
+    assert [a.description for a in prompt.arguments] == ["file board"]
+
+
 def test_an_undeclared_name_is_left_as_written(tmp_path):
     """Only a declared name is a placeholder; `$dir` in prose is prose."""
     path = write(
@@ -273,17 +327,38 @@ def test_an_undeclared_name_is_left_as_written(tmp_path):
 
 
 def test_copilot_inputs_collapse_by_name_and_keep_the_first_placeholder(tmp_path):
+    """Whichever spelling comes first: `env` is bare before it is described,
+    and that later placeholder is the only description it has."""
     path = write(
         tmp_path / "log.prompt.md",
         "description: d\n",
-        "${input:app:The workload.} then ${input:app} and ${input:since}.",
+        "${input:app:The workload.} then ${input:app} and ${input:since}"
+        " on ${input:env}, not ${input:env:Which cluster.}.",
     )
     prompt = load_prompt(path, "lib")
     assert [(a.name, a.description) for a in prompt.arguments] == [
         ("app", "The workload."),
         ("since", None),
+        ("env", "Which cluster."),
     ]
-    assert prompt.render({"app": "api"}) == "api then api and ."
+    assert (
+        prompt.render({"app": "api", "env": "prod"})
+        == "api then api and  on prod, not prod."
+    )
+
+
+def test_a_copilot_placeholder_may_contain_a_colon(tmp_path):
+    """The placeholder runs to the closing brace, so the second colon is text."""
+    path = write(
+        tmp_path / "ask.prompt.md",
+        "description: d\n",
+        "Look at ${input:app:Which app: api or web?}.",
+    )
+    prompt = load_prompt(path, "lib")
+    assert [(a.name, a.description) for a in prompt.arguments] == [
+        ("app", "Which app: api or web?")
+    ]
+    assert prompt.render({"app": "api"}) == "Look at api."
 
 
 def test_copilot_appends_the_free_text_of_an_argument_hint(tmp_path):

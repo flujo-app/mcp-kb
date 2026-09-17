@@ -56,12 +56,25 @@ def dropped_keys(meta: dict, meaningful: Sequence[str]) -> tuple[str, ...]:
     return tuple(str(key) for key in meta if key not in meaningful)
 
 
+def hint_of(meta: dict) -> str | None:
+    """``argument-hint`` as text, or None when the file has none.
+
+    ``argument-hint: [file] [board]`` is a YAML *list* of two hints, not the
+    string it looks like, so a hint is joined back into the line its author
+    meant rather than published as a Python repr.
+    """
+    hint = meta.get("argument-hint")
+    if isinstance(hint, list):
+        return " ".join(str(item) for item in hint)
+    return None if hint is None else str(hint)
+
+
 def free_text(hint: str | None) -> Argument:
     """The one argument a command with no declared names still takes.
 
     ``argument-hint`` is what its author wrote for the person filling it in --
-    ``[file] [board]`` -- so it is the best description available; without one,
-    say what the argument is.
+    ``[file] [board]`` -- so it is the best description available; an empty one
+    describes nothing, and then the argument says what it is.
     """
     return Argument(
         name=FREE_TEXT, description=hint or "Everything typed after the command."

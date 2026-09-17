@@ -14,7 +14,15 @@ from __future__ import annotations
 
 import re
 
-from .shape import FREE_TEXT, Argument, Parsed, description_of, dropped_keys, free_text
+from .shape import (
+    FREE_TEXT,
+    Argument,
+    Parsed,
+    description_of,
+    dropped_keys,
+    free_text,
+    hint_of,
+)
 
 NAME = "copilot"
 
@@ -40,9 +48,9 @@ def parse(meta: dict, body: str) -> Parsed:
 
     arguments = [Argument(name=n, description=d) for n, d in found.items()]
 
-    hint = meta.get("argument-hint")
+    hint = hint_of(meta)
     if not arguments and hint is not None:
-        arguments.append(free_text(str(hint)))
+        arguments.append(free_text(hint))
 
     return Parsed(
         description=description_of(meta),

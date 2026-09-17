@@ -15,7 +15,15 @@ from __future__ import annotations
 
 import re
 
-from .shape import FREE_TEXT, Argument, Parsed, description_of, dropped_keys, free_text
+from .shape import (
+    FREE_TEXT,
+    Argument,
+    Parsed,
+    description_of,
+    dropped_keys,
+    free_text,
+    hint_of,
+)
 
 NAME = "claude"
 
@@ -42,9 +50,8 @@ def parse(meta: dict, body: str) -> Parsed:
     names = _names(meta.get("arguments"))
     arguments = [Argument(name=name) for name in names]
 
-    hint = meta.get("argument-hint")
     if FREE_TEXT not in names and (not names or POSITIONAL.search(body)):
-        arguments.append(free_text(None if hint is None else str(hint)))
+        arguments.append(free_text(hint_of(meta)))
 
     return Parsed(
         description=description_of(meta),
@@ -62,7 +69,13 @@ def substitute(body: str, values: dict[str, str]) -> str:
     ``FilePrompt.render`` keeps), which is what makes `$0` resolvable: it is
     the first declared name, and that order is only knowable from the file.
     """
-    names = [name for name in values if name != FREE_TEXT]
+    # The free text is the argument `parse` appends, which is always the last
+    # one -- and `parse` appends none to a file that declares that name
+    # itself. So a declared `arguments` ahead of another name is a name like
+    # any other, and the indexes count over it rather than skipping it.
+    names = list(values)
+    if names and names[-1] == FREE_TEXT:
+        names = names[:-1]
     free = values.get(FREE_TEXT, "")
 
     def at(index: int) -> str:

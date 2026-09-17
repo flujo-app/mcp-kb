@@ -42,6 +42,11 @@ def dialect_for(path: Path, meta: dict, body: str, declared: str = AUTO) -> str 
     if path.name.endswith(COPILOT_SUFFIX):
         return copilot.NAME
 
+    # First of the keys, because it is the one that disqualifies the file: a
+    # VS Code instructions or chatmode file carries `tools:` as well, and
+    # reading that key first would publish a rule as a command.
+    if not_a_prompt(meta):
+        return None
     if any(key in meta for key in COPILOT_KEYS):
         return copilot.NAME
 
@@ -52,8 +57,6 @@ def dialect_for(path: Path, meta: dict, body: str, declared: str = AUTO) -> str 
         return claude.NAME
     if arguments == _OBJECTS:
         return mcpkb.NAME
-    if not_a_prompt(meta):
-        return None
 
     if mcpkb.PLACEHOLDER.search(body):
         return mcpkb.NAME
