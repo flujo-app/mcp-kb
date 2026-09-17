@@ -53,6 +53,7 @@ def _build(base):
         "Traces are in [tempo](../tempo/SKILL.md).\n",
     )
     _write(grafana, "skills/grafana-lgtm/loki/references/LOGQL.md", "logql notes\n")
+    _write(grafana, "skills/grafana-lgtm/loki/.env", "LOKI_SECRET=1\n")
     _skill(grafana, "skills/grafana-lgtm/tempo", "tempo", "Query traces.")
     _skill(grafana, "skills/grafana-lgtm/testing", "testing", "Test the stack.")
     _skill(grafana, "skills/grafana-k6/k6", "k6", "Load test.")
@@ -136,6 +137,23 @@ async def _read_error(url, uri, library=None):
     return str(caught.value)
 
 
+async def _raw(url, uri, library=None):
+    """``resources/read`` with ``uri`` sent exactly as given.
+
+    ``Client.read_resource`` passes the URI through pydantic's ``AnyUrl``,
+    which resolves ``.`` and ``..`` before it leaves the client -- so it can
+    never show what a client that sends the raw string gets. The session
+    underneath takes a plain ``str`` and sends it as written, over the same
+    HTTP connection.
+    """
+    async with _client(url, library=library) as client:
+        try:
+            result = await client.session.read_resource(uri)
+        except Exception as exc:  # noqa: BLE001 - the error text is the result
+            return f"error: {exc}"
+    return result.contents[0].text
+
+
 async def _tool(url, uri, library=None):
     async with _client(url, library=library) as client:
         result = await client.call_tool("read_resource", {"uri": uri})
@@ -193,6 +211,60 @@ async def test_two_skills_with_one_name_in_different_folders_are_both_served(url
 async def test_a_library_level_file_keeps_its_path_from_the_source_root(url):
     assert await _read(url, "skill://grafana/shared/style.md") == "house style\n"
     assert await _read(url, "skill://grafana/extra/notes.md") == "ops notes\n"
+
+
+# -- dot segments ---------------------------------------------------------------
+#
+# A skill links a sibling as `../other/SKILL.md`, and a client that resolves
+# that against the skill's URI without normalising sends the `..` as written.
+# The server resolves it itself, so every one of these holds through the raw
+# resource read and through the tool, which never normalise.
+
+SIBLING = "skill://grafana/grafana-lgtm/loki/../tempo/SKILL.md"
+
+
+async def test_a_sibling_link_with_dot_segments_reads_the_sibling(url):
+    assert "Query traces." in await _raw(url, SIBLING)
+    assert "Query traces." in await _tool(url, SIBLING)
+    assert "Query traces." in await _raw(
+        url, "skill://grafana/./grafana-lgtm/./tempo/SKILL.md"
+    )
+
+
+async def test_dot_segments_clamp_at_the_library_and_never_leave_it(url):
+    """`..` past the library's root is dropped, as RFC 3986 does, never popped
+    into the authority: the library is the first thing in the URI, not a path."""
+    escape = "skill://other/../../grafana-lgtm/loki/SKILL.md"
+    assert "Another loki." in await _raw(url, escape)
+    assert "Another loki." in await _tool(url, escape)
+    across = "skill://other/../grafana/grafana-lgtm/loki/SKILL.md"
+    assert "Query logs." not in await _raw(url, across)
+    assert "Query logs." not in await _tool(url, across)
+
+
+async def test_a_dot_segment_read_out_of_scope_reads_as_a_missing_one(url):
+    sneak = "skill://grafana/grafana-k6/../grafana-lgtm/loki/SKILL.md"
+    missing = "skill://grafana/grafana-k6/nope/SKILL.md"
+    assert "Query logs." in await _raw(url, sneak)
+    pinned = "grafana/grafana-k6"
+    hidden = await _raw(url, sneak, library=pinned)
+    assert hidden == (await _raw(url, missing, library=pinned)).replace(missing, sneak)
+    hidden = await _tool(url, sneak, library=pinned)
+    assert hidden == (await _tool(url, missing, library=pinned)).replace(
+        missing, sneak
+    )
+
+
+async def test_a_hidden_file_reached_through_dot_segments_is_still_refused(url):
+    for uri in (f"{LOKI}/../loki/.env", f"{LOKI}/references/../.env"):
+        assert "LOKI_SECRET" not in await _raw(url, uri)
+        assert "LOKI_SECRET" not in await _tool(url, uri)
+
+
+async def test_a_dot_segment_address_of_a_directory_names_the_file_to_read(url):
+    uri = "skill://grafana/grafana-k6/../grafana-lgtm/loki"
+    assert f"{LOKI}/SKILL.md" in await _raw(url, uri)
+    assert f"{LOKI}/SKILL.md" in await _tool(url, uri)
 
 
 # -- directories ----------------------------------------------------------------

@@ -226,7 +226,15 @@ def test_absent_reads_are_none_not_errors(catalogue, uri):
 
 @pytest.mark.unit
 def test_traversal_cannot_walk_out_of_a_skill(catalogue):
-    assert catalogue.read("skill://deepsource/plugin-a/gamma/../../README.md") is None
+    """`..` resolves to another address in the library, never to the disk.
+
+    `gamma/../../README.md` is the address `skill://deepsource/README.md`, a
+    library file this source serves anyway; what it can never be is a path
+    walked out of the skill directory, and past the library it clamps.
+    """
+    assert catalogue.read(
+        "skill://deepsource/plugin-a/gamma/../../README.md"
+    ) == catalogue.read("skill://deepsource/README.md")
     assert (
         catalogue.read("skill://deepsource/plugin-a/gamma/../../../etc/passwd")
         is None

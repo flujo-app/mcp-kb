@@ -103,6 +103,12 @@ def parse(uri: str) -> tuple[str, str] | None:
     all. Percent-decoding is not done here: the segments this server mints are
     already path-safe, and decoding would be one more way for ``%2e%2e`` to
     become ``..``.
+
+    The path's dot segments are resolved here, once, for every read, hint and
+    media type: a skill links its sibling as ``../other/SKILL.md``, and a
+    client that resolves that without normalising sends the ``..`` as written.
+    Every check downstream -- scope, containment, hidden files -- then runs on
+    the address the URI names rather than on its spelling.
     """
     if not uri.startswith(SCHEME):
         return None
@@ -110,7 +116,25 @@ def parse(uri: str) -> tuple[str, str] | None:
     if not rest:
         return None
     head, _, tail = rest.partition("/")
-    return head, tail
+    return head, _remove_dot_segments(tail)
+
+
+def _remove_dot_segments(path: str) -> str:
+    """RFC 3986 ``remove_dot_segments`` on the path below the library.
+
+    ``.`` goes, ``..`` takes the segment before it, and a ``..`` with nothing
+    before it is dropped -- clamped at the root exactly as a normalising client
+    clamps it. The library is the URI's authority, not a path segment, so no
+    number of ``..`` can reach a different one.
+    """
+    kept: list[str] = []
+    for segment in path.split("/"):
+        if segment == "..":
+            if kept:
+                kept.pop()
+        elif segment != ".":
+            kept.append(segment)
+    return "/".join(kept).strip("/")
 
 
 def uri_for(skill: Skill, file: str = MAIN_FILE) -> str:
