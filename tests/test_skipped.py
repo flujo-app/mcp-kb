@@ -242,3 +242,48 @@ async def test_a_second_prompt_with_one_name_in_a_source_is_skipped(tmp_path):
     assert [p.name for p in prompts] == ["lib_debug"]
     assert "first" in rendered.messages[0].content.text
     assert mirrored.content[0].text.count("lib_debug") == 1
+
+
+async def test_a_skipped_skills_own_files_neither_serve_nor_fail_the_source(tmp_path):
+    """A `files:` glob that reaches into a skill the source then skips.
+
+    Skill directories and library files come from one harvest, and library files
+    never include anything inside a harvested skill — valid or not — so the
+    skipped skill's files are simply not served. The source stays `ok`, lists the
+    skill under `skipped`, and serves its valid skill.
+    """
+    from fastmcp import Client
+
+    from kubed.mcp_kb import KnowledgeBase
+    from kubed.mcp_kb.config import Config
+
+    root = tmp_path / "src"
+    (root / "skills" / "good").mkdir(parents=True)
+    (root / "skills" / "good" / "SKILL.md").write_text(
+        "---\nname: good\ndescription: g\n---\nbody\n"
+    )
+    (root / "skills" / "bad").mkdir(parents=True)
+    (root / "skills" / "bad" / "SKILL.md").write_text(
+        "---\nname: Not_Valid\ndescription: b\n---\nbody\n"
+    )
+    (root / "skills" / "bad" / "notes.md").write_text("never served\n")
+    config = Config.model_validate(
+        {
+            "sources": [
+                {
+                    "name": "lib",
+                    "url": f"file://{root}",
+                    "include": {"files": ["skills/bad/**/*"]},
+                }
+            ]
+        }
+    )
+    kb = KnowledgeBase(config, tmp_path / "cache")
+    status = kb.snapshot.status["lib"]
+
+    assert status["status"] == "ok"
+    assert [entry["path"] for entry in status["skipped"]] == ["skills/bad"]
+    async with Client(kb.mcp) as client:
+        assert "body" in (await client.read_resource("skill://lib/good/SKILL.md"))[0].text
+        with pytest.raises(Exception, match="not found"):
+            await client.read_resource("skill://lib/skills/bad/notes.md")
