@@ -15,8 +15,9 @@ behind, and the operator reading this error is the one who wrote the config.
 A scope is refused for what it *names*, never for what happens to be served at
 the moment. A library whose every source is down right now, or up with nothing
 in it yet, is still a library; it is empty, and a client pinned to it connects
-and sees nothing until something arrives, which ``/health`` explains. Only a folder or a tag combination is
-checked against the served catalogue, and only when that library is serving.
+and sees nothing until something arrives, which ``/health`` explains. Only a
+folder or a tag combination is checked against the served catalogue, and only
+when that library is serving.
 """
 
 from __future__ import annotations
@@ -51,7 +52,7 @@ def what_is_wrong(scope: Scope, config: Config, snapshot: Snapshot) -> str | Non
             f" such library. The libraries are: {', '.join(libraries)}."
         )
 
-    tags = _declared_tags(config) | _served_tags(snapshot)
+    tags = _declared_tags(config)
     unknown = sorted(scope.tags - tags)
     if unknown:
         return (
@@ -113,25 +114,18 @@ def _up(snapshot: Snapshot, library: str) -> bool:
 
 
 def _declared_tags(config: Config) -> set[str]:
-    """Every tag the config can put on anything, whether or not it is serving.
+    """Every tag anything can carry, whether or not it is serving.
 
-    The library and source names are tags too: the harvest puts both on
-    everything a source serves, and ``skill`` or ``prompt`` on what each is.
+    Which is every tag there is: a skill's and a prompt's tags are made from the
+    config alone -- its library and source names, ``skill`` or ``prompt``, and
+    the tags the library and source declare -- never from a file. So this needs
+    no walk of the catalogue, which matters on a check made for every request.
     """
     tags = {"skill", "prompt"}
     for lib in config.libraries:
         tags |= {lib.name, *lib.tags}
     for source in config.sources:
         tags |= {source.name, source.library_name, *source.tags}
-    return tags
-
-
-def _served_tags(snapshot: Snapshot) -> set[str]:
-    tags: set[str] = set()
-    for skill in snapshot.index.visible():
-        tags |= skill.tags
-    for prompt in snapshot.prompts:
-        tags |= set(prompt.tags)
     return tags
 
 
