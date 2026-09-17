@@ -14,6 +14,7 @@ tree on its own.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -23,6 +24,21 @@ import yaml
 
 from ..mcp.scope import EVERYTHING, Scope
 from . import harvest
+
+# The Agent Skills naming rule: lowercase letters, digits and single hyphens,
+# neither first nor last. It is also what keeps a name one URI segment.
+NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+NAME_MAX = 64
+
+
+def naming_problem(name: str) -> str | None:
+    """Why ``name`` breaks the Agent Skills naming rule, or None when it keeps it."""
+    if len(name) <= NAME_MAX and NAME.fullmatch(name):
+        return None
+    return (
+        f"name {name!r} breaks the Agent Skills naming rule: 1-{NAME_MAX}"
+        " lowercase letters, digits and single hyphens, not first or last"
+    )
 
 
 @dataclass(frozen=True)
@@ -232,9 +248,9 @@ class SkillIndex:
 
     def __init__(self, skills: list[Skill]):
         self._skills = skills
-        # First writer wins. Two sources claiming one address are refused
-        # before they get here; one source reaching a skill by two paths (a
-        # symlinked skill root) keeps the one found first.
+        # First writer wins, though no two skills here share an address: the
+        # snapshot fails a second source that would, and skips a second skill
+        # of one source.
         self._by_address: dict[str, Skill] = {}
         for skill in skills:
             self._by_address.setdefault(skill.address, skill)

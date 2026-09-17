@@ -37,7 +37,7 @@ from ..sources.live import Revalidator, is_live
 from . import harvest
 from .index import PromptRow, SkillRow, SourceRecord, now
 from .prompts import FilePrompt, load_prompts
-from .skills import LibraryFiles, Skill, SkillIndex, load_skills
+from .skills import LibraryFiles, Skill, SkillIndex, load_skills, naming_problem
 from .uris import INDEX, LIBRARY_FILES, SCHEME, Catalogue, uri_for
 
 log = logging.getLogger(__name__)
@@ -257,10 +257,21 @@ def _admit(
     A skipped thing is a defect in the source, not a failure of it: the rest
     serves, and ``/health`` says what is missing and why.
 
-    A library file is left out when its address is a skill's or lies inside
-    one -- the skill answers that URI, so the file could be listed and never
-    read, or read only under a scope that hides the skill -- and when it is
-    named like an index the server generates.
+    A skill is left out when its frontmatter ``name`` breaks the Agent Skills
+    naming rule or differs from its directory's name (a skill that is the
+    whole source excepted) -- SEP-2640 makes the
+    name the last segment of the address, so anything else mints a URI that
+    does not resolve, or invents a folder -- and when a skill before it
+    already has its address, as one tree reaching a skill through two skill
+    roots does.
+
+    A library file is left out when its address is a served skill's or lies
+    inside one -- the skill answers that URI, so the file could be listed and
+    never read, or read only under a scope that hides the skill -- and when it
+    is named like an index the server generates.
+
+    A prompt is left out when a prompt before it has its name, as
+    ``prompts/debug.md`` and ``prompts/sub/debug.md`` both would.
     """
     skipped: list[dict[str, str]] = []
 
@@ -268,7 +279,27 @@ def _admit(
         log.warning("source %s: skipping %s: %s", record.name, path, reason)
         skipped.append({"path": path, "reason": reason})
 
-    roots = sorted((s.address for s in skills), key=len, reverse=True)
+    root = Path(record.root or "")
+    served: dict[str, Skill] = {}
+    for skill in skills:
+        where = _relative(skill.path, root)
+        problem = naming_problem(skill.name)
+        # A source that is one skill has no directory of its own to match: its
+        # root is wherever the cache put it, a commit hash for a git source.
+        at_root = where == "."
+        if problem is None and not at_root and skill.name != skill.path.name:
+            problem = (
+                f"name {skill.name!r} differs from its directory {skill.path.name!r}"
+            )
+        if problem is None and skill.address in served:
+            first = _relative(served[skill.address].path, root)
+            problem = f"{SCHEME}{skill.address} is already served by {first}"
+        if problem is not None:
+            skip(where, problem)
+            continue
+        served[skill.address] = skill
+
+    roots = sorted(served, key=len, reverse=True)
     files: list[str] = []
     for rel in record.files:
         name = PurePosixPath(rel).name
@@ -281,7 +312,28 @@ def _admit(
             skip(rel, f"its address lies inside the skill at {SCHEME}{inside}")
             continue
         files.append(rel)
-    return skills, files, prompts, skipped
+
+    names: dict[str, FilePrompt] = {}
+    for prompt in prompts:
+        where = _relative(prompt.path, root)
+        if prompt.name in names:
+            first = _relative(names[prompt.name].path, root)
+            skip(where, f"prompt {prompt.name} is already served by {first}")
+            continue
+        names[prompt.name] = prompt
+    return list(served.values()), files, list(names.values()), skipped
+
+
+def _relative(path: Path, root: Path) -> str:
+    """``path`` as the source names it: relative to its root, never absolute.
+
+    ``/health`` is unauthenticated, so a cache path does not belong in it. A
+    harvest resolves the root it walks, so either spelling may be the prefix.
+    """
+    for base in (root, root.resolve()):
+        if path.is_relative_to(base):
+            return path.relative_to(base).as_posix()
+    return path.name
 
 
 def _within(address: str, root: str) -> bool:

@@ -100,8 +100,11 @@ SOURCE_STATUS = {
                 "Present when this source ships something the address space has "
                 "no room for. Each entry is left out while the rest of the "
                 "source serves: a library file whose address lies inside one of "
-                "the source's own skills or is named `_index.md` or `_files.md`. "
-                "A clash with another source is not "
+                "the source's own skills or is named `_index.md` or `_files.md`; "
+                "a skill whose frontmatter `name` breaks the Agent Skills naming "
+                "rule or differs from its directory, or that a skill before it "
+                "already serves at that address; a prompt whose name a prompt "
+                "before it already has. A clash with another source is not "
                 "listed here: it fails the later source instead."
             ),
             "items": {
