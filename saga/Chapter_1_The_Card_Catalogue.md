@@ -2434,6 +2434,113 @@ Consequences, recorded rather than decided:
 - The ref moves to `?ref=` beside go-getter's `//` (§C1.31 issue 2), in the
   sketch.
 
+### §C1.33 — Locked by Dr K, and the plan (2026-09-17)
+
+**Locked this round.**
+
+1. **A remote plugin is never edited here.** To change anything about one —
+   its tags, its category, which skills it serves — you declare your own plugin
+   against the same repository and pick what you want. No field of a
+   marketplace entry may be overridden. The cost is nil in fetches: a source is
+   cached by URL and ref, so your plugin and the marketplace's share one clone.
+2. **Two phases.** Phase one resolves every marketplace into plugins and adds
+   them to the plugin set. Phase two resolves each library: named plugins and
+   `pluginSelector` queries run against that whole set, marketplace plugins
+   included, so a query can regroup remote plugins into a library of your own.
+3. **A library is a marketplace or its own composition, never both queries.**
+   `source` and `pluginSelector` on one library is a config error: a marketplace
+   library's shape is the catalog's, and a selector would make phase one depend
+   on phase two. `source` plus a named `plugins` list stays allowed — that adds
+   beside the catalog without reshaping it.
+4. **Commands become prompts.** A plugin's `commands` (and `commands/`) are
+   harvested as MCP prompts. Confirmed as wanted, and in scope for the work
+   below rather than deferred to E5.
+
+**Commands translate almost directly.** Claude's command frontmatter already
+carries `description`, an `arguments` list of names, and `argument-hint`, and
+its body substitutes `$name` (named, mapped by position), `$ARGUMENTS`,
+`$ARGUMENTS[N]` and `$N`. mcp-kb's prompts carry `description` and named
+`arguments` and substitute `{{name}}`. So the dialect is: `arguments` →
+our argument names, `argument-hint` → their descriptions when there is nothing
+better, `$name`/`$N`/`$ARGUMENTS` → the same substitution mcp-kb already does.
+`allowed-tools`, `disallowed-tools`, `model` and `disable-model-invocation`
+have no meaning over MCP and are dropped. `${CLAUDE_*}` placeholders are left
+as written — except `${CLAUDE_PLUGIN_ROOT}`, whose documented purpose is
+"resources shared between the plugin's skills", which is the same thing
+decision 7's fallback serves.
+
+**The plan. PR 1 — plugins, marketplaces, and the config that names them.**
+
+0. **From the last round, unrelated but pending:** hold `httpx` at WARNING
+   below `LOG_LEVEL=DEBUG` (it logs a line per WebDAV request), and fix the
+   cluster README's "401 until the next refresh" line.
+1. **Named sources.** `sources:` of `{name, url, auth, cache, refresh}`; a
+   plugin's `source` is a URI whose scheme is a source's name
+   (`nextcloud://mcp-kb/ai`), with `file://` needing no entry. One cache entry
+   per (url, ref).
+2. **URL grammar.** go-getter's `//` for a subdirectory and `?ref=` for the
+   ref, so `github://owner/repo//sub?ref=<sha>` reads as kustomize and
+   Terraform read it.
+3. **Plugins.** A top-level `plugins:` list whose fields are Claude's
+   marketplace-entry fields — `name`, `description`, `category`, `tags`,
+   `keywords`, `version`, `source` — plus this server's `skills`, `prompts`,
+   `files`. A plugin with a manifest (`plugin.json`, `.claude-plugin/plugin.json`)
+   takes its components from it; without one, from the conventions and the
+   lists above. Every plugin has a **plugin root**, and a reference that misses
+   inside a skill is tried once against it (§C1.29 decision 7).
+4. **Marketplaces.** A library's `source` is read as a `marketplace.json` from
+   `.claude-plugin/`, `.github/plugin/` or `.agents/plugins/`. Entry `source`
+   forms honoured: a relative path (including `"./"`), `github`, `url`,
+   `git-subdir`, each with `ref`/`sha`. Not honoured: `npm` and `archive` for
+   now, and `command` never (§C1.27). An entry's own `skills` list is what that
+   plugin serves — which is how Grafana's seven plugins arrive already split,
+   and how its root `template` skill stays out without a hand-written glob.
+5. **Libraries.** `name`, `description`, and any of `source`, `plugins`,
+   `pluginSelector`; their union is the library. Selector: `categories` (any
+   of) AND `tags` (comma = all, list = any). `source` with `pluginSelector` is
+   refused at load, with the reason.
+6. **Scope.** `?categories=` joins `?library=` and `?tags=`, with one comma
+   rule: a comma means all of, a repeated parameter means any of. Today's
+   `?tags=a,b` (any) changes meaning, and the refusal machinery from #20
+   explains a comma in `categories`.
+7. **`/health` and `index.json`** grow the new shape: sources, plugins (with
+   their library, category, tags, counts, skips) and libraries. The index
+   version bumps, so the first restart rebuilds.
+8. **Prompts from commands**, per the dialect above, with the naming question
+   below settled first.
+9. **Docs and the example**: `config.schema.json` regenerated, the wiki's
+   Sources page becoming Sources-and-plugins, Scoping gaining categories,
+   the README's config block, and `examples/config.yaml` rewritten as the
+   sketch in `stuff/config.yaml`.
+10. **The cluster config** rewritten to the new shape in the same round, since
+    the old one stops parsing — no deprecation window (there is one user).
+
+**Questions still open for Dr K.**
+
+1. **The second segment of a scope.** `?library=grafana/grafana-lgtm` names a
+   *folder* today. Under plugins, the same string is a *plugin* for Grafana but
+   not in general. Recommendation: make it the plugin, since a plugin is the
+   unit a catalog publishes and the one a library selects, and keep folder
+   addressing in URIs only.
+2. **Prompt names.** Today `library_prompt`. With plugins, `plugin_prompt` is
+   what a client shows for `plugin:command`. Recommendation: keep
+   `library_prompt` — the library is the URI's first segment and the scope's
+   unit — and let two plugins colliding on a prompt name fail the later one, as
+   now.
+3. **How far the plugin-root fallback reaches.** Grafana's entries are all
+   `source: "./"`, so their root is the whole repository, and the fallback
+   would reach any non-hidden file in it. Recommendation: allow it, because
+   that is what the plugin publishes and what `${CLAUDE_PLUGIN_ROOT}` reaches
+   in Claude Code; the alternative is to bound it to the entry's listed paths
+   plus `shared/`-style siblings, which is a rule with no published basis.
+4. **`_files.md`**: per library as now, or per plugin? With plugin roots, files
+   outside every skill belong to a plugin. Recommendation: keep one
+   `_files.md` per library and have it list each plugin's files, since the
+   library is the addressable namespace.
+5. **`strict: false` entries**, where the marketplace entry is the whole
+   definition and the plugin's own manifest is ignored: support, or skip until
+   something we pull uses it? Recommendation: skip, and say so in `/health`.
+
 ## Closing questions for Dr K
 
 *Superseded by §C1.22 — the name, here and in question 1, is `mcp-kb`. What was
