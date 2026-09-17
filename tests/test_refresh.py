@@ -520,6 +520,23 @@ async def test_the_lifespan_verifies_the_index_the_server_started_from(
 
 
 @pytest.mark.unit
+def test_the_schedule_forgets_a_fetch_that_is_no_longer_there():
+    """A marketplace entry that went away takes its fetch with it; the
+    schedule keeps only the current generation's keys, so the same key coming
+    back later is due at once rather than carrying a stale timestamp."""
+    from kubed.mcp_kb.plugins import Fetch
+
+    gone = Fetch(key="lab://gone", backend="git", url="x", refresh_seconds=3600)
+    other = Fetch(key="lab://other", backend="git", url="y", refresh_seconds=3600)
+    schedule = refresh.Schedule()
+    schedule.examined(gone.key, time.monotonic())
+    assert schedule.due([gone]) == []
+
+    assert schedule.due([other]) == [other.key]
+    assert schedule.due([gone]) == [gone.key], "forgotten while absent, so due again"
+
+
+@pytest.mark.unit
 def test_tick_seconds_is_bounded_by_the_shortest_configured_refresh(skills_dir):
     """A `refresh: 1s` source ticking every `TICK_SECONDS` (5s) can be late by
     up to a tick; the loop must sleep no longer than the shortest interval any

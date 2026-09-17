@@ -56,7 +56,9 @@ def test_visible_honours_the_plugins_category_and_labels(tmp_path):
         _skill_in(tmp_path, "z", category="design", tags=frozenset({"lgtm"})),
     ]
     index = SkillIndex(skills)
-    names = lambda scope: {s.name for s in index.visible(scope)}  # noqa: E731
+
+    def names(scope):
+        return {s.name for s in index.visible(scope)}
 
     assert names(Scope(categories=frozenset({"ops"}))) == {"x", "y"}
     assert names(Scope(tags=_tags({"lgtm"}))) == {"x", "z"}
