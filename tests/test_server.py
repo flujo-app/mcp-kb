@@ -24,8 +24,8 @@ async def test_resources_are_indexes_not_one_per_skill(skills_dir):
     server = KnowledgeBase(make_config(skills_dir), skills_dir / "_cache")
     async with Client(server.mcp) as client:
         uris = [str(r.uri) for r in await client.list_resources()]
-    assert "skill://flatsource" in uris
-    assert "skill://plugin-a" in uris
+    assert "skill://flatsource/_index.md" in uris
+    assert "skill://deepsource/plugin-a/_index.md" in uris
     assert not any("SKILL.md" in u for u in uris)
 
 
@@ -34,9 +34,13 @@ async def test_reading_an_index_then_a_skill(skills_dir):
     """The whole interface: list addresses, read one, read the next."""
     server = KnowledgeBase(make_config(skills_dir), skills_dir / "_cache")
     async with Client(server.mcp) as client:
-        index = (await client.read_resource("skill://plugin-a"))[0].text
-        assert "skill://deepsource/gamma" in index
-        body = (await client.read_resource("skill://deepsource/gamma"))[0].text
+        index = (await client.read_resource("skill://deepsource/plugin-a/_index.md"))[
+            0
+        ].text
+        assert "skill://deepsource/plugin-a/gamma/SKILL.md" in index
+        body = (
+            await client.read_resource("skill://deepsource/plugin-a/gamma/SKILL.md")
+        )[0].text
     assert "Third skill." in body
 
 
@@ -62,16 +66,16 @@ async def test_an_unknown_uri_is_an_error_not_an_empty_read(skills_dir):
 
 
 @pytest.mark.unit
-async def test_server_scoped_to_packs_hides_the_rest(skills_dir):
-    """A config that lists less is the hard scope: the other pack is unreachable."""
+async def test_server_scoped_to_libraries_hides_the_rest(skills_dir):
+    """A config that lists less is the hard scope: the other library is unreachable."""
     server = KnowledgeBase(
-        make_config(skills_dir, packs=["flatsource"]), skills_dir / "_cache"
+        make_config(skills_dir, libraries=["flatsource"]), skills_dir / "_cache"
     )
     async with Client(server.mcp) as client:
         uris = [str(r.uri) for r in await client.list_resources()]
-        assert "skill://deepsource" not in uris
+        assert not any(u.startswith("skill://deepsource/") for u in uris)
         with pytest.raises(Exception, match=r"nknown|not found"):
-            await client.read_resource("skill://deepsource/gamma")
+            await client.read_resource("skill://deepsource/plugin-a/gamma/SKILL.md")
 
 
 @pytest.mark.unit
@@ -94,7 +98,7 @@ async def test_a_failed_source_does_not_take_the_others_down(skills_dir):
     assert server.status["flatsource"]["status"] == "ok"
     async with Client(server.mcp) as client:
         uris = [str(r.uri) for r in await client.list_resources()]
-    assert "skill://flatsource" in uris
+    assert "skill://flatsource/_index.md" in uris
 
 
 # -- the tool mirror ----------------------------------------------------------
@@ -147,12 +151,9 @@ async def test_the_mirror_returns_the_same_rows_as_the_resource_listing(skills_d
 async def test_read_resource_returns_what_reading_the_uri_returns(skills_dir):
     server = KnowledgeBase(make_config(skills_dir), skills_dir / "_cache")
     async with Client(server.mcp) as client:
-        through_tool = await call(
-            client, "read_resource", uri="skill://deepsource/gamma"
-        )
-        through_resource = (await client.read_resource("skill://deepsource/gamma"))[
-            0
-        ].text
+        gamma = "skill://deepsource/plugin-a/gamma/SKILL.md"
+        through_tool = await call(client, "read_resource", uri=gamma)
+        through_resource = (await client.read_resource(gamma))[0].text
     assert through_tool == through_resource
 
 
@@ -166,13 +167,15 @@ async def test_read_resource_explains_an_unknown_uri(skills_dir):
 
 
 @pytest.mark.unit
-async def test_the_mirror_honours_the_hard_pack_scope(skills_dir):
+async def test_the_mirror_honours_the_hard_library_scope(skills_dir):
     """A tool call must not reach past a source that was never configured."""
     server = KnowledgeBase(
-        make_config(skills_dir, packs=["flatsource"]), skills_dir / "_cache"
+        make_config(skills_dir, libraries=["flatsource"]), skills_dir / "_cache"
     )
     async with Client(server.mcp) as client:
-        out = await call(client, "read_resource", uri="skill://deepsource/gamma")
+        out = await call(
+            client, "read_resource", uri="skill://deepsource/plugin-a/gamma/SKILL.md"
+        )
     assert "No resource" in out
 
 
@@ -184,7 +187,7 @@ async def test_a_configmap_mount_is_served_under_the_names_it_was_mounted_as(tmp
     recording the resolved path lists `..2026.../shared/foo.md` — not the URI a
     skill cites, and gone after the next update.
     """
-    root = tmp_path / "pack"
+    root = tmp_path / "library"
     stamp = root / "..2026_09_16_13_15_49"
     (stamp / "shared").mkdir(parents=True)
     (stamp / "shared" / "foo.md").write_text("shared body")
@@ -198,7 +201,7 @@ async def test_a_configmap_mount_is_served_under_the_names_it_was_mounted_as(tmp
     config = Config(
         sources=[
             {
-                "name": "pack",
+                "name": "library",
                 "url": f"file://{root}",
                 "include": {"prompts": [], "files": ["shared/**/*"]},
             }
@@ -206,11 +209,11 @@ async def test_a_configmap_mount_is_served_under_the_names_it_was_mounted_as(tmp
     )
     knowledge_base = KnowledgeBase(config, tmp_path / "cache")
 
-    assert knowledge_base.snapshot.resources.files("pack") == ["shared/foo.md"]
+    assert knowledge_base.snapshot.resources.files("library") == ["shared/foo.md"]
     assert all(".." not in str(s.path) for s in knowledge_base.index.visible())
     async with Client(knowledge_base.mcp) as client:
-        shared = (await client.read_resource("skill://pack/shared/foo.md"))[0].text
-        skill = (await client.read_resource("skill://pack/alpha"))[0].text
+        shared = (await client.read_resource("skill://library/shared/foo.md"))[0].text
+        skill = (await client.read_resource("skill://library/alpha/SKILL.md"))[0].text
     assert shared == "shared body"
     assert "skill body" in skill
 

@@ -1,8 +1,8 @@
 """The ``skill://`` address space, and the catalogue that answers it.
 
-Everything this server serves has one address. A pack index, a skill's
-instructions, a file a skill references, a file the *pack* references -- each is
-a ``skill://`` URI, and reading one is the only operation there is.
+Everything this server serves has one address. A library index, a skill's
+instructions, a file a skill references, a file the *library* references --
+each is a ``skill://`` URI, and reading one is the only operation there is.
 
 That is not a stylistic choice. MCP already has a read-a-thing primitive, and a
 model already knows how to drive it: list the resources, read a URI. A server
@@ -12,29 +12,25 @@ once, in URIs, and both halves of the protocol are thin projections of it --
 ``resources.py`` serves it as resources, ``tools.py`` as two tools with the same
 shape for clients that have no resources.
 
-The grammar, which is the whole API::
+The grammar follows the MCP Skills extension (SEP-2640), which is the whole
+API::
 
-    skill://<selector>                 an index: a pack, or one of its groups
-    skill://<pack>/<skill>             that skill's instructions (SKILL.md)
-    skill://<pack>/<skill>/SKILL.md    the same thing, said in full
-    skill://<pack>/<skill>/_manifest   what else that skill ships
-    skill://<pack>/<skill>/<path>      one of those files
-    skill://<pack>/_files              what the pack ships outside its skills
-    skill://<pack>/<path>              one of those
+    skill://<library>/<folder>/<name>/SKILL.md    a skill's instructions
+    skill://<library>/<folder>/<name>/_manifest   what else that skill ships
+    skill://<library>/<folder>/<name>/<file>      one of those files
+    skill://<library>/_index.md                   every skill in the library
+    skill://<library>/<folder>/_index.md          the skills directly in a folder
+    skill://<library>/_files.md                   files outside every skill
+    skill://<library>/<file>                      one of those
 
-One segment is an index, two or more is content: that is the only rule needed to
-tell them apart, and it is why the group indexes live in the pack's own
-namespace (``skill://grafana-lgtm``) rather than under it. ``selector`` accepts a
-pack or a group for the same reason: an agent narrowing to ``grafana-lgtm``
-should not first have to learn that it lives in ``grafana``.
+``<folder>`` is the skill's directory below its source's skill root, and may
+be empty or several segments deep; the last segment before the file is always
+the skill's name. A skill is found by the longest prefix of the path that
+names one, so a nested skill wins over the skill whose directory holds it.
 
-Pack-qualified, unlike the URIs FastMCP's ``SkillsDirectoryProvider`` mints.
-Those are keyed on the folder name alone, so two packs shipping a ``testing/``
-silently collapse into one and the loser disappears from the server entirely.
-The qualification costs a path segment and buys a namespace that cannot collide.
-It also stays compatible with ``fastmcp.utilities.skills``, which reads
-everything before the trailing ``/SKILL.md`` as the name and never assumes that
-name has one segment.
+Every other address is a directory -- a library, a folder, a skill's root --
+and serves nothing, as on any other skill server. ``directory`` says which file
+to read instead, for the error a caller sees.
 
 Nothing here imports FastMCP. Absent content is ``None``, never an exception, so
 a caller in the resource half can raise and a caller in the tool half can
@@ -52,14 +48,15 @@ from pathlib import Path
 
 from ..mcp.scope import EVERYTHING, Scope
 from .harvest import hidden
-from .skills import PackResources, Skill, SkillIndex
+from .skills import LibraryFiles, Skill, SkillIndex
 
 SCHEME = "skill://"
 MAIN_FILE = "SKILL.md"
 MANIFEST = "_manifest"
+INDEX = "_index.md"
+LIBRARY_FILES = "_files.md"
 # Distinct scopes a catalogue remembers listings for before starting over.
 MEMO_LIMIT = 64
-PACK_FILES = "_files"
 
 
 def _count(n: int, noun: str = "skill") -> str:
@@ -78,7 +75,7 @@ class Entry:
     ``resources/list`` returns, so the tool mirror is the same rows and not a
     translation of them. ``tags`` rides alongside for ``resources.py`` to carry
     onto the ``TextResource`` it builds; it is not one of the four and never
-    appears in ``as_dict``. An index row is tagged with its pack and
+    appears in ``as_dict``. An index row is tagged with its library and
     ``"index"``; a full row (one skill, in the ``full=True`` listing) carries
     that skill's own tags.
     """
@@ -89,7 +86,7 @@ class Entry:
     mime_type: str
     tags: tuple[str, ...] = ()
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, str]:
         return {
             "uri": self.uri,
             "name": self.name,
@@ -99,12 +96,19 @@ class Entry:
 
 
 def parse(uri: str) -> tuple[str, str] | None:
-    """Split a ``skill://`` URI into its first segment and the rest.
+    """Split a ``skill://`` URI into its library and the path below it.
 
-    Returns ``(selector, "")`` for an index and ``(pack, path)`` for content, or
-    None when the string is not a ``skill://`` URI at all. Percent-decoding is
-    not done here: the segments this server mints are already path-safe, and
-    decoding would be one more way for ``%2e%2e`` to become ``..``.
+    Returns ``(library, "")`` for a bare library and ``(library, path)`` for
+    anything under one, or None when the string is not a ``skill://`` URI at
+    all. Percent-decoding is not done here: the segments this server mints are
+    already path-safe, and decoding would be one more way for ``%2e%2e`` to
+    become ``..``.
+
+    The path's dot segments are resolved here, once, for every read, hint and
+    media type: a skill links its sibling as ``../other/SKILL.md``, and a
+    client that resolves that without normalising sends the ``..`` as written.
+    Every check downstream -- scope, containment, hidden files -- then runs on
+    the address the URI names rather than on its spelling.
     """
     if not uri.startswith(SCHEME):
         return None
@@ -112,13 +116,35 @@ def parse(uri: str) -> tuple[str, str] | None:
     if not rest:
         return None
     head, _, tail = rest.partition("/")
-    return head, tail
+    return head, _remove_dot_segments(tail)
 
 
-def uri_for(skill: Skill, file: str = "") -> str:
-    """The address of a skill, or of one file inside it."""
-    base = f"{SCHEME}{skill.pack}/{skill.name}"
-    return f"{base}/{file}" if file else base
+def _remove_dot_segments(path: str) -> str:
+    """RFC 3986 ``remove_dot_segments`` on the path below the library.
+
+    ``.`` goes, ``..`` takes the segment before it, and a ``..`` with nothing
+    before it is dropped -- clamped at the root exactly as a normalising client
+    clamps it. The library is the URI's authority, not a path segment, so no
+    number of ``..`` can reach a different one.
+    """
+    kept: list[str] = []
+    for segment in path.split("/"):
+        if segment == "..":
+            if kept:
+                kept.pop()
+        elif segment != ".":
+            kept.append(segment)
+    return "/".join(kept).strip("/")
+
+
+def uri_for(skill: Skill, file: str = MAIN_FILE) -> str:
+    """The address of one file of a skill, its instructions by default."""
+    return f"{SCHEME}{skill.address}/{file}"
+
+
+def index_uri(library: str, folder: str = "") -> str:
+    """The index of a library, or of one folder in it."""
+    return f"{SCHEME}{'/'.join(p for p in (library, folder) if p)}/{INDEX}"
 
 
 def _manifest_json(skill: Skill) -> str:
@@ -147,7 +173,7 @@ def _manifest_json(skill: Skill) -> str:
                 "hash": f"sha256:{digest.hexdigest()}",
             }
         )
-    return json.dumps({"skill": skill.qualified, "files": files}, indent=2)
+    return json.dumps({"skill": skill.address, "files": files}, indent=2)
 
 
 def _manifest_files(skill: Skill) -> list[Path]:
@@ -174,7 +200,7 @@ def mime_for(path: str) -> str:
 class Catalogue:
     """The address space: what is listed, and what each URI resolves to.
 
-    Wraps ``SkillIndex`` and ``PackResources`` rather than replacing them --
+    Wraps ``SkillIndex`` and ``LibraryFiles`` rather than replacing them --
     they still own what a skill is and who may see one. This adds the one thing
     a URI space needs on top: a total function from address to content, with the
     request scope applied on every single call.
@@ -188,7 +214,7 @@ class Catalogue:
     def __init__(
         self,
         index: SkillIndex,
-        resources: PackResources,
+        resources: LibraryFiles,
         revalidate: Callable[[Path], None] | None = None,
     ):
         self._index = index
@@ -234,145 +260,215 @@ class Catalogue:
 
     def _entries(self, scope: Scope, full: bool) -> list[Entry]:
         visible = self._index.visible(scope)
-        if not visible:
-            return []
+        libraries = {s.library for s in visible} | {
+            lib for lib in self._resources.libraries if self._library_files(lib, scope)
+        }
 
-        entries: list[Entry] = []
-        for pack in sorted({s.pack for s in visible}):
-            in_pack = [s for s in visible if s.pack == pack]
-            index_tags = tuple(sorted({pack, "index"}))
-            # A flat pack's group is just the pack again, so it names nothing new.
-            groups = sorted({s.group for s in in_pack} - {pack})
-            summary = _count(len(in_pack))
-            if groups:
-                summary += f" in {len(groups)} groups: {', '.join(groups)}"
-            entries.append(
-                Entry(
-                    f"{SCHEME}{pack}",
-                    pack,
-                    f"The {pack} pack — {summary}.",
-                    "text/markdown",
-                    index_tags,
-                )
-            )
-            entries += [
-                Entry(
-                    f"{SCHEME}{group}",
-                    group,
-                    f"{_count(sum(1 for s in in_pack if s.group == group))}"
-                    f" in the {pack} pack.",
-                    "text/markdown",
-                    index_tags,
-                )
-                for group in groups
-            ]
-            if self._pack_files(pack, scope):
-                entries.append(
+        entries: dict[str, Entry] = {}
+        for library in sorted(libraries):
+            in_library = [s for s in visible if s.library == library]
+            index_tags = tuple(sorted({library, "index"}))
+            folders = sorted({s.folder for s in in_library} - {""})
+            summary = _count(len(in_library))
+            if folders:
+                summary += f" in {_count(len(folders), 'folder')}: {', '.join(folders)}"
+            rows: list[Entry] = []
+            if in_library:
+                rows.append(
                     Entry(
-                        f"{SCHEME}{pack}/{PACK_FILES}",
-                        f"{pack}/{PACK_FILES}",
-                        f"Files the {pack} pack ships outside any skill, which"
-                        " its skills reference.",
+                        index_uri(library),
+                        f"{library}/{INDEX}",
+                        f"The {library} library — {summary}.",
                         "text/markdown",
                         index_tags,
                     )
                 )
+            rows += [
+                Entry(
+                    index_uri(library, folder),
+                    f"{library}/{folder}/{INDEX}",
+                    f"{_count(sum(1 for s in in_library if s.folder == folder))}"
+                    f" in the {folder} folder of the {library} library.",
+                    "text/markdown",
+                    index_tags,
+                )
+                for folder in folders
+            ]
+            if self._library_files(library, scope):
+                rows.append(
+                    Entry(
+                        f"{SCHEME}{library}/{LIBRARY_FILES}",
+                        f"{library}/{LIBRARY_FILES}",
+                        f"Files the {library} library ships outside any skill,"
+                        " which its skills reference.",
+                        "text/markdown",
+                        index_tags,
+                    )
+                )
+            for row in rows:
+                entries.setdefault(row.uri, row)
 
         if full:
-            entries += [
-                Entry(
-                    uri_for(skill, MAIN_FILE),
-                    f"{skill.qualified}/{MAIN_FILE}",
+            for skill in sorted(visible, key=lambda s: s.address):
+                row = Entry(
+                    uri_for(skill),
+                    f"{skill.address}/{MAIN_FILE}",
                     skill.description,
                     "text/markdown",
                     tuple(sorted(skill.tags)),
                 )
-                for skill in sorted(visible, key=lambda s: s.qualified)
-            ]
-        return entries
+                entries.setdefault(row.uri, row)
+        return list(entries.values())
 
     # -- what a scope may see -----------------------------------------------
 
-    def _admits(self, pack: str, scope: Scope) -> bool:
-        """Whether a caller restricted to ``scope`` may see ``pack`` at all.
+    def _library_files(self, library: str, scope: Scope) -> list[str]:
+        """The library-level files this caller may see, empty when none are.
 
-        Asked of the skills, because they are the only thing that knows: a pack
-        is in scope when some skill of it is. ``PackResources`` scopes its own
-        roots by tag and cannot answer this -- it knows which packs exist, not
-        which this caller was given.
+        Both halves of the library-files rule in one place: the listing offers
+        a ``_files.md`` row exactly when reading one would return a body, and a
+        library out of scope entirely has neither. ``LibraryFiles`` checks each
+        root's tags and source; which library and which sources this caller
+        was given is decided here.
         """
-        return not scope or any(s.pack == pack for s in self._index.visible(scope))
-
-    def _pack_files(self, pack: str, scope: Scope) -> list[str]:
-        """The pack-level files this caller may see, empty when there are none.
-
-        Both halves of the pack-files rule in one place: the listing offers a
-        ``_files`` row exactly when reading one would return a body, and a pack
-        out of scope entirely has neither.
-        """
-        if not self._admits(pack, scope):
+        if scope.library and scope.library_name != library:
             return []
-        return self._resources.files(pack, scope.tags)
+        return self._resources.files(library, scope.tags, self._index.sources(scope))
+
+    def _in_library(self, library: str, scope: Scope) -> list[Skill]:
+        return [s for s in self._index.visible(scope) if s.library == library]
+
+    def _skill_at(
+        self, library: str, path: str, scope: Scope
+    ) -> tuple[Skill, str] | None:
+        """The skill whose address is the longest prefix of ``path``, and the rest.
+
+        The rest is empty when ``path`` is the skill's own root.
+        """
+        segments = path.split("/")
+        for cut in range(len(segments), 0, -1):
+            address = "/".join([library, *segments[:cut]])
+            skill = self._index.get(address, scope)
+            if skill is not None:
+                return skill, "/".join(segments[cut:])
+        return None
 
     # -- reading ------------------------------------------------------------
 
     def read(self, uri: str, scope: Scope = EVERYTHING) -> str | None:
         """The content at ``uri``, or None when there is none to give.
 
-        None covers absent, malformed and out-of-scope alike, and that conflation
-        is deliberate: knowing a skill's exact name must not be enough to confirm
-        it exists in a pack the caller was not given.
+        None covers absent, malformed, out-of-scope and directory addresses
+        alike, and that conflation is deliberate: knowing a skill's exact
+        address must not be enough to confirm it exists in a library the caller
+        was not given.
+
+        A skill is tried first, then the indexes, then the library's own files.
+        The order never arbitrates between two things at one address, because
+        the snapshot serves no such pair: a library file inside a skill of its
+        own source, or named like an index, is skipped, and one inside another
+        source's skill fails that source.
         """
         parsed = parse(uri)
         if parsed is None:
             return None
-        head, path = parsed
+        library, path = parsed
         if not path:
-            return self._index_body(head, scope)
-        return self._content(head, path, scope)
+            return None
+        found = self._skill_at(library, path, scope)
+        if found is not None and found[1]:
+            body = self._skill_file(*found)
+            if body is not None:
+                return body
+        if path == INDEX:
+            return self._index_body(library, None, scope)
+        if path == LIBRARY_FILES:
+            return self._library_files_body(library, scope)
+        folder, _, last = path.rpartition("/")
+        if last == INDEX and folder:
+            body = self._index_body(library, folder, scope)
+            if body is not None:
+                return body
+        if scope.library and scope.library_name != library:
+            return None
+        sources = self._index.sources(scope)
+        return self._resources.read(library, path, scope.tags, sources)
 
-    def _index_body(self, selector: str, scope: Scope) -> str | None:
-        """One index: every skill under a pack or group, addressed by URI.
+    def directory(self, uri: str, scope: Scope = EVERYTHING) -> str | None:
+        """What to read instead of a directory address, or None if it is not one.
+
+        Answered from what ``scope`` can see, so a hint never confirms a
+        directory the caller could not list.
+        """
+        parsed = parse(uri)
+        if parsed is None:
+            return None
+        library, path = parsed
+        skills = self._in_library(library, scope)
+        files = self._library_files(library, scope)
+        files_hint = f"read {SCHEME}{library}/{LIBRARY_FILES} for the files in it."
+        if not path:
+            if skills:
+                return (
+                    "It is a library, not a file:"
+                    f" read {index_uri(library)} for its skills."
+                )
+            if files:
+                return f"It is a library, not a file: {files_hint}"
+            return None
+        found = self._skill_at(library, path, scope)
+        if found is not None and not found[1]:
+            skill = found[0]
+            return (
+                "It is a skill's directory, not a file:"
+                f" read {uri_for(skill)} for its instructions, or"
+                f" {uri_for(skill, MANIFEST)} for the files it ships."
+            )
+        folder = path.strip("/")
+        if any(s.folder == folder for s in skills):
+            target = index_uri(library, folder)
+            return (
+                "It is a folder, not a file:"
+                f" read {target} for its skills."
+            )
+        if any(s.folder.startswith(f"{folder}/") for s in skills):
+            return (
+                "It is a folder, not a file:"
+                f" read {index_uri(library)} for the skills under it."
+            )
+        if any(f.startswith(f"{folder}/") for f in files):
+            return f"It is a folder, not a file: {files_hint}"
+        return None
+
+    def _index_body(
+        self, library: str, folder: str | None, scope: Scope
+    ) -> str | None:
+        """One index: every skill in a library, or directly in one of its folders.
 
         Lines are ``<uri>: <description>`` rather than ``<name>: ...`` so that
         reading an index teaches the grammar for the next call. A name would
-        have to be translated back into an address anyway, and across packs it
-        is not even unique.
+        have to be translated back into an address anyway, and it is not even
+        unique.
         """
-        selected = self._index.select(scope, selector)
+        selected = [
+            s
+            for s in self._in_library(library, scope)
+            if folder is None or s.folder == folder
+        ]
         if not selected:
             return None
+        title = library if folder is None else f"{library}/{folder}"
         lines = [
             f"{uri_for(skill)}: {skill.description}"
-            for skill in sorted(selected, key=lambda s: s.qualified)
+            for skill in sorted(selected, key=lambda s: s.address)
         ]
         return (
-            f"# {selector} — {_count(len(selected))}\n\n"
+            f"# {title} — {_count(len(selected))}\n\n"
             + "\n".join(lines)
-            + "\n\nRead any URI above for that skill's instructions. Append"
-            f" /{MANIFEST} instead to see what else it ships, then read one of"
-            " those paths under the same skill URI.\n"
+            + "\n\nRead any URI above for that skill's instructions. Read"
+            f" {MANIFEST} in place of {MAIN_FILE} to see what else it ships, then"
+            " read one of those paths under the same skill.\n"
         )
-
-    def _content(self, pack: str, path: str, scope: Scope) -> str | None:
-        """Anything with two or more segments: a skill's file, or a pack's.
-
-        Resolution order is skill first, pack file second. The two spaces cannot
-        overlap -- a directory holding a SKILL.md is a skill and is therefore
-        excluded from ``PackResources`` -- so the order settles the shape of the
-        URI rather than arbitrating a genuine ambiguity.
-        """
-        head, _, rest = path.partition("/")
-        skill = self._index.get(f"{pack}/{head}", scope)
-        if skill is not None:
-            return self._skill_file(skill, rest or MAIN_FILE)
-        if path == PACK_FILES:
-            return self._pack_files_body(pack, scope)
-        # Not a skill, so it is pack-level material. PackResources applies its
-        # own scoping by tag, but pack visibility is this class's to decide.
-        if not self._admits(pack, scope):
-            return None
-        return self._resources.read(pack, path, scope.tags)
 
     def _skill_file(self, skill: Skill, file: str) -> str | None:
         if file == MANIFEST:
@@ -398,14 +494,14 @@ class Catalogue:
             self._revalidate(target)
         return target.read_text(encoding="utf-8", errors="replace")
 
-    def _pack_files_body(self, pack: str, scope: Scope) -> str | None:
-        files = self._pack_files(pack, scope)
+    def _library_files_body(self, library: str, scope: Scope) -> str | None:
+        files = self._library_files(library, scope)
         if not files:
             return None
-        lines = [f"{SCHEME}{pack}/{f}" for f in files]
+        lines = [f"{SCHEME}{library}/{f}" for f in files]
         return (
-            f"# {pack} — {_count(len(files), 'pack-level file')}\n\n"
-            "These sit outside every skill in this pack, and its skills"
+            f"# {library} — {_count(len(files), 'library-level file')}\n\n"
+            "These sit outside every skill in this library, and its skills"
             " reference them.\n\n" + "\n".join(lines) + "\n"
         )
 
@@ -414,6 +510,10 @@ class Catalogue:
         parsed = parse(uri)
         if parsed is None or not parsed[1]:
             return "text/markdown"
-        if parsed[1].endswith(MANIFEST):
-            return "application/json"
-        return mime_for(parsed[1])
+        library, path = parsed
+        if path.endswith(f"/{MANIFEST}"):
+            # Only a skill's manifest is JSON; a library file may share the name.
+            found = self._skill_at(library, path[: -len(MANIFEST) - 1], EVERYTHING)
+            if found is not None and found[1] == "":
+                return "application/json"
+        return mime_for(path)

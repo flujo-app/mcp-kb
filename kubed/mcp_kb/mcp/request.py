@@ -16,11 +16,9 @@ from __future__ import annotations
 from .scope import Scope
 
 # Per-request scope, set once in a client's connection config -- which is how
-# one deployment serves several narrowly-scoped agents. X-Skill-Pack predates
-# libraries and is kept as an alias for X-Skill-Library.
+# one deployment serves several narrowly-scoped agents.
 LIBRARY_PARAM = "library"
 LIBRARY_HEADER = "x-skill-library"
-PACK_HEADER = "x-skill-pack"
 TAGS_PARAM = "tags"
 TAGS_HEADER = "x-skill-tags"
 
@@ -91,11 +89,10 @@ def requested_scope() -> Scope:
     """The slice of the catalogue this request is restricted to.
 
     Read from the MCP URL (``?library=grafana&tags=observability``) or headers
-    (``X-Skill-Library``, ``X-Skill-Tags``; ``X-Skill-Pack`` as an alias). It
-    is a ceiling set by whoever configured the client, not a suggestion the
-    model can widen.
+    (``X-Skill-Library``, ``X-Skill-Tags``). It is a ceiling set by whoever
+    configured the client, not a suggestion the model can widen.
     """
-    library = _read(LIBRARY_HEADER, LIBRARY_PARAM, PACK_HEADER) or ""
+    library = _read(LIBRARY_HEADER, LIBRARY_PARAM) or ""
     tags = _read(TAGS_HEADER, TAGS_PARAM) or ""
     return Scope.parse(library, tags)
 

@@ -1,9 +1,9 @@
 """examples/config.yaml, the shape the image actually ships, against local git
-repositories standing in for the four upstream packs.
+repositories standing in for the four upstream libraries.
 
 Pins the four-source shape and guards the ``shared/**/*``/``workflows/**/*``
 fix for the trailing-``**``-is-directories-only glob bug that would otherwise
-only be caught by hand against the real 29-file penpot pack. Local rather than
+only be caught by hand against the real 29-file penpot library. Local rather than
 against github.com: the ``ref`` in the shipped config is a real upstream pin,
 which a unit test must not depend on staying reachable or unchanged.
 """
@@ -12,12 +12,23 @@ from pathlib import Path
 
 import pygit2
 import yaml
+from fastmcp import Client
 
 from kubed.mcp_kb.config import Config
 from kubed.mcp_kb.server import KnowledgeBase
 
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE_CONFIG = ROOT / "examples" / "config.yaml"
+
+# One skill's real URI per library the shipped config declares, from the
+# BUILDERS fixtures below: grafana nests its skill a folder deeper than the
+# other three, which is exactly the case an address built by hand gets wrong.
+SKILL_URI_PER_LIBRARY = {
+    "n8n": "skill://n8n/s/SKILL.md",
+    "grafana": "skill://grafana/g/s/SKILL.md",
+    "penpot": "skill://penpot/s/SKILL.md",
+    "superpowers": "skill://superpowers/s/SKILL.md",
+}
 
 SIGNATURE = pygit2.Signature("Test", "test@example.com", 1700000000, 0)
 
@@ -29,7 +40,7 @@ def _skill(root: Path, *parts: str) -> None:
 
 
 def _penpot(root: Path) -> None:
-    """The one pack that also references shared material outside its skills."""
+    """The one library that also references shared material outside its skills."""
     _skill(root, "skills", "s")
     (root / "shared").mkdir()
     (root / "shared" / "x.md").write_text("shared\n")
@@ -53,7 +64,7 @@ BUILDERS = {
 
 
 def _repo(tmp_path: Path, name: str) -> str:
-    """A one-commit repository laid out like the real pack, as a ``git+file://`` URL."""
+    """A one-commit repository laid out like the real library, as a ``git+file://``."""
     root = tmp_path / name
     repo = pygit2.init_repository(str(root), bare=False, initial_head="main")
     BUILDERS[name](root)
@@ -98,3 +109,21 @@ def test_the_shipped_config_serves_no_prompt_it_did_not_ask_for(tmp_path):
     knowledge_base = KnowledgeBase(_rewritten_config(tmp_path), tmp_path / "cache")
 
     assert knowledge_base.prompts == ()
+
+
+async def test_a_skill_per_library_reads_back_at_its_real_uri(tmp_path):
+    """One `SKILL.md` per library, read through a real MCP client -- not a
+    helper -- so a config that wires `libraries:`/`library:`/`tags:` wrong, or
+    a grammar regression that only shows up on a live read, fails here rather
+    than only against the synthetic fixtures in test_address_space.py.
+
+    grafana's `include.skills: ["skills"]` nests its one skill a folder deeper
+    than the other three libraries' `skills/*`, so this also proves the
+    library-plus-folder address is not just the library-plus-name shape the
+    other three would pass with a bug in the folder segment.
+    """
+    knowledge_base = KnowledgeBase(_rewritten_config(tmp_path), tmp_path / "cache")
+    async with Client(knowledge_base.mcp) as client:
+        for library, uri in SKILL_URI_PER_LIBRARY.items():
+            text = (await client.read_resource(uri))[0].text
+            assert text == "---\nname: s\ndescription: d\n---\nBody.\n", library

@@ -39,7 +39,7 @@ out as anything reaches.
 | Path | Holds |
 |---|---|
 | `kubed/mcp_kb/` | `server.py` composes it and owns which snapshot is current, `main.py` starts it, `routes.py` is the plain-HTTP surface, `config.py` is the config model and the published schema |
-| `kubed/mcp_kb/catalogue/` | what is served and how it is found: `harvest.py` decides what counts, `skills.py` is the domain, `uris.py` is the `skill://` address space, `index.py` persists it, `snapshot.py` builds one immutable view, `refresh.py` decides when to look again |
+| `kubed/mcp_kb/catalogue/` | what is served and how it is found: `harvest.py` decides what counts, `skills.py` is the domain, `uris.py` is the `skill://` address space, `prompts.py` parses a prompt file with no FastMCP in it, `index.py` persists it, `snapshot.py` builds one immutable view, `refresh.py` decides when to look again |
 | `kubed/mcp_kb/sources/` | where bytes come from: `file.py`, `git.py`, `webdav.py`, the shared `export.py`, and `live.py` because revalidation is a source concern |
 | `kubed/mcp_kb/mcp/` | what an agent sees: `resources.py` is the interface, `tools.py` and `prompts.py` the mirrors, `request.py` and `scope.py` the per-request scope, `announce.py` the list-changed notification |
 | `kubed/mcp_kb/spec/` | the OpenAPI document for the HTTP surface |

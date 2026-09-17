@@ -31,10 +31,12 @@ resources/tools split.
 | Path | Holds |
 |---|---|
 | `kubed/mcp_kb/` | `server.py` composes it and owns which snapshot is current, `main.py` starts it, `routes.py` is the plain-HTTP surface, `config.py` is the config model and the published schema |
-| `kubed/mcp_kb/catalogue/` | what is served: `harvest.py` decides what counts, `skills.py` is the domain, `uris.py` is the `skill://` address space, `index.py` persists it, `snapshot.py` builds one immutable view, `refresh.py` decides when to look again |
-| `kubed/mcp_kb/sources/` | where bytes come from: `file.py`, `git.py`, `webdav.py`, the shared `export.py`, and `live.py` because revalidation is a source concern |
+| `kubed/mcp_kb/catalogue/` | what is served: `harvest.py` decides what counts, `skills.py` is the domain, `uris.py` is the `skill://` address space, `prompts.py` parses a prompt file with no FastMCP in it, `index.py` persists it, `snapshot.py` builds one immutable view, `refresh.py` decides when to look again |
+| `kubed/mcp_kb/sources/` | where bytes come from: `file.py`, `git.py`, `webdav.py`, the shared `export.py`, `errors.py`, and `live.py` because revalidation is a source concern |
 | `kubed/mcp_kb/mcp/` | what an agent sees: `resources.py` is the interface, `tools.py` and `prompts.py` the mirrors, `request.py` and `scope.py` the per-request scope, `announce.py` the list-changed notification |
 | `kubed/mcp_kb/spec/` | the OpenAPI document for the HTTP surface |
+| `scripts/` | `generate_openapi.py`, `generate_wiki.py`, and `requirements.py` for the image build |
+| `examples/` | `config.yaml`, the worked config the image ships |
 | `wiki/` | the GitHub wiki, as a submodule — three pages generated, the rest hand-written |
 
 `kubed/` is a **PEP 420 namespace package and has no `__init__.py`**, which is
@@ -89,7 +91,7 @@ to ignore you.
 ## Review priorities (highest first)
 
 1. **Scope enforcement** — a `Scope` (`?library=`, `?tags=`, or the
-   `X-Skill-Library` / `X-Skill-Tags` / `X-Skill-Pack` headers) narrows a client,
+   `X-Skill-Library` / `X-Skill-Tags` headers) narrows a client,
    and it is a ceiling the model cannot widen past. Every `Catalogue`, `SkillIndex`
    and `PromptProvider` read takes a `Scope` for that reason: there is no method
    that can be called without deciding about the scope. A new path that reads
@@ -221,9 +223,10 @@ heading.
   credentials. Don't ask for a token without a concrete threat.
 - **Absent and out-of-scope returning the same thing is deliberate**, not a lost
   error message. See priority 1.
-- **The library-qualified URI is not redundant.** `skill://<library>/<skill>`
-  costs a segment and buys a namespace that cannot collide; the unqualified form
-  is what silently dropped a skill.
+- **The library-qualified URI is not redundant.**
+  `skill://<library>/<folder>/<skill>/SKILL.md` costs a segment and buys a
+  namespace that cannot collide; a bare name, or a folder name with no library
+  in front of it, is what silently dropped or merged a skill.
 - **A hidden tool that is still callable is deliberate.** Hiding a tool from a
   listing is presentation; refusing to run one a client already knows about would
   be a different and worse contract.

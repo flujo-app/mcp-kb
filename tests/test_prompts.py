@@ -9,16 +9,12 @@ from fastmcp import Client
 
 from kubed.mcp_kb import KnowledgeBase
 from kubed.mcp_kb.catalogue import harvest
+from kubed.mcp_kb.catalogue.prompts import FilePrompt, load_prompt, load_prompts
 from kubed.mcp_kb.catalogue.skills import SkillIndex
 from kubed.mcp_kb.config import Include
-from kubed.mcp_kb.mcp.prompts import (
-    FilePrompt,
-    PromptProvider,
-    load_prompt,
-    load_prompts,
-)
+from kubed.mcp_kb.mcp.prompts import PromptProvider
 from kubed.mcp_kb.mcp.scope import Scope
-from tests.conftest import load_all_prompts, load_pack_prompts, make_config
+from tests.conftest import load_all_prompts, load_library_prompts, make_config
 
 pytestmark = pytest.mark.unit
 
@@ -30,16 +26,16 @@ def text(result):
 # -- loading -------------------------------------------------------------------
 
 
-def test_the_name_is_pack_qualified(prompts_dir):
-    """A file outside a pack folder is not a prompt at all."""
+def test_the_name_is_library_qualified(prompts_dir):
+    """A file outside a library folder is not a prompt at all."""
     assert {p.name for p in load_all_prompts(prompts_dir)} == {
         "flatsource_hello",
         "deepsource_check",
     }
 
 
-def test_packs_hard_scope_the_prompts(prompts_dir):
-    names = {p.name for p in load_pack_prompts(prompts_dir, "flatsource")}
+def test_libraries_hard_scope_the_prompts(prompts_dir):
+    names = {p.name for p in load_library_prompts(prompts_dir, "flatsource")}
     assert names == {"flatsource_hello"}
 
 
@@ -51,7 +47,7 @@ def test_an_undeclared_placeholder_is_skipped_loudly(tmp_path, caplog):
         "---\ndescription: typo\narguments:\n- name: name\n---\nHi {{ nmae }}\n"
     )
     with caplog.at_level(logging.WARNING):
-        assert load_prompts([typo], pack="flatsource", source="flatsource") == []
+        assert load_prompts([typo], library="flatsource", source="flatsource") == []
     assert "nmae" in caplog.text
 
 
@@ -76,7 +72,7 @@ def test_a_default_empty_source_leaves_no_empty_tag(tmp_path):
 def test_a_missing_directory_is_no_prompts(tmp_path):
     """Harvest yields no files for a missing source; loading an empty list loads none."""
     files = harvest.prompt_files(tmp_path / "nope", Include())
-    assert load_prompts(files, pack="flatsource", source="flatsource") == []
+    assert load_prompts(files, library="flatsource", source="flatsource") == []
 
 
 # -- splitting frontmatter from the body ---------------------------------------
@@ -152,9 +148,9 @@ async def test_logql_braces_survive_rendering(skills_dir, prompts_dir):
     assert text(result) == '{app="api"} |= "error"\n'
 
 
-async def test_skill_packs_scopes_prompts(skills_dir, prompts_dir):
-    """A prompt from an unconfigured pack is neither listed nor renderable."""
-    config = make_config(skills_dir, prompts_dir, packs=["flatsource"])
+async def test_skill_libraries_scopes_prompts(skills_dir, prompts_dir):
+    """A prompt from an unconfigured library is neither listed nor renderable."""
+    config = make_config(skills_dir, prompts_dir, libraries=["flatsource"])
     server = KnowledgeBase(config, skills_dir / "_cache")
     async with Client(server.mcp) as client:
         assert [p.name for p in await client.list_prompts()] == ["flatsource_hello"]
@@ -175,7 +171,7 @@ def test_visible_reads_the_snapshot_exactly_once():
     prompt = FilePrompt(
         path=pathlib.Path("/x/hello.md"),
         name="flatsource_hello",
-        pack="flatsource",
+        library="flatsource",
         source="flatsource",
         template="hi",
     )

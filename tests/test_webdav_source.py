@@ -58,7 +58,7 @@ def test_a_webdav_folder_is_copied_into_the_cache(webdav, tmp_path):
 
     assert root.parent == tmp_path / "src" / "notes"
     assert "first" in _body(root)
-    assert (root / "docs" / "guide.md").read_text() == "pack-level guidance\n"
+    assert (root / "docs" / "guide.md").read_text() == "library-level guidance\n"
     assert json.loads((root / ETAGS_FILE).read_text())[SKILL]
     assert (root / VERSION_FILE).read_text().split()[0] == root.name
 
@@ -465,7 +465,7 @@ def test_a_webdav_source_is_served_without_naming_the_backend_anywhere(
 
     assert [s.name for s in knowledge_base.index.visible()] == ["x"]
     assert knowledge_base.status["notes"]["status"] == "ok"
-    assert "first" in knowledge_base.catalogue.read("skill://notes/x")
+    assert "first" in knowledge_base.catalogue.read("skill://notes/x/SKILL.md")
     rows = "\n".join(str(entry) for entry in knowledge_base.catalogue.entries())
     assert "webdav" not in rows
     assert "127.0.0.1" not in rows

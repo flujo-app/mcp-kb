@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=../config.schema.json
-# The catalogue the image serves out of the box: four upstream skill packs as
+# The catalogue the image serves out of the box: four upstream skill libraries as
 # `github://` sources, pinned to commits and read straight from GitHub when the
 # container starts. Copy this file, point it at your own sources, and mount it
 # at /etc/mcp-kb/config.yaml.
@@ -8,17 +8,33 @@
 # falls back to the conventions — so `prompts: []` is what actually keeps an
 # upstream's own `prompts/` out of this catalogue. Prompts live with the
 # installation.
+#
+# `libraries:` names a grouping and its tags once, for any source that joins
+# it — a source's own `library:`/`tags:` are set below and add to what the
+# library already declares.
+libraries:
+- name: grafana
+  description: Observability skills — Grafana, Loki and friends.
+  tags: [observability]
+- name: superpowers
+  description: General-purpose engineering skills.
+  tags: [meta]
+
 sources:
 - name: n8n
   url: github://n8n-io/skills
   ref: 180b8415e3b73f78828cfa01e908e67f89f2a139
+  library: n8n
+  tags: [automation]
   include:
     skills: ["skills/*"]
     prompts: []
 - name: grafana
   url: github://grafana/skills
   ref: 51d33e71e191b409bbd25fc7be2684c610d18166
-  # Not `skills/*` like the others: this pack groups its skills a level deeper,
+  library: grafana
+  tags: [vendor]
+  # Not `skills/*` like the others: this library's skills sit a folder deeper,
   # and naming the directory takes every skill under it whatever the depth.
   include:
     skills: ["skills"]
@@ -29,7 +45,7 @@ sources:
   include:
     skills: ["skills/*"]
     prompts: []
-    # This pack's skills reference shared material from outside themselves, so
+    # This library's skills reference shared material from outside themselves, so
     # those directories are served at skill://penpot/<path>.
     files: ["shared/**/*", "workflows/**/*"]
 - name: superpowers

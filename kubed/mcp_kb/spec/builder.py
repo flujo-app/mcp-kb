@@ -66,7 +66,7 @@ SOURCE_STATUS = {
         "library": _field("string", "The library this source's skills join."),
         "skills": _field("integer", "Skills this source contributed."),
         "prompts": _field("integer", "Prompts this source contributed."),
-        "files": _field("integer", "Pack-level files this source contributed."),
+        "files": _field("integer", "Library-level files this source contributed."),
         "built": _field(
             "string",
             "When the harvest served was built. Unchanged while `stale`: a "
@@ -94,6 +94,30 @@ SOURCE_STATUS = {
             "previous good harvest keeps serving) or `failed` (why nothing "
             "was ever harvested).",
         ),
+        "skipped": {
+            "type": "array",
+            "description": (
+                "Present when this source ships something the address space has "
+                "no room for. Each entry is left out while the rest of the "
+                "source serves: a library file whose address lies inside one of "
+                "the source's own skills or is named `_index.md` or `_files.md`; "
+                "a skill whose frontmatter `name` breaks the Agent Skills naming "
+                "rule or differs from its directory, or that a skill before it "
+                "already serves at that address; a prompt whose name a prompt "
+                "before it already has. A clash with another source is not "
+                "listed here: it fails the later source instead."
+            ),
+            "items": {
+                "type": "object",
+                "required": ["path", "reason"],
+                "properties": {
+                    "path": _field(
+                        "string", "The file or skill directory, relative to the source."
+                    ),
+                    "reason": _field("string", "Why it is not served."),
+                },
+            },
+        },
         "revalidated": _field(
             "integer",
             "Live sources only: files priced against the server since this "
@@ -173,9 +197,10 @@ REINDEX_ERROR = {
         "status": {"type": "string", "const": "error"},
         "error": _field(
             "string",
-            "str(exc) from a refresh that raised outside build_source's own "
+            "A fixed message: a refresh raised outside build_source's own "
             "per-source failure handling -- the one case this manual "
-            "recovery lever can still fail at.",
+            "recovery lever can still fail at. The exception itself, with "
+            "its traceback, goes to the server log, never this body.",
         ),
     },
 }
@@ -217,8 +242,8 @@ def build_spec() -> dict:
                         "Readiness, and the fastest way to see which sources loaded."
                     ),
                     "description": (
-                        "Ignores X-Skill-Pack: an operator asking what this "
-                        "pod serves wants the real catalogue, not one "
+                        "Ignores X-Skill-Library: an operator asking what "
+                        "this pod serves wants the real catalogue, not one "
                         "client's scoped view of it."
                     ),
                     "tags": ["ops"],

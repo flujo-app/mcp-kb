@@ -33,10 +33,10 @@ from pathlib import Path
 from typing import Literal
 
 from ..config import Config
-from ..mcp.prompts import FilePrompt
+from .prompts import FilePrompt
 from .skills import Skill
 
-INDEX_VERSION = 1
+INDEX_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -44,8 +44,8 @@ class SkillRow:
     """A ``Skill``, flattened to JSON-safe fields."""
 
     name: str
-    pack: str
-    group: str
+    library: str
+    folder: str
     description: str
     path: str
     source: str
@@ -55,8 +55,8 @@ class SkillRow:
     def from_skill(cls, skill: Skill) -> SkillRow:
         return cls(
             name=skill.name,
-            pack=skill.pack,
-            group=skill.group,
+            library=skill.library,
+            folder=skill.folder,
             description=skill.description,
             path=str(skill.path),
             source=skill.source,
@@ -66,8 +66,8 @@ class SkillRow:
     def to_skill(self) -> Skill:
         return Skill(
             name=self.name,
-            pack=self.pack,
-            group=self.group,
+            library=self.library,
+            folder=self.folder,
             description=self.description,
             path=Path(self.path),
             source=self.source,
@@ -80,7 +80,7 @@ class PromptRow:
     """A ``FilePrompt``, flattened to JSON-safe fields."""
 
     path: str
-    pack: str
+    library: str
     source: str
     tags: tuple[str, ...]
 
@@ -88,7 +88,7 @@ class PromptRow:
     def of(cls, path: Path, prompt: FilePrompt) -> PromptRow:
         return cls(
             path=str(path),
-            pack=prompt.pack,
+            library=prompt.library,
             source=prompt.source,
             tags=tuple(sorted(prompt.tags)),
         )

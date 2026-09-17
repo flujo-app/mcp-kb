@@ -16,16 +16,16 @@ from kubed.mcp_kb.catalogue.index import (
     config_hash,
     now,
 )
+from kubed.mcp_kb.catalogue.prompts import FilePrompt
 from kubed.mcp_kb.catalogue.skills import Skill
 from kubed.mcp_kb.config import load_config
-from kubed.mcp_kb.mcp.prompts import FilePrompt
 
 
 def _skill(**overrides):
     fields = {
         "name": "alpha",
-        "pack": "flatsource",
-        "group": "flatsource",
+        "library": "flatsource",
+        "folder": "",
         "description": "First skill.",
         "path": Path("/skills/flatsource/alpha"),
         "source": "flatsource",
@@ -51,7 +51,7 @@ def _source_record(**overrides):
                 FilePrompt(
                     path=Path("/skills/flatsource/debug.md"),
                     name="flatsource_debug",
-                    pack="flatsource",
+                    library="flatsource",
                     source="flatsource",
                     template="Investigate.",
                     tags={"flatsource", "prompt", "b", "a"},
@@ -95,9 +95,17 @@ def test_a_missing_or_corrupt_index_reads_as_none(tmp_path):
 
 
 @pytest.mark.unit
-def test_a_different_version_reads_as_none(tmp_path):
+@pytest.mark.parametrize("version", [INDEX_VERSION + 1, 2, 1])
+def test_a_different_version_reads_as_none(tmp_path, version):
+    """Older as well as newer, by literal and not only by offset.
+
+    An index written by an earlier release is the one a real upgrade meets, and
+    the literals are the shapes before this one (1 on main, 2 part-way through
+    the address-space work): lowering `INDEX_VERSION` back to either must fail
+    here, which an offset from the current value alone never would.
+    """
     path = tmp_path / "index.json"
-    _index(version=INDEX_VERSION + 1).write(path)
+    _index(version=version).write(path)
     assert Index.read(path) is None
 
 

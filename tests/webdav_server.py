@@ -27,8 +27,9 @@ from wsgidav.wsgidav_app import WsgiDAVApp
 USERNAME = "dr-k"
 PASSWORD = "s3cret-app-password"
 
-# What the fixture serves before a test edits it: one skill and one pack-level
-# file, the same shape tests/test_git_source.py's origin repository has.
+# What the fixture serves before a test edits it: one skill and one
+# library-level file, the same shape tests/test_git_source.py's origin
+# repository has.
 SKILL = "---\nname: {name}\ndescription: A skill.\n---\n\n{body}\n"
 
 
@@ -93,7 +94,7 @@ def _app(root: Path, requests: list[tuple[str, str]]) -> _Recorder:
 
 @pytest.fixture
 def webdav(tmp_path_factory) -> Iterator[Webdav]:
-    """A served folder holding one skill and one pack-level file.
+    """A served folder holding one skill and one library-level file.
 
     Function-scoped: a test edits what the server serves, and the next test
     must not inherit the edit.
@@ -101,7 +102,7 @@ def webdav(tmp_path_factory) -> Iterator[Webdav]:
     root = tmp_path_factory.mktemp("webdav")
     served = Webdav(url="", root=root)
     served.skill("x", "first")
-    served.write("docs/guide.md", "pack-level guidance\n")
+    served.write("docs/guide.md", "library-level guidance\n")
 
     server = wsgi.Server(("127.0.0.1", 0), _app(root, served.requests))
     server.prepare()

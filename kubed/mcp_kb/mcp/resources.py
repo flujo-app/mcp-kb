@@ -9,9 +9,10 @@ One provider serves the whole address space rather than one provider per skill.
 FastMCP's ``SkillsDirectoryProvider`` is the obvious alternative, and it is
 wrong here for two reasons that only show up at scale:
 
-- It names a skill after its folder, so two packs shipping a ``testing/`` become
-  one, and the loser is not merely shadowed but absent from the server. With
-  four packs and ninety skills that is a matter of time, not luck.
+- It names a skill after its folder, so two libraries shipping a ``testing/``
+  become one, and the loser is not merely shadowed but absent from the
+  server. With four libraries and ninety skills that is a matter of time,
+  not luck.
 - It lists every skill and every manifest on every ``resources/list`` -- 77KB
   for this catalogue, paid by every client on every listing. That is the same
   expense this server rejects ``ResourcesAsTools`` for.
@@ -28,11 +29,14 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 
 from fastmcp import FastMCP
+from fastmcp.exceptions import NotFoundError
 from fastmcp.resources import TextResource
 from fastmcp.resources.base import Resource
 from fastmcp.server.middleware import Middleware
 from fastmcp.server.providers.base import Provider
 from fastmcp.utilities.versions import VersionSpec
+from mcp.shared.exceptions import MCPError
+from mcp_types import INVALID_PARAMS
 
 from ..catalogue.uris import Catalogue
 from .request import full_listing, requested_scope
@@ -47,8 +51,8 @@ class CatalogueProvider(Provider):
 
     An out-of-scope URI resolves to None, which FastMCP reports as an unknown
     resource. That conflation is deliberate and matches ``SkillIndex``: a scoped
-    client must not be able to confirm another pack's contents from the shape of
-    an error.
+    client must not be able to confirm another library's contents from the shape
+    of an error.
 
     The catalogue arrives as a getter, not a value. A refresh builds a new one
     and swaps the server's snapshot; a provider holding the old object would
@@ -91,6 +95,38 @@ class CatalogueProvider(Provider):
         )
 
 
+class NameTheFileToRead(Middleware):
+    """Turn a read of a directory address into an error that says what to read.
+
+    A library, a folder and a skill's root are directories, and a directory
+    serves nothing. The provider answers None for them like any other missing
+    URI, and FastMCP reports ``Resource not found`` -- true, and no help to an
+    agent that learned the shorthand elsewhere. This rewrites that one error to
+    name the ``_index.md``, ``SKILL.md`` or ``_manifest`` to read instead.
+
+    The hint is answered from the caller's own scope, so it never confirms a
+    directory the caller could not have listed: out of scope, the error is the
+    same bare one a missing URI gets. The code is unchanged, -32602.
+    """
+
+    def __init__(self, catalogue: Callable[[], Catalogue]):
+        self._catalogue = catalogue
+
+    async def on_read_resource(self, context, call_next):
+        try:
+            return await call_next(context)
+        except NotFoundError:
+            uri = str(context.message.uri)
+            hint = self._catalogue().directory(uri, requested_scope())
+            if hint is None:
+                raise
+            raise MCPError(
+                code=INVALID_PARAMS,
+                message=f"Resource not found: {uri!r}. {hint}",
+                data={"uri": uri},
+            ) from None
+
+
 class HideMirrorTools(Middleware):
     """Drop the mirroring tools from ``tools/list`` for clients that have the
     native feature each one mirrors.
@@ -127,3 +163,4 @@ class HideMirrorTools(Middleware):
 def register(mcp: FastMCP, catalogue: Callable[[], Catalogue]) -> None:
     """Publish the catalogue as ``skill://`` resources, read per request."""
     mcp.add_provider(CatalogueProvider(catalogue))
+    mcp.add_middleware(NameTheFileToRead(catalogue))

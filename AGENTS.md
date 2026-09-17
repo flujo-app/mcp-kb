@@ -44,21 +44,22 @@ installer's, against whatever image tag it chooses.
 | `kubed/mcp_kb/routes.py` | the plain-HTTP surface: `/health`, `/reindex`, `/openapi.yaml` |
 | `kubed/mcp_kb/config.py` | the config file's model — `Config`, `Library`, `Include`, the `*Source` models, `EnvRef`, `schema()` |
 | `kubed/mcp_kb/catalogue/` | what is served, and how it is found, addressed and persisted |
-| ⤷ `harvest.py` | the `include` globs, and what counts as a skill, a prompt or a pack file |
+| ⤷ `harvest.py` | the `include` globs, and what counts as a skill, a prompt or a library file |
 | ⤷ `skills.py` | the domain — `Skill`, `SkillIndex`, and the scoping rules. Imports no FastMCP |
 | ⤷ `uris.py` | the `skill://` address space — `Catalogue`, the grammar |
+| ⤷ `prompts.py` | `FilePrompt`, frontmatter parsing, rendering — no FastMCP |
 | ⤷ `index.py` | `Index`/`SourceRecord`, the on-disk `index.json` a cold start reads |
 | ⤷ `snapshot.py` | `Snapshot`, `build_snapshot` — the immutable view every request reads |
-| ⤷ `refresh.py` | when a source is due to be looked at again, and what a failure does to the last good one |
+| ⤷ `refresh.py` | when a source is due to be looked at again, bounded to the shortest configured interval, and what a failure does to the last good one |
 | `kubed/mcp_kb/sources/` | where bytes come from — `file.py`, `git.py`, `webdav.py`, the shared per-version `export.py`, `errors.py`, and `live.py`, because revalidation is a source concern |
 | `kubed/mcp_kb/mcp/` | what an agent sees |
-| ⤷ `resources.py` | the resources, which are the interface |
-| ⤷ `tools.py`, `prompts.py` | the two mirror pairs, and the middleware that hides them |
+| ⤷ `resources.py` | the resources, which are the interface, and the middleware — `NameTheFileToRead`, `HideMirrorTools` |
+| ⤷ `tools.py`, `prompts.py` | the two mirror pairs |
 | ⤷ `request.py`, `scope.py` | what the current request says about itself, and the `Scope` it becomes |
 | ⤷ `announce.py` | `AnnounceChanges` — telling a session its listing moved |
 | `kubed/mcp_kb/spec/` | `builder.py`, the OpenAPI document for the HTTP surface |
 | `scripts/` | `generate_openapi.py`, `generate_wiki.py`, and `requirements.py` for the image build |
-| `examples/config.yaml` | the worked config the image ships — four packs as `github://` sources |
+| `examples/config.yaml` | the worked config the image ships — four libraries as `github://` sources |
 | `config.schema.json` | `Config.model_json_schema()`, committed so an editor can validate a config live |
 | `wiki/` | the GitHub wiki, as a submodule |
 
@@ -80,7 +81,7 @@ names with a prefix, and these names are the agent's API.
   both at once, which is the point.
 - **Adding an endpoint** → `routes.py`, and its response shape in `spec/`, or
   the published contract starts lying.
-- **Changing what counts as a skill, a prompt or a pack file** →
+- **Changing what counts as a skill, a prompt or a library file** →
   `catalogue/harvest.py` for the rule, `catalogue/uris.py` for where it applies.
 - **Changing who may see one** → `catalogue/skills.py` for the rule,
   `catalogue/uris.py` for where it is applied. Every `Catalogue` method takes a
@@ -94,7 +95,7 @@ names with a prefix, and these names are the agent's API.
   `tests/test_prompts.py` loads a broken one to prove it.
 - **A library referencing files outside its skills** → that source's
   `include.files`. They are served at `skill://<library>/<path>` and listed
-  under `_files`, never indexed as skills.
+  under `_files.md`, never indexed as skills.
 - **A new flag or env var** → `main.py`, which is the whole configuration
   surface. Nothing else in the package reads `os.environ`, except `{env: NAME}`
   resolution in `config.py`, which is the one other reader — and it resolves a
@@ -119,9 +120,16 @@ neither tools nor listing rows:
 
 | call | returns | cost |
 | --- | --- | --- |
-| list | one index per library and per group | ~1.9 KB for 90 skills |
-| read `skill://grafana-lgtm` | that group's skills, as URIs | ~4k chars |
-| read `skill://grafana/loki` | the instructions to follow | one file |
+| list | one index per library and per folder | ~1.9 KB for 90 skills |
+| read `skill://grafana/grafana-lgtm/_index.md` | that folder's skills, as URIs | ~4k chars |
+| read `skill://grafana/grafana-lgtm/loki/SKILL.md` | the instructions to follow | one file |
+
+`<library>` is the first segment of every skill URI (the MCP Skills
+extension's "server-chosen prefix"), `<folder>` mirrors the skill's directory
+below its source's conventional skill root, and the last segment before the
+file is always the skill's `name`. A library, a folder or a skill's own
+directory is a directory address and serves nothing; see `catalogue/uris.py`'s
+module docstring for the grammar in full.
 
 Reads return **only** what was asked for. A skill body may cite
 `references/FOO.md`; citing it does not fetch it. That laziness is the point —
@@ -137,10 +145,10 @@ refusing to run one would be a different and worse contract.
 Two ways to hard-scope, both ceilings the model cannot widen past:
 
 - **A `Scope`, per client** — `?library=` / `?tags=` or the `X-Skill-Library` /
-  `X-Skill-Tags` headers (`X-Skill-Pack` is an alias). One deployment serves
-  many narrow agents; in n8n it is a Header Auth credential on the MCP Client
-  Tool node. Prefer this — a second copy of the server is a whole extra pod for
-  something a header solves.
+  `X-Skill-Tags` headers. One deployment serves many narrow agents; in n8n it
+  is a Header Auth credential on the MCP Client Tool node. Prefer this — a
+  second copy of the server is a whole extra pod for something a header
+  solves.
 - **A config that lists less**, per deployment. Narrower blast radius, but a
   whole pod.
 
@@ -210,7 +218,8 @@ refresh picked up an edit yet.
   read and `COOLDOWN_SECONDS` stops a wedged server costing anything after the
   first. **Making the read path async — a thread for the blocking call, or an
   async WebDAV client — is the outstanding follow-up**, and it is a change to
-  `mcp/resources.py`, `mcp/prompts.py` and `catalogue/uris.py`, not to
+  `mcp/resources.py`, `catalogue/uris.py` (the skill and library-file read) and
+  `catalogue/prompts.py` (`FilePrompt.body()`, the live prompt read), not to
   `sources/live.py`.
 - **An export is named by its version, so a rebuild of a version that has not
   moved is a rebuild over a tree being read.** That is the one case a repair

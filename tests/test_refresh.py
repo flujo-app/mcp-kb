@@ -1,6 +1,7 @@
 """Cold start, the background refresh, and what a client is told when it moves."""
 
 import asyncio
+import logging
 import os
 import time
 
@@ -116,7 +117,7 @@ def test_a_cold_start_reads_the_index_and_does_not_materialise(
 @pytest.mark.unit
 def test_a_changed_config_invalidates_the_index(skills_dir, cache, monkeypatch):
     """A different config throws the whole index away, not just the stale rows."""
-    KnowledgeBase(make_config(skills_dir, packs=["flatsource"]), cache)
+    KnowledgeBase(make_config(skills_dir, libraries=["flatsource"]), cache)
 
     seen = _counting_materialise(monkeypatch)
     knowledge_base = KnowledgeBase(make_config(skills_dir), cache)
@@ -232,10 +233,10 @@ def test_an_unreadable_file_in_one_source_fails_only_that_source(
     knowledge_base = KnowledgeBase(make_config(skills_dir), cache)
     real_load_skills = snapshot.load_skills
 
-    def flaky(dirs, *, pack, source, root, tags=()):
+    def flaky(dirs, *, library, source, root, tags=()):
         if source == "flatsource":
             raise PermissionError("[Errno 13] Permission denied: SKILL.md")
-        return real_load_skills(dirs, pack=pack, source=source, root=root, tags=tags)
+        return real_load_skills(dirs, library=library, source=source, root=root, tags=tags)
 
     monkeypatch.setattr(snapshot, "load_skills", flaky)
 
@@ -260,10 +261,10 @@ def test_an_unreadable_file_with_no_prior_record_is_a_failed_source(
     """
     real_load_skills = snapshot.load_skills
 
-    def flaky(dirs, *, pack, source, root, tags=()):
+    def flaky(dirs, *, library, source, root, tags=()):
         if source == "flatsource":
             raise PermissionError("[Errno 13] Permission denied: SKILL.md")
-        return real_load_skills(dirs, pack=pack, source=source, root=root, tags=tags)
+        return real_load_skills(dirs, library=library, source=source, root=root, tags=tags)
 
     monkeypatch.setattr(snapshot, "load_skills", flaky)
     knowledge_base = KnowledgeBase(make_config(skills_dir), cache)
@@ -405,7 +406,7 @@ async def test_a_rebuild_is_visible_to_a_connected_client(skills_dir, cache):
     """A provider holding a ``Catalogue`` would serve generation 0 forever."""
     knowledge_base = KnowledgeBase(make_config(skills_dir), cache)
     async with Client(knowledge_base.mcp) as client:
-        assert "skill://plugin-c" not in [
+        assert "skill://deepsource/plugin-c/_index.md" not in [
             str(r.uri) for r in await client.list_resources()
         ]
         assert "deepsource_extra" not in [p.name for p in await client.list_prompts()]
@@ -416,7 +417,7 @@ async def test_a_rebuild_is_visible_to_a_connected_client(skills_dir, cache):
         _add_prompt(skills_dir / "deepsource" / "prompts" / "extra.md")
         knowledge_base.refresh()
 
-        assert "skill://plugin-c" in [str(r.uri) for r in await client.list_resources()]
+        assert "skill://deepsource/plugin-c/_index.md" in [str(r.uri) for r in await client.list_resources()]
         assert "deepsource_extra" in [p.name for p in await client.list_prompts()]
 
 
@@ -441,6 +442,64 @@ async def test_the_lifespan_verifies_the_index_the_server_started_from(
     async with Client(knowledge_base.mcp):
         assert await _until(lambda: knowledge_base.generation == 1)
     assert knowledge_base.status["flatsource"]["status"] == "ok"
+
+
+@pytest.mark.unit
+def test_tick_seconds_is_bounded_by_the_shortest_configured_refresh(skills_dir):
+    """A `refresh: 1s` source ticking every `TICK_SECONDS` (5s) can be late by
+    up to a tick; the loop must sleep no longer than the shortest interval any
+    source actually configured.
+    """
+    raw = {
+        "sources": [
+            {**s.model_dump(mode="json"), "refresh": "1s"}
+            for s in make_config(skills_dir).sources
+        ]
+    }
+    config = Config.model_validate(raw)
+    assert config.min_refresh_seconds == 1
+    assert refresh.tick_seconds(config.min_refresh_seconds) == 1
+
+
+@pytest.mark.unit
+def test_tick_seconds_defaults_when_nothing_is_scheduled(skills_dir):
+    config = make_config(skills_dir)
+    assert config.min_refresh_seconds is None
+    assert refresh.tick_seconds(config.min_refresh_seconds) == refresh.TICK_SECONDS
+
+
+class _Slept(Exception):
+    """Raised by the stand-in sleep to end the loop after its first tick."""
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("interval", "seconds"), [(1, 1), (3600, refresh.TICK_SECONDS)])
+async def test_the_loop_sleeps_the_shorter_of_a_tick_and_the_shortest_refresh(
+    skills_dir, cache, monkeypatch, interval, seconds
+):
+    """Through `loop` itself, not the helper: a `refresh: 1s` source sleeps 1s,
+    and an hourly one still wakes every tick to ask what is due."""
+    raw = {
+        "sources": [
+            {**s.model_dump(mode="json"), "refresh": f"{interval}s"}
+            for s in make_config(skills_dir).sources
+        ]
+    }
+    knowledge_base = KnowledgeBase(Config.model_validate(raw), cache)
+    slept = []
+
+    async def sleep(delay):
+        slept.append(delay)
+        raise _Slept
+
+    async def no_pass(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(refresh, "_pass", no_pass)
+    monkeypatch.setattr(refresh.asyncio, "sleep", sleep)
+    with pytest.raises(_Slept):
+        await refresh.loop(knowledge_base)
+    assert slept == [seconds]
 
 
 @pytest.mark.unit
@@ -577,6 +636,50 @@ async def test_reindex_answers_with_an_error_payload_instead_of_a_500(
 
 
 @pytest.mark.unit
+async def test_reindex_failure_body_never_carries_the_exception_text(
+    skills_dir, cache, monkeypatch, caplog
+):
+    """`/reindex` is unauthenticated, so `str(exc)` in its body can hand any
+    caller an internal path or a remote URL. The response is a fixed message.
+
+    The log keeps the traceback, because that is how a failure gets fixed, but
+    never a credential: every configured `{env:}` secret and any URL userinfo are
+    redacted before the line is written.
+    """
+    monkeypatch.setenv("KB_TEST_TOKEN", "s3cr3t-deploy-token")
+    config = make_config(skills_dir).model_dump(mode="json", exclude_none=True)
+    config["sources"].append(
+        {
+            "name": "private",
+            "url": "git+file:///nonexistent/repo.git",
+            "auth": {"username": "deploy", "password": {"env": "KB_TEST_TOKEN"}},
+        }
+    )
+    knowledge_base = KnowledgeBase(Config.model_validate(config), cache)
+    leak = "https://deploy:s3cr3t-deploy-token@example.com/repo.git"
+
+    async def boom(**kwargs):
+        raise RuntimeError(f"cloning {leak} with s3cr3t-deploy-token failed")
+
+    monkeypatch.setattr(knowledge_base, "refresh_async", boom)
+    transport = httpx.ASGITransport(app=knowledge_base.mcp.http_app())
+    with caplog.at_level(logging.ERROR):
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://knowledge_base"
+        ) as http:
+            response = await http.post("/reindex")
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body["status"] == "error"
+    assert "s3cr3t" not in response.text
+    assert "s3cr3t-deploy-token" not in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "Traceback" in caplog.text
+    assert "***@example.com" in caplog.text
+
+
+@pytest.mark.unit
 async def test_reindex_endpoint_rebuilds_and_reports(skills_dir, cache):
     knowledge_base = KnowledgeBase(make_config(skills_dir), cache)
     transport = httpx.ASGITransport(app=knowledge_base.mcp.http_app())
@@ -639,3 +742,31 @@ async def test_a_sessionless_connection_is_told_nothing_and_still_works(
         assert len(await client.list_resources()) > 0
 
     assert _changed(seen) == []
+
+
+@pytest.mark.unit
+async def test_a_failed_background_pass_logs_no_credential(
+    skills_dir, cache, monkeypatch, caplog
+):
+    """The loop's failure log redacts the same way `/reindex`'s does."""
+    monkeypatch.setenv("KB_TEST_TOKEN", "s3cr3t-loop-token")
+    config = make_config(skills_dir).model_dump(mode="json", exclude_none=True)
+    config["sources"].append(
+        {
+            "name": "private",
+            "url": "git+file:///nonexistent/repo.git",
+            "auth": {"username": "deploy", "password": {"env": "KB_TEST_TOKEN"}},
+        }
+    )
+    knowledge_base = KnowledgeBase(Config.model_validate(config), cache)
+
+    async def boom(**kwargs):
+        raise RuntimeError("pulling https://deploy:s3cr3t-loop-token@example.com")
+
+    monkeypatch.setattr(knowledge_base, "refresh_async", boom)
+    with caplog.at_level(logging.ERROR):
+        await refresh._pass(knowledge_base)
+
+    assert "refresh pass failed" in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "s3cr3t-loop-token" not in caplog.text

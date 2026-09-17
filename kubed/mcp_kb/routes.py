@@ -13,6 +13,7 @@ routes and is the one built once, at registration -- see ``spec/builder.py``.
 from __future__ import annotations
 
 import logging
+import traceback
 from typing import TYPE_CHECKING
 
 import yaml
@@ -20,12 +21,18 @@ from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from .config import redact
 from .spec import build_spec
 
 if TYPE_CHECKING:
     from .server import KnowledgeBase
 
 log = logging.getLogger(__name__)
+
+# `/reindex` is unauthenticated: `str(exc)` can carry an internal path or a
+# remote URL, so the caller gets this fixed message and the real exception,
+# with its traceback, goes to the log instead.
+REINDEX_FAILURE_MESSAGE = "reindex failed; see the server log"
 
 
 def register(mcp: FastMCP, knowledge_base: KnowledgeBase) -> None:
@@ -74,8 +81,9 @@ def register(mcp: FastMCP, knowledge_base: KnowledgeBase) -> None:
     async def health(_request: Request) -> JSONResponse:
         """Readiness probe, and the fastest way to tell which sources loaded.
 
-        Reports the catalogue as *loaded*, ignoring any ``X-Skill-Pack`` header,
-        because an operator asking what this pod serves wants the real answer.
+        Reports the catalogue as *loaded*, ignoring any ``X-Skill-Library``
+        header, because an operator asking what this pod serves wants the real
+        answer.
         ``status`` is ``"ok"`` even when a source failed to materialise --
         readiness stays green for whatever did load, and the failure shows up in
         ``sources`` instead, keyed by source name. Each source also carries the
@@ -104,7 +112,13 @@ def register(mcp: FastMCP, knowledge_base: KnowledgeBase) -> None:
         """
         try:
             rebuilt = await knowledge_base.refresh_async(force=True)
-        except Exception as exc:
-            log.exception("reindex failed")
-            return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+        except Exception as exc:  # noqa: BLE001 - recovery must always answer
+            # The traceback is how a failure gets fixed, so it is logged whole —
+            # but through the redactor, because credentials never reach a log.
+            trace = "".join(traceback.format_exception(exc))
+            secrets = knowledge_base.config.secrets()
+            log.error("reindex failed\n%s", redact(trace, secrets))
+            return JSONResponse(
+                {"status": "error", "error": REINDEX_FAILURE_MESSAGE}, status_code=500
+            )
         return JSONResponse({**report(), "rebuilt": rebuilt})

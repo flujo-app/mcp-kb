@@ -32,7 +32,8 @@ from tests.webdav_server import PASSWORD, USERNAME
 pytestmark = pytest.mark.unit
 
 ENV = "WEBDAV_PASSWORD"
-URI = "skill://notes/x"
+SKILL = "skill://notes/x"
+URI = f"{SKILL}/SKILL.md"
 GUIDE = "skill://notes/docs/guide.md"
 PROMPT = "---\ndescription: A prompt.\n---\n\n{body}\n"
 
@@ -85,10 +86,10 @@ def test_an_edit_upstream_is_visible_on_the_next_read_without_a_refresh(
     assert knowledge_base.generation == 0, "no refresh happened; the read did the work"
 
 
-def test_a_pack_level_file_is_revalidated_too(webdav, tmp_path):
+def test_a_library_level_file_is_revalidated_too(webdav, tmp_path):
     """A skill's instructions are not the only thing a live source serves."""
     knowledge_base = _knowledge_base(webdav, tmp_path)
-    assert knowledge_base.catalogue.read(GUIDE) == "pack-level guidance\n"
+    assert knowledge_base.catalogue.read(GUIDE) == "library-level guidance\n"
 
     webdav.write("docs/guide.md", "guidance, revised and lengthened upstream\n")
 
@@ -120,10 +121,10 @@ def test_a_manifest_is_priced_against_the_server_before_it_is_served(
     they describe the copy on disk and the very next read serves something
     else."""
     knowledge_base = _knowledge_base(webdav, tmp_path)
-    before = json.loads(knowledge_base.catalogue.read(f"{URI}/_manifest"))
+    before = json.loads(knowledge_base.catalogue.read(f"{SKILL}/_manifest"))
 
     webdav.skill("x", "edited in nextcloud, and rather longer than before")
-    after = json.loads(knowledge_base.catalogue.read(f"{URI}/_manifest"))
+    after = json.loads(knowledge_base.catalogue.read(f"{SKILL}/_manifest"))
 
     assert after != before
     assert after["files"][0]["size"] > before["files"][0]["size"]
@@ -134,11 +135,11 @@ def test_a_new_upstream_file_needs_a_refresh(webdav, tmp_path):
     knowledge_base = _knowledge_base(webdav, tmp_path)
     webdav.skill("y", "a skill added after the folder was indexed")
 
-    assert knowledge_base.catalogue.read("skill://notes/y") is None
+    assert knowledge_base.catalogue.read("skill://notes/y/SKILL.md") is None
     assert [s.name for s in knowledge_base.index.visible()] == ["x"]
 
     assert knowledge_base.refresh() == ["notes"]
-    assert "a skill added after" in knowledge_base.catalogue.read("skill://notes/y")
+    assert "a skill added after" in knowledge_base.catalogue.read("skill://notes/y/SKILL.md")
 
 
 def test_reads_within_the_ttl_do_not_hit_the_server(webdav, tmp_path, monkeypatch):
@@ -169,7 +170,7 @@ def test_a_snapshot_source_never_revalidates(webdav, tmp_path, monkeypatch):
     webdav.requests.clear()
 
     assert "first" in knowledge_base.catalogue.read(URI)
-    assert knowledge_base.catalogue.read(GUIDE) == "pack-level guidance\n"
+    assert knowledge_base.catalogue.read(GUIDE) == "library-level guidance\n"
     assert reached == [], "the read path never reached the network"
     assert webdav.requests == []
 
@@ -189,7 +190,7 @@ def test_a_flaky_server_degrades_to_the_cached_copy(webdav, tmp_path):
     webdav.stop()
 
     assert "first" in knowledge_base.catalogue.read(URI)
-    assert knowledge_base.catalogue.read(GUIDE) == "pack-level guidance\n"
+    assert knowledge_base.catalogue.read(GUIDE) == "library-level guidance\n"
 
 
 def test_a_failed_revalidation_says_nothing_about_the_credentials(
@@ -316,10 +317,10 @@ def test_the_revalidator_follows_the_export_a_refresh_created(webdav, tmp_path):
     export nothing is serving any more, and the edit would never appear.
     """
     knowledge_base = _knowledge_base(webdav, tmp_path)
-    retired = knowledge_base.index.get("x").path
+    retired = knowledge_base.index.get("notes/x").path
     webdav.skill("y", "a second skill, which moves the whole folder's digest")
     assert knowledge_base.refresh() == ["notes"]
-    current = knowledge_base.index.get("x").path
+    current = knowledge_base.index.get("notes/x").path
     assert current != retired
 
     webdav.skill("x", "edited after the refresh, and longer than it was")

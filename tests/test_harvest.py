@@ -1,12 +1,12 @@
-"""Turning a source's include globs into skill dirs, prompt files and pack files."""
+"""Turning a source's include globs into skill dirs, prompt files and library files."""
 
 from pathlib import Path
 
 import pytest
 
 from kubed.mcp_kb.catalogue.harvest import (
-    group_of,
-    pack_files,
+    folder_of,
+    library_files,
     patterns,
     prompt_files,
     skill_dirs,
@@ -70,16 +70,16 @@ def test_conventions_find_both_prompt_layouts(tree):
 
 def test_files_are_served_only_when_asked_for(tree):
     dirs = skill_dirs(tree, Include())
-    assert pack_files(tree, Include(), dirs) == []
-    assert pack_files(tree, Include(files=["shared/**"]), dirs) == ["shared/tokens.md"]
+    assert library_files(tree, Include(), dirs) == []
+    assert library_files(tree, Include(files=["shared/**"]), dirs) == ["shared/tokens.md"]
 
 
-def test_a_file_inside_a_skill_is_never_a_pack_file(tree):
-    # pack_files only excludes files inside a skill dir (per its docstring); a
+def test_a_file_inside_a_skill_is_never_a_library_file(tree):
+    # library_files only excludes files inside a skill dir (per its docstring); a
     # broad "**/*.md" also legitimately matches the fixture's prompt files,
     # which live outside every skill dir returned by skill_dirs().
     dirs = skill_dirs(tree, Include())
-    assert pack_files(tree, Include(files=["**/*.md"]), dirs) == [
+    assert library_files(tree, Include(files=["**/*.md"]), dirs) == [
         ".github/prompts/review.prompt.md",
         "prompts/grafana/debug-logs.md",
         "shared/tokens.md",
@@ -93,14 +93,17 @@ def test_a_glob_cannot_escape_the_source(tree, tmp_path):
     # defence-in-depth guard directly, independent of that outer validation.
     (tmp_path.parent / "outside.md").write_text("no\n")
     include = Include.model_construct(files=["../**"])
-    assert pack_files(tree, include, []) == []
+    assert library_files(tree, include, []) == []
 
 
-def test_the_group_is_the_containing_directory_unless_that_is_a_skill_root(tree):
-    assert group_of(tree / "skills/grafana-lgtm/loki", tree) == "grafana-lgtm"
-    assert group_of(tree / "skills/flat", tree) is None
-    assert group_of(tree / ".github/skills/gh", tree) is None
-    assert group_of(tree / "template", tree) is None
+def test_the_folder_is_the_path_below_the_deepest_skill_root(tree):
+    assert folder_of(tree / "skills/grafana-lgtm/loki", tree) == "grafana-lgtm"
+    assert folder_of(tree / "skills/flat", tree) == ""
+    assert folder_of(tree / ".github/skills/gh", tree) == ""
+    assert folder_of(tree / "template", tree) == ""
+    assert folder_of(tree / "skills/a/b/deep", tree) == "a/b"
+    assert folder_of(tree / "docs/skills-extra/x", tree) == "docs/skills-extra"
+    assert folder_of(tree, tree) == ""
 
 
 @pytest.mark.unit
@@ -111,15 +114,15 @@ def test_a_trailing_globstar_means_everything_underneath(tmp_path):
     reads as a tautology on 3.13+ and as the real thing on 3.11 and 3.12 --
     where, before `patterns` normalised it, the first form found nothing.
     """
-    tree = tmp_path / "pack"
+    tree = tmp_path / "library"
     (tree / "shared" / "deep").mkdir(parents=True)
     (tree / "shared" / "tokens.md").write_text("t")
     (tree / "shared" / "deep" / "more.md").write_text("m")
 
-    assert pack_files(tree, Include(files=["shared/**"]), []) == pack_files(
+    assert library_files(tree, Include(files=["shared/**"]), []) == library_files(
         tree, Include(files=["shared/**/*"]), []
     )
-    assert pack_files(tree, Include(files=["shared/**"]), []) == [
+    assert library_files(tree, Include(files=["shared/**"]), []) == [
         "shared/deep/more.md",
         "shared/tokens.md",
     ]
@@ -213,12 +216,12 @@ def test_a_skills_glob_may_name_the_directory(tmp_path):
 def test_a_composite_folder_registers_every_skill_beneath_it(tmp_path):
     """Naming a folder of folders registers the set, not nothing.
 
-    This is how a grouped pack reads: `skills/grafana-lgtm` is not itself a
+    This is how a library with folders reads: `skills/grafana-lgtm` is not itself a
     skill, it holds them, and pointing at it should mean all of them.
     """
     root = tmp_path / "src"
-    for group, name in (("lgtm", "loki"), ("lgtm", "tempo"), ("sdk", "plugins")):
-        d = root / "skills" / group / name
+    for folder, name in (("lgtm", "loki"), ("lgtm", "tempo"), ("sdk", "plugins")):
+        d = root / "skills" / folder / name
         d.mkdir(parents=True)
         (d / "SKILL.md").write_text(f"---\nname: {name}\n---\nbody")
 

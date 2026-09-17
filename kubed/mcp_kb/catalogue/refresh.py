@@ -17,11 +17,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import traceback
 from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..config import Source
+from ..config import Source, redact
 from ..sources import SourceError, fingerprint
 from .index import SourceRecord
 from .snapshot import SERVABLE, stale
@@ -66,6 +67,21 @@ class Schedule:
             and now - self._checked.get(source.name, float("-inf"))
             >= source.refresh_seconds
         ]
+
+
+def tick_seconds(shortest_refresh: int | None) -> float:
+    """How long the loop sleeps: never longer than the shortest ``refresh:``.
+
+    ``shortest_refresh`` is ``config.min_refresh_seconds``, read once by the
+    caller -- the loop's own ``while`` condition already has it, so this takes
+    the value rather than the config, and nothing reads it a second time. A
+    fixed ``TICK_SECONDS`` tick can be late by almost a whole tick, which
+    matters once a source asks for something shorter than that; ``None`` (no
+    source scheduled) sleeps the full tick, since nothing is due to be late.
+    """
+    if shortest_refresh is None:
+        return TICK_SECONDS
+    return min(TICK_SECONDS, shortest_refresh)
 
 
 def moved(source: Source, cache: Path, record: SourceRecord) -> bool:
@@ -133,8 +149,8 @@ async def loop(knowledge_base: KnowledgeBase) -> None:
     nothing asked to be watched.
     """
     await _pass(knowledge_base)
-    while knowledge_base.config.min_refresh_seconds is not None:
-        await asyncio.sleep(TICK_SECONDS)
+    while (shortest := knowledge_base.config.min_refresh_seconds) is not None:
+        await asyncio.sleep(tick_seconds(shortest))
         due = knowledge_base.schedule.due(knowledge_base.config.sources)
         if due:
             await _pass(knowledge_base, only=due)
@@ -150,8 +166,10 @@ async def _pass(knowledge_base: KnowledgeBase, **kwargs) -> None:
     """
     try:
         rebuilt = await knowledge_base.refresh_async(**kwargs)
-    except Exception:
-        log.exception("refresh pass failed")
+    except Exception as exc:  # noqa: BLE001 - the loop must outlive any failure
+        trace = "".join(traceback.format_exception(exc))
+        secrets = knowledge_base.config.secrets()
+        log.error("refresh pass failed\n%s", redact(trace, secrets))
     else:
         if rebuilt:
             log.info(

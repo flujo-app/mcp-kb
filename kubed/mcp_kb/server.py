@@ -3,10 +3,10 @@
 Assembles a FastMCP instance from the catalogue a config file describes -- the
 address space, the resources, the mirror tools, the routes -- and runs it on a
 transport. Turning a config source into a directory is ``sources``'s job;
-deciding what in it counts as a skill, a prompt or a pack-level file is
+deciding what in it counts as a skill, a prompt or a library-level file is
 ``catalogue/harvest.py``'s; building one immutable view of all of it is
 ``catalogue/snapshot.py``'s; the catalogue itself lives in
-``catalogue/skills.py``, ``mcp/prompts.py`` and ``catalogue/uris.py``; and
+``catalogue/skills.py``, ``catalogue/prompts.py`` and ``catalogue/uris.py``; and
 deciding when a source is looked at again is ``catalogue/refresh.py``'s. This
 module walks the config in source order, connects the pieces, and owns the
 one mutable thing in the process: which ``Snapshot`` is current.
@@ -44,8 +44,9 @@ from fastmcp import FastMCP
 
 from . import routes
 from .catalogue.index import INDEX_VERSION, Index, SourceRecord, config_hash, now
+from .catalogue.prompts import FilePrompt
 from .catalogue.refresh import Schedule, keep_last_good, loop, moved, same_failure
-from .catalogue.skills import PackResources, SkillIndex
+from .catalogue.skills import LibraryFiles, SkillIndex
 from .catalogue.snapshot import (
     Snapshot,
     build_snapshot,
@@ -56,7 +57,6 @@ from .catalogue.uris import Catalogue
 from .config import Config
 from .mcp import prompts, resources, tools
 from .mcp.announce import AnnounceChanges
-from .mcp.prompts import FilePrompt
 from .mcp.request import client_reads_resources, client_uses_prompts
 
 log = logging.getLogger(__name__)
@@ -69,13 +69,18 @@ perform a specific task. Everything it serves is a `skill://` URI, and reading \
 one is the only operation there is.
 
 Work down the address space, cheapest first. Listing gives you indexes -- one \
-per pack, one per group within a pack. Reading an index URI \
-(`skill://grafana-lgtm`) gives you the skills in it, as URIs. Reading a skill \
-URI (`skill://grafana/loki`) gives you the instructions to follow.
+per library (`skill://grafana/_index.md`), one per folder of skills within a \
+library (`skill://grafana/grafana-lgtm/_index.md`). Reading an index gives you \
+the skills in it, as URIs. Reading a skill's URI \
+(`skill://grafana/grafana-lgtm/loki/SKILL.md`) gives you the instructions to \
+follow.
 
-A skill may ship supporting files. Append `/_manifest` to its URI to list them, \
-then read one by its path under the same URI. Do not read files you have no use \
-for -- a skill citing one is not a reason to fetch it.
+A skill may ship supporting files. Read `_manifest` in place of `SKILL.md` to \
+list them, then read one by its path under the same skill. A library may also \
+ship files outside its skills, listed at `skill://<library>/_files.md`. Do not \
+read files you have no use for -- a skill citing one is not a reason to fetch \
+it. Only files are read: a library, a folder or a skill's own directory serves \
+nothing.
 """
 
 
@@ -141,7 +146,7 @@ class KnowledgeBase:
         return self.snapshot.index
 
     @property
-    def resources(self) -> PackResources:
+    def resources(self) -> LibraryFiles:
         return self.snapshot.resources
 
     @property

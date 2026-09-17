@@ -60,8 +60,9 @@ calls, so they arrive as strings.
 - `pathlib` over `os.path`; f-strings over `%` or `.format`.
 - Module docstrings explain *why the module exists*, matching the existing files —
   not a restatement of the class names inside it.
-- ruff is the linter and the gate (`ruff check kubed scripts`). `tests/` is
-  excluded by `[tool.ruff]`; don't ask for lint compliance there.
+- ruff is the linter and the gate, run as `ruff check .` over the whole checkout,
+  tests included. The one exception is `E501` under `tests/`, in
+  `[tool.ruff.lint.per-file-ignores]`: a long assertion message is the point.
 
 ## Errors
 

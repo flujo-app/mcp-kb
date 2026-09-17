@@ -55,7 +55,7 @@ def origin(tmp_path_factory):
     root = tmp_path_factory.mktemp("origin")
     repo = pygit2.init_repository(str(root), bare=False, initial_head="main")
     (root / "docs").mkdir()
-    (root / "docs" / "guide.md").write_text("pack-level guidance\n")
+    (root / "docs" / "guide.md").write_text("library-level guidance\n")
     first = _commit(repo, root, "first", [], "one")
     repo.create_reference("refs/tags/v1", first)
     second = _commit(repo, root, "second", [first], "two")
@@ -69,7 +69,7 @@ def origin(tmp_path_factory):
 
 
 def _source(origin, **kwargs):
-    return GitSource(name="pack", url=origin.url, **kwargs)
+    return GitSource(name="library", url=origin.url, **kwargs)
 
 
 def _config(origin, **kwargs):
@@ -78,7 +78,7 @@ def _config(origin, **kwargs):
         {
             "sources": [
                 {
-                    "name": "pack",
+                    "name": "library",
                     "url": origin.url,
                     "include": {"skills": ["skills/*/SKILL.md"]},
                     **kwargs,
@@ -105,10 +105,10 @@ def _advance(origin, body="third"):
 def test_a_git_source_exports_the_tree_at_the_default_branch(origin, tmp_path):
     root = materialise(_source(origin), tmp_path)
 
-    assert root == tmp_path / "src" / "pack" / origin.second
+    assert root == tmp_path / "src" / "library" / origin.second
     assert "second" in _body(root)
     assert (root / "docs" / "guide.md").is_file()
-    assert (tmp_path / "git" / "pack").is_dir()
+    assert (tmp_path / "git" / "library").is_dir()
     assert (root / COMMIT_FILE).read_text().split()[0] == origin.second
 
 
@@ -148,7 +148,7 @@ def test_an_unknown_commit_is_a_source_error(origin, tmp_path):
 def test_a_subdirectory_narrows_the_harvest_root(origin, tmp_path):
     root = materialise(_source(origin, subdirectory="skills"), tmp_path)
 
-    assert root == tmp_path / "src" / "pack" / origin.second / "skills"
+    assert root == tmp_path / "src" / "library" / origin.second / "skills"
     assert (root / "x" / "SKILL.md").is_file()
 
 
@@ -160,7 +160,7 @@ def test_a_subdirectory_that_is_not_in_the_tree_is_a_source_error(origin, tmp_pa
 
 @pytest.mark.unit
 def test_an_unreachable_remote_is_a_source_error(tmp_path):
-    source = GitSource(name="pack", url=f"git+file://{tmp_path / 'nothing-here'}")
+    source = GitSource(name="library", url=f"git+file://{tmp_path / 'nothing-here'}")
 
     with pytest.raises(SourceError, match="clone failed"):
         materialise(source, tmp_path / "cache")
@@ -195,9 +195,9 @@ def test_a_read_in_flight_survives_a_refresh_that_moved_the_ref(origin, tmp_path
     serving = knowledge_base.snapshot
     _advance(origin)
 
-    assert knowledge_base.refresh() == ["pack"]
-    assert "second" in serving.catalogue.read("skill://pack/x")
-    assert "third" in knowledge_base.catalogue.read("skill://pack/x")
+    assert knowledge_base.refresh() == ["library"]
+    assert "second" in serving.catalogue.read("skill://library/x/SKILL.md")
+    assert "third" in knowledge_base.catalogue.read("skill://library/x/SKILL.md")
 
 
 @pytest.mark.unit
@@ -246,14 +246,14 @@ def test_a_truncated_export_is_rebuilt_across_a_restart(origin, tmp_path):
     cache = tmp_path / "cache"
     config = _config(origin, ref="main")
     KnowledgeBase(config, cache)
-    export = next((cache / "src" / "pack").iterdir())
+    export = next((cache / "src" / "library").iterdir())
     (export / "skills" / "x" / "SKILL.md").unlink()
 
     restarted = KnowledgeBase(config, cache)
     restarted.refresh()
 
-    assert restarted.status["pack"]["status"] == "ok"
-    assert "second" in restarted.catalogue.read("skill://pack/x")
+    assert restarted.status["library"]["status"] == "ok"
+    assert "second" in restarted.catalogue.read("skill://library/x/SKILL.md")
 
 
 @pytest.mark.unit
@@ -303,7 +303,7 @@ def test_a_crashed_export_leaves_nothing_at_a_commit_path(origin, tmp_path):
     """What a crash may leave behind is an unreferenced work directory, and
     never a half tree at the name of the commit a later export would trust."""
     source = _source(origin)
-    home = tmp_path / "src" / "pack"
+    home = tmp_path / "src" / "library"
     half = home / (exports.WORK_PREFIX + origin.second)
     (half / "skills").mkdir(parents=True)
     (half / "skills" / "leftover.md").write_text("never finished\n")
@@ -333,7 +333,7 @@ def test_superseded_exports_are_collected_once_nothing_can_be_reading_them(
 
     newest = materialise(source, tmp_path)
 
-    assert sorted(p.name for p in (tmp_path / "src" / "pack").iterdir()) == sorted(
+    assert sorted(p.name for p in (tmp_path / "src" / "library").iterdir()) == sorted(
         [previous.name, newest.name]
     )
 
@@ -449,7 +449,7 @@ def test_a_token_is_resolved_from_the_environment_and_never_written_down(
 
     written = [
         p.read_bytes()
-        for p in (tmp_path / "git" / "pack").rglob("*")
+        for p in (tmp_path / "git" / "library").rglob("*")
         if p.is_file()
     ]
     assert not any(b"ghp-not-a-real-token" in blob for blob in written)
@@ -477,7 +477,7 @@ def test_a_git_source_is_served_without_naming_git_anywhere(origin, tmp_path):
         {
             "sources": [
                 {
-                    "name": "pack",
+                    "name": "library",
                     "url": origin.url,
                     "include": {"skills": ["skills/*/SKILL.md"], "files": ["**/*"]},
                 }
@@ -487,12 +487,12 @@ def test_a_git_source_is_served_without_naming_git_anywhere(origin, tmp_path):
     knowledge_base = KnowledgeBase(config, tmp_path / "cache")
 
     assert [s.name for s in knowledge_base.index.visible()] == ["x"]
-    assert knowledge_base.status["pack"]["status"] == "ok"
+    assert knowledge_base.status["library"]["status"] == "ok"
     rows = "\n".join(str(entry) for entry in knowledge_base.catalogue.entries())
     assert COMMIT_FILE not in rows
     assert "cache" not in rows
     assert origin.second not in rows
-    assert knowledge_base.resources.files("pack") == ["docs/guide.md"]
+    assert knowledge_base.resources.files("library") == ["docs/guide.md"]
 
 
 # -- a remote that actually authenticates --------------------------------------
@@ -599,7 +599,7 @@ def private(tmp_path_factory):
 
 
 def _private(private, **kwargs):
-    return GitSource(name="pack", url=private.url, auth=CREDENTIAL, **kwargs)
+    return GitSource(name="library", url=private.url, auth=CREDENTIAL, **kwargs)
 
 
 @pytest.mark.unit
@@ -652,7 +652,7 @@ def test_a_remote_is_cloned_bare_and_shallow(private, tmp_path, monkeypatch):
 
     materialise(_private(private), tmp_path)
 
-    clone = tmp_path / "git" / "pack"
+    clone = tmp_path / "git" / "library"
     assert pygit2.Repository(str(clone)).is_bare
     assert not (clone / ".git").exists()
     assert (clone / "shallow").is_file()
@@ -705,3 +705,21 @@ def test_github_shorthand_against_the_real_thing(tmp_path):
 
     assert older != root
     assert fingerprint(old, tmp_path, older)["commit"] == old.ref
+
+
+@pytest.mark.unit
+def test_the_docs_qualify_git_file_as_not_shallow():
+    """README and CHANGELOG once called every git scheme "cloned bare and
+    shallow"; git+file:// is cloned whole, because libgit2's local transport
+    refuses a shallow fetch (see the module docstring above). Each doc's
+    git-schemes line must say so rather than repeat the blanket claim.
+    """
+    repo = Path(__file__).parent.parent
+    for name in ("README.md", "CHANGELOG.md"):
+        text = repo.joinpath(name).read_text(encoding="utf-8")
+        line = next(
+            line
+            for line in text.splitlines()
+            if "git+file://" in line and "cloned" in line
+        )
+        assert "whole" in line, f"{name}: {line!r} does not qualify git+file://"

@@ -1,54 +1,33 @@
-"""Prompts: templates a client offers its *user*, served from markdown files.
+"""Prompts as FastMCP serves them: templates a client offers its *user*.
 
 A skill is read by the model when it decides to. A prompt is picked by a person
 -- Claude Code lists them as slash commands -- who fills in a few arguments
-before the model sees anything. Different primitive, so a different module, but
-scoped by the same pack (the library) and ``X-Skill-Pack`` rules as skills:
-``harvest.py`` finds the files per source, and this module turns them into
-prompts joined to that source's library.
+before the model sees anything. Different primitive, so a different module,
+scoped by the same library and ``X-Skill-Library`` rules as skills.
 
-A file is YAML frontmatter plus a body::
-
-    ---
-    description: One line for the prompt picker.
-    arguments:
-    - name: app
-      description: Shown to whoever fills it in.
-      required: true
-    - name: since
-      default: 1h
-    ---
-    Investigate {{ app }} over the last {{ since }}.
-
-Placeholders are ``{{ name }}`` rather than ``str.format``'s ``{name}`` because
-these bodies are full of LogQL, PromQL and JSON, which all use single braces.
-
-The exposed name is ``<pack>_<file stem>``. Prompt names are one flat namespace
-per server, and two packs shipping a ``debug.md`` must not collide the way two
-skills named ``testing`` otherwise would.
+The parsing -- frontmatter, placeholders, the loader -- lives in
+``catalogue/prompts.py`` and has no FastMCP in it at all: ``catalogue/`` is the
+layer ``AGENTS.md`` promises stays free of it. This module is the seam:
+``MCPFilePrompt`` wraps a catalogue ``FilePrompt`` in FastMCP's own ``Prompt``
+base class, and ``PromptProvider`` is what ``resources.py``'s sibling for
+skills is for prompts.
 """
 
 from __future__ import annotations
 
-import logging
-import re
 from collections.abc import Callable, Sequence
-from pathlib import Path
 from typing import TYPE_CHECKING
 
-import frontmatter
-import yaml
 from fastmcp import FastMCP
-from fastmcp.exceptions import PromptError
 from fastmcp.prompts import Prompt, PromptArgument
 from fastmcp.server.providers.base import Provider
 from fastmcp.server.transforms import PromptsAsTools
 from fastmcp.tools.base import Tool
 from fastmcp.utilities.versions import VersionSpec
 from mcp_types import ToolAnnotations
-from pydantic import Field
+from pydantic import ConfigDict
 
-from ..catalogue.skills import SkillIndex
+from ..catalogue.prompts import FilePrompt
 from .request import requested_scope
 from .scope import EVERYTHING, Scope
 from .tools import READ_ONLY
@@ -56,165 +35,38 @@ from .tools import READ_ONLY
 if TYPE_CHECKING:
     from ..catalogue.snapshot import Snapshot
 
-log = logging.getLogger(__name__)
 
-PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+class MCPFilePrompt(Prompt):
+    """FastMCP's ``Prompt``, backed by a catalogue ``FilePrompt``.
 
-
-class FilePrompt(Prompt):
-    """One prompt file, rendered by substituting its placeholders.
-
-    ``path`` is where it was read from. It is carried on the prompt rather than
-    only known to the harvester so a rebuild can record it in the index and
-    re-parse exactly the files a source yielded last time.
-
-    ``live`` says the file is revalidated against its server as it is rendered,
-    so the *body* is re-read from disk instead of taken from ``template``. The
-    arguments are not re-read: they are what the harvest recorded, so declaring
-    a new one still needs a refresh.
+    Everything a client-facing prompt needs -- the substitution, the missing-
+    argument check, the live re-read -- is ``file``'s to do; this class exists
+    only to satisfy FastMCP's ``Prompt`` contract and hand the result back.
+    Raising ``ValueError`` here is deliberate rather than FastMCP's own
+    ``PromptError``: the server already wraps any exception a render raises
+    into a ``PromptError`` naming the prompt, so ``file.render`` stays free of
+    a FastMCP import for the one thing it can fail at.
     """
 
-    path: Path
-    pack: str
-    source: str = ""
-    template: str
-    live: bool = False
-    defaults: dict[str, str] = Field(default_factory=dict)
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    def body(self) -> str:
-        """The template to render: off disk for a live prompt, memory otherwise.
-
-        A file that has become unreadable or lost its frontmatter falls back to
-        the body last harvested -- the same rule the rest of live mode follows,
-        that a source in trouble degrades to the copy already known good.
-        """
-        if not self.live:
-            return self.template
-        try:
-            return _split(self.path.read_text(encoding="utf-8"))[1]
-        except (OSError, ValueError) as exc:
-            log.warning("re-reading prompt %s: %s", self.path, exc)
-            return self.template
+    file: FilePrompt
 
     async def render(self, arguments: dict[str, object] | None = None) -> str:
-        # A field left blank arrives as "" from most prompt pickers, so it counts
-        # as not given: a default applies, and a required argument fails.
-        given = {
-            key: str(value)
-            for key, value in (arguments or {}).items()
-            if value not in (None, "")
-        }
-        missing = [
-            arg.name
-            for arg in self.arguments or []
-            if arg.required and arg.name not in given
-        ]
-        if missing:
-            raise PromptError(f"Missing required arguments: {', '.join(missing)}")
-        values = {**self.defaults, **given}
-        return PLACEHOLDER.sub(lambda m: values.get(m.group(1), ""), self.body())
+        return self.file.render(arguments)
 
 
-def _split(text: str) -> tuple[dict, str]:
-    """Frontmatter and body, raising ValueError when there is no frontmatter block.
-
-    ``frontmatter.loads`` returns empty metadata both for "no block" and for an
-    "empty block" (``---\\n---\\nbody``) -- the latter is valid, so absence is
-    told apart by comparing the stripped content back against the stripped
-    whole text: only "no block at all" (including an unterminated one, which
-    the library also parses as empty metadata over the whole text) leaves them
-    equal. ``.content`` is ``rstrip``-ped by the library, which would silently
-    drop a template's trailing newline; the body is re-sliced from the original
-    text by length instead of by ``str.index``, which would find the first
-    occurrence of the content anywhere -- including inside the frontmatter
-    block itself, when the body text happens to recur there -- so a LogQL line
-    like ``|= "error"\\n`` renders exactly as written.
-    """
-    post = frontmatter.loads(text)
-    if post.metadata == {} and post.content.strip() == text.strip():
-        raise ValueError("no YAML frontmatter")
-    meta = post.metadata if isinstance(post.metadata, dict) else {}
-    if not post.content:
-        return meta, ""
-    start = len(text.rstrip()) - len(post.content)
-    return meta, text[start:]
-
-
-def load_prompt(
-    path: Path,
-    pack: str,
-    *,
-    source: str = "",
-    tags: Sequence[str] = (),
-    live: bool = False,
-) -> FilePrompt:
-    """Parse one prompt file, raising ValueError on anything malformed.
-
-    ``pack`` is the library this prompt joins; ``source`` and ``tags`` (the
-    library's tags plus the source's, concatenated by the caller) become part
-    of every prompt's own tags. An undeclared placeholder is an error rather
-    than an empty substitution: it is almost always a typo, and rendered blank
-    it produces a prompt that reads fine and asks the model for the wrong thing.
-    """
-    meta, body = _split(path.read_text(encoding="utf-8"))
-
-    arguments: list[PromptArgument] = []
-    defaults: dict[str, str] = {}
-    for raw in meta.get("arguments") or []:
-        if not isinstance(raw, dict) or not raw.get("name"):
-            raise ValueError(f"argument without a name: {raw!r}")
-        name = str(raw["name"])
-        required = bool(raw.get("required", False))
-        if required and "default" in raw:
-            raise ValueError(f"required argument '{name}' cannot have a default")
-        arguments.append(
-            PromptArgument(
-                name=name, description=raw.get("description"), required=required
-            )
-        )
-        if "default" in raw:
-            defaults[name] = str(raw["default"])
-
-    undeclared = sorted(set(PLACEHOLDER.findall(body)) - {a.name for a in arguments})
-    if undeclared:
-        raise ValueError(f"placeholders with no argument: {', '.join(undeclared)}")
-
-    return FilePrompt(
-        path=path,
-        live=live,
-        name=f"{pack}_{path.stem}",
-        description=" ".join(str(meta.get("description", "")).split()) or None,
-        arguments=arguments,
-        tags={t for t in (pack, source, "prompt", *tags) if t},
-        pack=pack,
-        source=source,
-        template=body,
-        defaults=defaults,
+def _adapt(file: FilePrompt) -> MCPFilePrompt:
+    return MCPFilePrompt(
+        name=file.name,
+        description=file.description,
+        tags=set(file.tags),
+        arguments=[
+            PromptArgument(name=a.name, description=a.description, required=a.required)
+            for a in file.arguments
+        ],
+        file=file,
     )
-
-
-def load_prompts(
-    files: Sequence[Path],
-    *,
-    pack: str,
-    source: str,
-    tags: Sequence[str] = (),
-    live: bool = False,
-) -> list[FilePrompt]:
-    """Every prompt file ``harvest`` already found for one source, joined to ``pack``.
-
-    ``pack`` is the library the prompts join. A broken file is logged and
-    skipped rather than raised: a bad prompt must not take the skills down with
-    it. ``tests/test_prompts.py`` loads every shipped prompt strictly, so this
-    only ever fires for a file mounted in at runtime.
-    """
-    prompts: list[FilePrompt] = []
-    for path in sorted(files):
-        try:
-            prompts.append(load_prompt(path, pack, source=source, tags=tags, live=live))
-        except (OSError, ValueError, yaml.YAMLError) as exc:
-            log.warning("skipping prompt %s: %s", path, exc)
-    return prompts
 
 
 class PromptProvider(Provider):
@@ -241,16 +93,17 @@ class PromptProvider(Provider):
         prompts = list(snapshot.prompts)
         if not scope:
             return prompts
-        libraries = _libraries_of(scope.library, snapshot.index)
-        tags = Scope(tags=scope.tags)
+        sources = snapshot.index.sources(scope)
         return [
             p
             for p in prompts
-            if (not libraries or p.pack in libraries) and tags.admits(p.pack, p.tags)
+            if (not scope.library or p.library == scope.library_name)
+            and (sources is None or p.source in sources)
+            and scope.admits_tags(p.tags)
         ]
 
     async def _list_prompts(self) -> Sequence[Prompt]:
-        return self.visible(requested_scope())
+        return [_adapt(p) for p in self.visible(requested_scope())]
 
     async def _get_prompt(
         self, name: str, version: VersionSpec | None = None
@@ -262,8 +115,8 @@ class PromptProvider(Provider):
         with its server here, on the way out.
         """
         prompt = await super()._get_prompt(name, version)
-        if isinstance(prompt, FilePrompt):
-            self._snapshot().revalidate(prompt.path)
+        if isinstance(prompt, MCPFilePrompt):
+            self._snapshot().revalidate(prompt.file.path)
         return prompt
 
 
@@ -306,17 +159,3 @@ def register(mcp: FastMCP, snapshot: Callable[[], Snapshot]) -> set[str]:
     mcp.add_transform(ReadOnlyPromptsAsTools(mcp))
     return set(PROMPT_TOOLS)
 
-
-def _libraries_of(selector: str, index: SkillIndex) -> frozenset[str]:
-    """The libraries a scope's ``library`` selects, for matching prompts.
-
-    A prompt belongs to a library, not a group, so a group name resolves to the
-    libraries holding that group -- every one of them, since group names are
-    not unique across libraries and resources already admit them all. The
-    selector also always counts as a library name in its own right, or a library
-    of prompts and no skills would vanish whenever some other library happened
-    to have a group by the same name.
-    """
-    if not selector:
-        return frozenset()
-    return frozenset(s.pack for s in index.visible(Scope(selector))) | {selector}
