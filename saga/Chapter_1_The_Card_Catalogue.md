@@ -2624,6 +2624,70 @@ shape, plus the table-driven test that matters — the same prompt written in
 every dialect, each producing one identical MCP prompt. This lands with PR 1's
 "prompts from commands" item (§C1.33 task 8), which it replaces and widens.
 
+### §C1.35 — Dr K's answers, and what they change (2026-09-17)
+
+**1. A scope names a library, and nothing below it.** `?library=grafana/grafana-lgtm`
+goes away: the library is `grafana`, and narrowing inside it is what
+`?categories=` and `?tags=` are for. This *removes* work #20 shipped — the
+folder pin, the sources-that-contribute-a-skill-under-a-folder rule for prompts
+and library files, and the listing's folder-pin row dropping (§C1.26 item 8) —
+and with it the messages about a folder that does not exist. Folders keep
+existing in URIs and in indexes; they are simply not a selector. A library, a
+category and a tag are.
+
+**2. Prompt names stay `library_prompt`, and the standards say why.** Every
+client namespaces an MCP prompt by its *server*, not by anything inside it:
+Claude Code exposes MCP tools as `mcp__<server>__<tool>` (a plugin-bundled
+server as `mcp__plugin_<plugin>_<server>__<tool>`) and replaces any character
+outside `A-Z a-z 0-9 _ -` with `_`; VS Code surfaces MCP prompts as
+`/<server>.<prompt>`. So `kb`'s `grafana_debug-logs` reads
+`/mcp__kb__grafana_debug-logs` in Claude Code and `/kb.grafana_debug-logs` in
+VS Code. Two consequences: a colon separator, as Claude uses for a plugin's own
+commands (`/plugin:command`), would be sanitised to `_` anyway, so `_` is the
+lowest common denominator; and the plugin does not belong in the name, since
+the client already shows which server a prompt came from. `_` stays
+unambiguous because a library name is kebab-case — `^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`
+— and can never contain one.
+
+**3. The plugin root is the fallback's ceiling** (locked): any non-hidden file
+inside the plugin root, which is what `${CLAUDE_PLUGIN_ROOT}` reaches in Claude
+Code, documented there for "resources shared between the plugin's skills".
+
+**4. `_files.md` stays one per library** (locked), listing each plugin's files.
+
+**5. `strict: false` marketplace entries are skipped** (locked), and say so in
+`/health`.
+
+**6. Prompt dialects: Claude first, Copilot as the proof.** Claude's is the
+dialect the marketplaces ship, so it is the one that must be exactly right —
+`description`, `argument-hint`, `arguments`, and `$name`/`$ARGUMENTS`/`$N`
+substitution. Copilot's `.prompt.md` (`${input:name:placeholder}`) is
+implemented alongside it, to prove the dialect seam is real rather than a
+single-format loader with extra steps. The rest — Codex (deprecated upstream in
+favour of skills), Gemini's TOML, Continue's `invokable` — wait for a case, and
+the seam makes each a small module rather than a rewrite.
+
+**7. Client-side placeholders: documented as something this server cannot do,
+and Anthropic does the same.** Claude Code's own rule for a skill it did not
+fetch locally — one synced from claude.ai — is that it *does not* run `!`
+command lines, *does not* attach the files `@` references name, and *does not*
+substitute `${CLAUDE_PROJECT_DIR}` or `${CLAUDE_SESSION_ID}`: all of it "reaches
+Claude as literal text". That is precedent for exactly what mcp-kb will do with
+content it fetched from a repository, and it answers Dr K's question about
+Claude commands: those placeholders are client-side machinery, and no server can
+fill them. So:
+
+- `!` shell lines and `!{…}` blocks are served as text and never executed. Claude
+  Code also has `disableSkillShellExecution` for the same worry.
+- `@path` references, `#file:`, `${selection}`, `${file}`, `${CLAUDE_*}` and
+  `${input:…}` beyond a declared argument are served as written.
+- The wiki's Prompts page says this plainly, and `/health` counts nothing for
+  it: a prompt that leans on them still works, it simply carries the text.
+
+**The plan changes accordingly** (§C1.33): task 5 loses folder selectors and
+gains their removal; task 6 becomes `?library=` (a name), `?categories=` and
+`?tags=`; task 8 is Claude plus Copilot through the dialect seam of §C1.34.
+
 ## Closing questions for Dr K
 
 *Superseded by §C1.22 — the name, here and in question 1, is `mcp-kb`. What was
