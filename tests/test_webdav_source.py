@@ -18,11 +18,12 @@ from pathlib import Path
 import pytest
 
 from kubed.mcp_kb import KnowledgeBase
-from kubed.mcp_kb.config import Config, WebdavSource
+from kubed.mcp_kb.config import Config
+from kubed.mcp_kb.plugins import Fetch, fetch_for
 from kubed.mcp_kb.sources import AccessRefused, SourceError, fingerprint, materialise
 from kubed.mcp_kb.sources import export as exports
 from kubed.mcp_kb.sources.webdav import ETAGS_FILE, VERSION_FILE, client, fetch_file
-from tests.webdav_server import PASSWORD, USERNAME
+from tests.webdav_server import FOLDER, PASSWORD, USERNAME
 
 pytestmark = pytest.mark.unit
 
@@ -36,14 +37,38 @@ def credential(monkeypatch):
     monkeypatch.setenv(ENV, PASSWORD)
 
 
-def _source(webdav, **kwargs):
-    return WebdavSource(
-        name="notes",
-        url=webdav.url,
-        auth={"username": USERNAME, "password": {"env": ENV}},
-        include={"skills": ["skills/*/SKILL.md"], "files": ["**/*"]},
-        **kwargs,
+def _config(webdav, *, auth=None, folder=None, **plugin):
+    """A `notes` source at the server and one plugin at the served folder."""
+    return Config.model_validate(
+        {
+            "sources": [
+                {
+                    "name": "notes",
+                    "url": webdav.url,
+                    "auth": auth or {"username": USERNAME, "password": {"env": ENV}},
+                }
+            ],
+            "plugins": [
+                {
+                    "name": "notes",
+                    "source": f"notes://{folder or webdav.folder}",
+                    "skills": ["skills/*/SKILL.md"],
+                    "files": ["**/*"],
+                    **plugin,
+                }
+            ],
+            "libraries": [{"name": "notes", "plugins": ["notes"]}],
+        }
     )
+
+
+def _fetch(webdav, **kwargs) -> Fetch:
+    """The fetch ``_config``'s plugin resolves to, through the real resolution."""
+    config = _config(webdav, **kwargs)
+    return fetch_for(config, config.plugins[0].address)
+
+
+KEY = f"notes://{FOLDER}"
 
 
 def _body(root):
@@ -54,9 +79,10 @@ def _body(root):
 
 
 def test_a_webdav_folder_is_copied_into_the_cache(webdav, tmp_path):
-    root = materialise(_source(webdav), tmp_path)
+    fetch = _fetch(webdav)
+    root = materialise(fetch, tmp_path)
 
-    assert root.parent == tmp_path / "src" / "notes"
+    assert root.parent == tmp_path / "src" / fetch.slug
     assert "first" in _body(root)
     assert (root / "docs" / "guide.md").read_text() == "library-level guidance\n"
     assert json.loads((root / ETAGS_FILE).read_text())[SKILL]
@@ -72,7 +98,7 @@ def test_an_unchanged_folder_is_listed_again_but_never_downloaded_again(
     byte of content -- and returns the export already being served, rather than
     writing over it.
     """
-    source = _source(webdav)
+    source = _fetch(webdav)
     first = materialise(source, tmp_path)
     webdav.requests.clear()
 
@@ -85,7 +111,7 @@ def test_an_unchanged_folder_is_listed_again_but_never_downloaded_again(
 
 def test_an_edited_folder_is_exported_beside_the_one_being_served(webdav, tmp_path):
     """E3's rule: a refresh adds a tree, it never rewrites the one in use."""
-    source = _source(webdav)
+    source = _fetch(webdav)
     old = materialise(source, tmp_path)
     webdav.skill("x", "second version")
 
@@ -104,7 +130,7 @@ def test_a_truncated_export_is_rebuilt_beside_the_one_being_served(webdav, tmp_p
     exact path the live snapshot is serving out of -- rebuilding over it means
     deleting it under a reader.
     """
-    source = _source(webdav)
+    source = _fetch(webdav)
     root = materialise(source, tmp_path)
     (root / SKILL).unlink()
 
@@ -123,7 +149,7 @@ def test_a_rebuild_never_interrupts_a_reader_of_the_served_tree(webdav, tmp_path
     the export by a download that was killed makes the export's count disagree
     with its stamp, and the next pass rebuilds a version that has not moved.
     """
-    source = _source(webdav)
+    source = _fetch(webdav)
     root = materialise(source, tmp_path)
     served = root / SKILL
     errors: list[str] = []
@@ -157,8 +183,8 @@ def test_a_rebuild_never_interrupts_a_reader_of_the_served_tree(webdav, tmp_path
 
 def test_a_crashed_export_leaves_nothing_at_a_version_path(webdav, tmp_path):
     """What a crash may leave is a work directory, swept on the next pass."""
-    source = _source(webdav)
-    home = tmp_path / "src" / "notes"
+    source = _fetch(webdav)
+    home = tmp_path / "src" / source.slug
     half = home / (exports.WORK_PREFIX + "0" * 64)
     half.mkdir(parents=True)
     (half / "leftover.md").write_text("never finished\n")
@@ -180,7 +206,7 @@ def test_the_server_under_test_refuses_an_anonymous_request(webdav):
     serves an anonymous reader would do the same here, quietly.
     """
     connection = HTTPConnection(webdav.url.removeprefix("webdav+http://"))
-    connection.request("PROPFIND", "/", headers={"Depth": "1"})
+    connection.request("PROPFIND", f"/{webdav.folder}/", headers={"Depth": "1"})
 
     assert connection.getresponse().status == 401
 
@@ -192,15 +218,15 @@ def test_the_wrong_credentials_are_a_source_error_naming_the_status_not_the_pass
     monkeypatch.setenv(ENV, "not-the-password")
 
     with pytest.raises(SourceError) as raised:
-        materialise(_source(webdav), tmp_path)
+        materialise(_fetch(webdav), tmp_path)
 
     message = str(raised.value)
     assert isinstance(raised.value, AccessRefused)
     assert "HTTP 401: the credentials were refused" in message
-    assert message.startswith("notes:")
+    assert message.startswith(f"{KEY}:")
     assert PASSWORD not in message
     assert "not-the-password" not in message
-    assert not (tmp_path / "src" / "notes").exists(), "a refused source exports nothing"
+    assert not (tmp_path / "src").exists(), "a refused fetch exports nothing"
 
 
 def test_a_missing_env_variable_fails_before_the_first_request(
@@ -213,7 +239,7 @@ def test_a_missing_env_variable_fails_before_the_first_request(
     webdav.requests.clear()
 
     with pytest.raises(SourceError) as raised:
-        materialise(_source(webdav), tmp_path)
+        materialise(_fetch(webdav), tmp_path)
 
     assert ENV in str(raised.value)
     assert "401" not in str(raised.value)
@@ -225,17 +251,14 @@ def test_a_missing_username_variable_fails_only_its_own_source(
 ):
     """The username may be an `{env:}` reference too, so it has the same way of
     being unset -- and resolving it outside the guard would make that a plain
-    `ConfigError`, which `materialise_all` does not catch. One unset variable
-    would then abort the whole pass instead of failing the source that declared
+    `ConfigError`, which `build_fetch` does not catch. One unset variable
+    would then abort the whole pass instead of failing the fetch that declared
     it, which is the invariant every other failure here respects.
     """
     monkeypatch.setenv(ENV, PASSWORD)
     monkeypatch.delenv("WEBDAV_USER", raising=False)
-    source = WebdavSource(
-        name="notes",
-        url=webdav.url,
-        auth={"username": {"env": "WEBDAV_USER"}, "password": {"env": ENV}},
-        include={"skills": ["skills/*/SKILL.md"]},
+    source = _fetch(
+        webdav, auth={"username": {"env": "WEBDAV_USER"}, "password": {"env": ENV}}
     )
     webdav.requests.clear()
 
@@ -247,7 +270,7 @@ def test_a_missing_username_variable_fails_only_its_own_source(
 
 
 def test_the_password_never_lands_under_the_cache(webdav, tmp_path):
-    materialise(_source(webdav), tmp_path)
+    materialise(_fetch(webdav), tmp_path)
 
     written = [p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()]
     assert written
@@ -259,7 +282,7 @@ def test_the_password_never_lands_under_the_cache(webdav, tmp_path):
 
 def test_the_fingerprint_is_a_digest_of_every_files_etag(webdav, tmp_path):
     """An edit moves the digest and an addition moves the count with it."""
-    source = _source(webdav)
+    source = _fetch(webdav)
     root = materialise(source, tmp_path)
 
     before = fingerprint(source, tmp_path, root)
@@ -282,7 +305,7 @@ def test_the_fingerprint_carries_the_digest_and_not_the_map(webdav, tmp_path):
     The map itself is the export's own file, which is where a live read reads
     it from -- not a thing to republish once per file per source.
     """
-    source = _source(webdav)
+    source = _fetch(webdav)
     root = materialise(source, tmp_path)
 
     stamp = json.dumps(fingerprint(source, tmp_path, root))
@@ -295,7 +318,7 @@ def test_the_fingerprint_carries_the_digest_and_not_the_map(webdav, tmp_path):
 def test_the_fingerprint_moves_when_the_export_loses_a_file(webdav, tmp_path):
     """The remote has not changed, but what is being served has -- and a
     fingerprint that ignored that would report `ok` over a gutted tree."""
-    source = _source(webdav)
+    source = _fetch(webdav)
     root = materialise(source, tmp_path)
     before = fingerprint(source, tmp_path, root)
 
@@ -310,7 +333,7 @@ def test_the_fingerprint_moves_when_the_export_loses_a_file(webdav, tmp_path):
 def test_fetch_file_returns_the_etag_unchanged_when_the_file_has_not_moved(
     webdav, tmp_path
 ):
-    source = _source(webdav)
+    source = _fetch(webdav)
     root = materialise(source, tmp_path)
     recorded = json.loads((root / ETAGS_FILE).read_text())[SKILL]
     webdav.requests.clear()
@@ -320,7 +343,7 @@ def test_fetch_file_returns_the_etag_unchanged_when_the_file_has_not_moved(
 
 
 def test_fetch_file_replaces_the_local_copy_when_the_etag_moved(webdav, tmp_path):
-    source = _source(webdav)
+    source = _fetch(webdav)
     root = materialise(source, tmp_path)
     recorded = json.loads((root / ETAGS_FILE).read_text())[SKILL]
     webdav.skill("x", "edited in nextcloud, longer than before")
@@ -333,7 +356,7 @@ def test_fetch_file_replaces_the_local_copy_when_the_etag_moved(webdav, tmp_path
 
 
 def test_a_missing_upstream_file_leaves_the_local_copy(webdav, tmp_path):
-    source = _source(webdav)
+    source = _fetch(webdav)
     root = materialise(source, tmp_path)
     (webdav.root / SKILL).unlink()
 
@@ -347,7 +370,7 @@ def test_a_live_fetch_replaces_the_local_copy_rather_than_rewriting_it(
     """The atomicity, pinned. A reader that already opened the file must read
     the bytes it opened all the way to the end -- which a rename gives it and a
     write over the same inode takes away."""
-    source = _source(webdav)
+    source = _fetch(webdav)
     root = materialise(source, tmp_path)
     recorded = json.loads((root / ETAGS_FILE).read_text())[SKILL]
     webdav.skill("x", "edited in nextcloud, and very much longer than it was")
@@ -365,7 +388,7 @@ def test_a_live_fetch_stages_its_download_outside_the_export(webdav, tmp_path):
     does not run. Inside the export that file counts towards the export's
     extent, so the tree looks truncated for good -- and ``collect`` walks the
     source's home, so it could never reach one buried in a skill directory."""
-    source = _source(webdav)
+    source = _fetch(webdav)
     root = materialise(source, tmp_path)
     recorded = json.loads((root / ETAGS_FILE).read_text())[SKILL]
     webdav.skill("x", "edited in nextcloud, and longer than before")
@@ -393,7 +416,7 @@ def test_a_live_fetch_stages_its_download_outside_the_export(webdav, tmp_path):
 
 
 def test_a_temp_file_a_killed_fetch_left_does_not_truncate_the_export(webdav, tmp_path):
-    source = _source(webdav)
+    source = _fetch(webdav)
     root = materialise(source, tmp_path)
     (exports.workspace(root.parent) / ".tmp-killed").write_text("half a download")
 
@@ -416,7 +439,7 @@ def test_a_folder_whose_names_need_encoding_is_copied_whole(webdav, tmp_path):
         webdav.write(f"docs/{name}", f"body of {name}\n")
     webdav.write("docs/deep#dir/note?.md", "in a folder that needs it too\n")
 
-    root = materialise(_source(webdav), tmp_path)
+    root = materialise(_fetch(webdav), tmp_path)
 
     for name in AWKWARD:
         assert (root / "docs" / name).read_text() == f"body of {name}\n"
@@ -427,7 +450,7 @@ def test_a_name_that_needs_encoding_is_revalidated_like_any_other(webdav, tmp_pa
     """The live half of the same address, since it re-addresses one file."""
     rel = "docs/hash#and?both.md"
     webdav.write(rel, "first\n")
-    source = _source(webdav)
+    source = _fetch(webdav)
     root = materialise(source, tmp_path)
     webdav.write(rel, "edited upstream, and rather longer than before\n")
 
@@ -436,7 +459,7 @@ def test_a_name_that_needs_encoding_is_revalidated_like_any_other(webdav, tmp_pa
 
 
 def test_fetch_file_refuses_a_path_that_leaves_the_export(webdav, tmp_path):
-    source = _source(webdav)
+    source = _fetch(webdav)
     root = materialise(source, tmp_path)
 
     with pytest.raises(SourceError, match="outside"):
@@ -450,22 +473,10 @@ def test_a_webdav_source_is_served_without_naming_the_backend_anywhere(
     webdav, tmp_path
 ):
     """A backend is config-only: no cache path, no WebDAV URL, no scheme name."""
-    config = Config.model_validate(
-        {
-            "sources": [
-                {
-                    "name": "notes",
-                    "url": webdav.url,
-                    "auth": {"username": USERNAME, "password": {"env": ENV}},
-                    "include": {"skills": ["skills/*/SKILL.md"], "files": ["**/*"]},
-                }
-            ]
-        }
-    )
-    knowledge_base = KnowledgeBase(config, tmp_path / "cache")
+    knowledge_base = KnowledgeBase(_config(webdav), tmp_path / "cache")
 
     assert [s.name for s in knowledge_base.index.visible()] == ["x"]
-    assert knowledge_base.status["notes"]["status"] == "ok"
+    assert knowledge_base.status["fetches"][KEY]["status"] == "ok"
     assert "first" in knowledge_base.catalogue.read("skill://notes/x/SKILL.md")
     rows = "\n".join(str(entry) for entry in knowledge_base.catalogue.entries())
     assert "webdav" not in rows
@@ -475,8 +486,8 @@ def test_a_webdav_source_is_served_without_naming_the_backend_anywhere(
     assert knowledge_base.resources.files("notes") == ["docs/guide.md"]
 
 
-def test_a_webdav_source_that_cannot_be_reached_fails_only_itself(webdav, tmp_path):
-    """§C1.12: one bad source is a record, and the others are still served."""
+def test_a_webdav_fetch_that_cannot_be_reached_fails_only_itself(webdav, tmp_path):
+    """§C1.12: one bad fetch is a record, and the others are still served."""
     config = Config.model_validate(
         {
             "sources": [
@@ -487,18 +498,26 @@ def test_a_webdav_source_that_cannot_be_reached_fails_only_itself(webdav, tmp_pa
                     "url": "webdav+http://127.0.0.1:1",
                     "auth": {"username": USERNAME, "password": {"env": ENV}},
                 },
+            ],
+            "plugins": [
+                {"name": "notes", "source": f"notes://{FOLDER}"},
                 {
                     "name": "local",
-                    "url": f"file://{_local(tmp_path)}",
-                    "include": {"skills": ["skills/*/SKILL.md"]},
+                    "source": f"file://{_local(tmp_path)}",
+                    "skills": ["skills/*/SKILL.md"],
                 },
-            ]
+            ],
+            "libraries": [
+                {"name": "notes", "plugins": ["notes"]},
+                {"name": "local", "plugins": ["local"]},
+            ],
         }
     )
     knowledge_base = KnowledgeBase(config, tmp_path / "cache")
 
-    assert knowledge_base.status["notes"]["status"] == "failed"
-    assert knowledge_base.status["local"]["status"] == "ok"
+    assert knowledge_base.status["fetches"][KEY]["status"] == "failed"
+    assert knowledge_base.status["plugins"]["notes"]["status"] == "failed"
+    assert knowledge_base.status["plugins"]["local"]["status"] == "ok"
     assert [s.name for s in knowledge_base.index.visible()] == ["y"]
 
 
@@ -512,12 +531,12 @@ def _local(tmp_path: Path) -> Path:
 
 def test_a_folder_that_does_not_exist_is_named_as_that(webdav, tmp_path):
     """Not a copy failure with an empty path in it: the folder is not there."""
-    source = _source(webdav).model_copy(update={"url": f"{webdav.url}/Agents"})
+    source = _fetch(webdav, folder="Agents")
 
     with pytest.raises(SourceError) as raised:
         materialise(source, tmp_path)
 
-    assert str(raised.value) == "notes: the folder /Agents does not exist"
+    assert str(raised.value) == "notes://Agents: the folder /Agents does not exist"
     assert not isinstance(raised.value, AccessRefused)
 
 
@@ -530,12 +549,19 @@ def _served_config(webdav, tmp_path):
                     "url": webdav.url,
                     "auth": {"username": USERNAME, "password": {"env": ENV}},
                 },
+            ],
+            "plugins": [
+                {"name": "notes", "source": f"notes://{FOLDER}"},
                 {
                     "name": "local",
-                    "url": f"file://{_local(tmp_path)}",
-                    "include": {"skills": ["skills/*/SKILL.md"]},
+                    "source": f"file://{_local(tmp_path)}",
+                    "skills": ["skills/*/SKILL.md"],
                 },
-            ]
+            ],
+            "libraries": [
+                {"name": "notes", "plugins": ["notes"]},
+                {"name": "local", "plugins": ["local"]},
+            ],
         }
     )
 
@@ -546,7 +572,7 @@ def test_refused_credentials_on_the_first_build_stop_the_server(
     """The failure a wait does not fix: exit, and be restarted until it is fixed."""
     monkeypatch.setenv(ENV, "not-the-password")
 
-    with pytest.raises(AccessRefused, match=r"notes: .*HTTP 401"):
+    with pytest.raises(AccessRefused, match=rf"{KEY}: .*HTTP 401"):
         KnowledgeBase(_served_config(webdav, tmp_path), tmp_path / "cache")
 
 
@@ -566,7 +592,8 @@ def test_main_exits_naming_the_source_whose_credentials_were_refused(
 
     assert raised.value.code == 3
     err = capsys.readouterr().err
-    assert "mcp-kb: notes: " in err and "HTTP 401: the credentials were refused" in err
+    assert f"mcp-kb: {KEY}: " in err
+    assert "HTTP 401: the credentials were refused" in err
     assert "not-the-password" not in err
 
 
@@ -579,7 +606,7 @@ def test_refused_credentials_on_a_refresh_leave_the_source_stale(
 
     knowledge_base.refresh(force=True)
 
-    notes = knowledge_base.status["notes"]
+    notes = knowledge_base.status["fetches"][KEY]
     assert notes["status"] == "stale"
     assert "HTTP 401: the credentials were refused" in notes["error"]
     assert "first" in knowledge_base.catalogue.read("skill://notes/x/SKILL.md")

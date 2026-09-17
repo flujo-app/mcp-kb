@@ -32,13 +32,23 @@ PASSWORD = "s3cret-app-password"
 # repository has.
 SKILL = "---\nname: {name}\ndescription: A skill.\n---\n\n{body}\n"
 
+# The share the folder is served under. A plugin address is a path under its
+# source (`notes://kb`), so the folder sits one segment below the server root
+# exactly as a Nextcloud folder sits below the DAV endpoint.
+FOLDER = "kb"
+
 
 @dataclass
 class Webdav:
-    """A running server: where it is, what it serves, what has been asked of it."""
+    """A running server: where it is, what it serves, what has been asked of it.
+
+    ``url`` is the server -- a source's URL -- and the served folder is the
+    ``FOLDER`` share below it, which is what a plugin address names.
+    """
 
     url: str
     root: Path
+    folder: str = FOLDER
     requests: list[tuple[str, str]] = field(default_factory=list)
     # Set by the fixture, and callable from a test: a live source has to go on
     # serving when the server it revalidates against stops answering, and the
@@ -75,7 +85,7 @@ class _Recorder:
 def _app(root: Path, requests: list[tuple[str, str]]) -> _Recorder:
     dav = WsgiDAVApp(
         {
-            "provider_mapping": {"/": str(root)},
+            "provider_mapping": {f"/{FOLDER}": str(root)},
             # No "anonymous" entry: every request is authenticated or refused.
             "simple_dc": {"user_mapping": {"*": {USERNAME: {"password": PASSWORD}}}},
             "http_authenticator": {

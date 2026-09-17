@@ -1,45 +1,33 @@
-"""Materialising a config source into a local directory, and its failure mode."""
+"""Materialising a ``file://`` fetch into a local directory, and its failure mode."""
 
 import os
 
 import pytest
 
-from kubed.mcp_kb.config import Config, FileSource
-from kubed.mcp_kb.sources import SourceError, fingerprint, materialise, materialise_all
+from kubed.mcp_kb.plugins import Fetch
+from kubed.mcp_kb.sources import SourceError, fingerprint, materialise
 from kubed.mcp_kb.sources.file import fingerprint_file
 
 
-def test_a_file_source_is_served_in_place(tmp_path):
-    source = FileSource(name="kubed", url=f"file://{tmp_path}")
-    assert materialise(source, tmp_path / "cache") == tmp_path
+def _fetch(path):
+    """The fetch a ``file://<path>`` plugin address resolves to."""
+    return Fetch(key=f"file://{path}", backend="file", url=str(path))
+
+
+def test_a_file_fetch_is_served_in_place(tmp_path):
+    assert materialise(_fetch(tmp_path), tmp_path / "cache") == tmp_path
     assert not (tmp_path / "cache").exists()
 
 
-def test_a_missing_directory_is_a_source_error(tmp_path):
-    source = FileSource(name="kubed", url=f"file://{tmp_path / 'nope'}")
-    with pytest.raises(SourceError, match="nope"):
-        materialise(source, tmp_path / "cache")
-
-
-def test_materialise_all_skips_a_broken_source_and_keeps_the_rest(tmp_path):
-    (tmp_path / "good").mkdir()
-    config = Config.model_validate(
-        {
-            "sources": [
-                {"name": "good", "url": f"file://{tmp_path / 'good'}"},
-                {"name": "bad", "url": f"file://{tmp_path / 'bad'}"},
-            ]
-        }
-    )
-    got = materialise_all(config, tmp_path / "cache")
-    assert got["good"] == tmp_path / "good"
-    assert isinstance(got["bad"], SourceError)
+def test_a_missing_directory_is_a_source_error_naming_the_fetch(tmp_path):
+    with pytest.raises(SourceError, match=f"file://{tmp_path / 'nope'}: .*nope"):
+        materialise(_fetch(tmp_path / "nope"), tmp_path / "cache")
 
 
 def test_a_fingerprint_counts_files_bytes_and_newest_mtime(tmp_path):
     (tmp_path / "a.txt").write_text("hi")
     (tmp_path / "b.txt").write_text("hello")
-    source = FileSource(name="kubed", url=f"file://{tmp_path}")
+    source = _fetch(tmp_path)
     fp = fingerprint(source, tmp_path / "cache", tmp_path)
     assert fp["files"] == 2
     assert fp["bytes"] == len("hi") + len("hello")
@@ -52,7 +40,7 @@ def test_a_fingerprint_counts_files_bytes_and_newest_mtime(tmp_path):
 def test_a_fingerprint_changes_when_a_file_gets_a_newer_mtime(tmp_path):
     target = tmp_path / "a.txt"
     target.write_text("hi")
-    source = FileSource(name="kubed", url=f"file://{tmp_path}")
+    source = _fetch(tmp_path)
     before = fingerprint(source, tmp_path / "cache", tmp_path)
 
     later_ns = before["newest"] + 5_000_000_000
@@ -66,7 +54,7 @@ def test_a_fingerprint_changes_when_a_file_gets_a_newer_mtime(tmp_path):
 
 def test_a_fingerprint_changes_when_a_file_is_added(tmp_path):
     (tmp_path / "a.txt").write_text("hi")
-    source = FileSource(name="kubed", url=f"file://{tmp_path}")
+    source = _fetch(tmp_path)
     before = fingerprint(source, tmp_path / "cache", tmp_path)
 
     (tmp_path / "b.txt").write_text("more")
@@ -78,7 +66,7 @@ def test_a_fingerprint_changes_when_a_file_is_added(tmp_path):
 
 def test_a_fingerprint_is_unchanged_when_nothing_changed(tmp_path):
     (tmp_path / "a.txt").write_text("hi")
-    source = FileSource(name="kubed", url=f"file://{tmp_path}")
+    source = _fetch(tmp_path)
     assert fingerprint(source, tmp_path / "cache", tmp_path) == fingerprint(
         source, tmp_path / "cache", tmp_path
     )
@@ -91,7 +79,7 @@ def test_a_fingerprint_skips_hidden_directories_except_conventional_ones(tmp_pat
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("---\nname: a\n---\n")
 
-    source = FileSource(name="kubed", url=f"file://{tmp_path}")
+    source = _fetch(tmp_path)
     fp = fingerprint(source, tmp_path / "cache", tmp_path)
 
     assert fp["files"] == 1
@@ -105,7 +93,7 @@ def test_a_fingerprint_does_not_follow_a_symlink_out_of_the_tree(tmp_path):
     outside = tmp_path / "outside.txt"
     outside.write_text("a much longer file that lives somewhere else")
 
-    source = FileSource(name="kubed", url=f"file://{root}")
+    source = _fetch(root)
     before = fingerprint(source, tmp_path / "cache", root)
 
     (root / "link.txt").symlink_to(outside)
