@@ -74,6 +74,13 @@ def _sources(*extra: str) -> str:
     return "sources:\n- name: gh\n  url: git+https://github.com\n" + "".join(extra)
 
 
+def _webdav(*extra: str) -> str:
+    return (
+        "sources:\n- name: nc\n  url: webdav+https://h/dav\n"
+        "  auth: {username: me, password: {env: P}}\n" + "".join(extra)
+    )
+
+
 # -- the sketch ----------------------------------------------------------------
 
 
@@ -188,13 +195,21 @@ def test_live_caching_is_refused_on_a_git_source(tmp_path):
 
 
 def test_live_caching_parses_on_a_webdav_source(tmp_path):
-    text = "sources:\n- name: nc\n  url: webdav+https://h/dav\n  cache: live\n"
+    text = _webdav("  cache: live\n")
     config = load_config(write(tmp_path, text))
     assert config.source("nc").cache == "live"
 
 
+def test_a_webdav_source_without_auth_is_refused(tmp_path):
+    """WebDAV is an authenticated backend; an anonymous one is a typo, not a
+    mode -- and one that would only show up as a 401 at cold start."""
+    text = "sources:\n- name: nc\n  url: webdav+https://cloud.example/dav/notes\n"
+    with pytest.raises(ConfigError, match="auth"):
+        load_config(write(tmp_path, text))
+
+
 def test_an_unknown_cache_mode_is_refused(tmp_path):
-    text = "sources:\n- name: nc\n  url: webdav+https://h/dav\n  cache: sometimes\n"
+    text = _webdav("  cache: sometimes\n")
     with pytest.raises(ConfigError, match="cache"):
         load_config(write(tmp_path, text))
 
@@ -268,6 +283,15 @@ def test_a_credential_embedded_in_a_url_is_refused(tmp_path):
     assert "x-access-token" not in str(raised.value)
 
 
+def test_a_url_with_no_credential_in_it_is_reported_as_it_is(tmp_path):
+    """The redaction must not eat an ordinary URL out of an ordinary message:
+    a refusal an operator cannot match to a line of their config is no help."""
+    with pytest.raises(ConfigError, match="ftp") as raised:
+        load_config(write(tmp_path, "sources:\n- name: p\n  url: ftp://a\n"))
+
+    assert "ftp://a" in str(raised.value)
+
+
 def test_a_password_containing_an_at_is_not_half_echoed(tmp_path):
     text = (
         "sources:\n- name: notes\n  url: webdav+https://me:hun@ter2@cloud.example/dav\n"
@@ -302,10 +326,7 @@ def test_a_malformed_plugin_address_is_a_config_error(tmp_path):
 
 def test_a_ref_on_a_non_git_source_is_refused(tmp_path):
     """A ref is a git concept; on WebDAV it would be accepted and ignored."""
-    text = (
-        "sources:\n- name: nc\n  url: webdav+https://h/dav\n"
-        "plugins:\n- name: p\n  source: nc://folder?ref=main\n"
-    )
+    text = _webdav() + "plugins:\n- name: p\n  source: nc://folder?ref=main\n"
     with pytest.raises(ConfigError, match="git"):
         load_config(write(tmp_path, text))
 

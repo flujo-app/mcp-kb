@@ -14,6 +14,7 @@ Nothing here imports FastMCP, and nothing here resolves a credential: a
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
@@ -40,13 +41,15 @@ class Fetch:
 
     @property
     def slug(self) -> str:
-        """A short, filesystem-safe name for this fetch's place in the cache.
+        """This fetch's place in the cache: readable, then a digest.
 
-        A digest rather than the URL: the key holds a source name and a path,
-        and neither belongs in a directory name that a backend then writes
-        into. Per ref, because two refs of one repository are two trees.
+        The readable half is for whoever is looking at the cache directory; the
+        digest is what makes it unique, since the readable half is truncated
+        and two long keys can flatten onto one prefix. Per ref, because two
+        refs of one repository are two trees.
         """
-        return hashlib.sha256(self.key.encode()).hexdigest()[:8]
+        readable = re.sub(r"[^a-z0-9]+", "-", self.key.lower()).strip("-")[:60]
+        return f"{readable}-{hashlib.sha256(self.key.encode()).hexdigest()[:8]}"
 
     @property
     def live(self) -> bool:

@@ -178,6 +178,16 @@ class SourceConfig(Strict):
         return url
 
     @model_validator(mode="after")
+    def _webdav_is_authenticated(self) -> SourceConfig:
+        # WebDAV has no useful anonymous mode -- Nextcloud's is a share link,
+        # which is a different URL -- so an omitted credential is a typo rather
+        # than a choice, and one that only shows up as a 401 at cold start.
+        if self.backend == "webdav" and self.auth is None:
+            msg = "a webdav source needs auth: there is no anonymous WebDAV here"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
     def _live_is_webdavs_alone(self) -> SourceConfig:
         # Revalidation is per-file and ETag-driven; on git or a local directory
         # it would be a dial that silently does nothing.

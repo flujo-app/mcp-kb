@@ -1,6 +1,7 @@
 """Addresses, fetches, plugins, manifests and selectors: the resolution layer."""
 
 import json
+import string
 
 import pytest
 
@@ -163,16 +164,28 @@ def test_two_addresses_with_one_key_are_one_fetch():
     assert len({loki, tempo}) == 1
 
 
-def test_the_slug_is_a_short_stable_digest_of_the_key():
-    """It names a cache directory, so it must be filesystem-safe and per-ref."""
+def test_the_slug_is_the_key_made_readable_plus_a_digest():
+    """It names a cache directory: legible to whoever is looking at one, and
+    unique even where the legible half is truncated to the same 60 characters."""
     here = config()
     once = fetch_for(here, parse_address("github://grafana/skills?ref=v1"))
     again = fetch_for(here, parse_address("github://grafana/skills//sub?ref=v1"))
     other = fetch_for(here, parse_address("github://grafana/skills?ref=v2"))
 
     assert once.slug == again.slug != other.slug
-    assert len(once.slug) == 8
-    assert once.slug.isalnum() and once.slug.islower()
+    readable, _, digest = once.slug.rpartition("-")
+    assert readable == "github-grafana-skills-ref-v1"
+    assert len(digest) == 8 and set(digest) <= set(string.hexdigits.lower())
+
+
+def test_a_long_key_keeps_the_slug_bounded_and_unique():
+    here = config()
+    long = "github://" + "n" * 200
+    slug = fetch_for(here, parse_address(long)).slug
+    twin = fetch_for(here, parse_address(long + "x")).slug
+
+    assert len(slug) == 60 + 1 + 8
+    assert slug[:60] == twin[:60] and slug != twin
 
 
 # -- plugins -------------------------------------------------------------------

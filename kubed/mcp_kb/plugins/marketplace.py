@@ -174,7 +174,12 @@ def _where(
         declared, path = found
         subdir = ""
         if kind == "git-subdir":
-            subdir = _join("", source.get("path") or "")
+            path_in_repo = source.get("path")
+            if not isinstance(path_in_repo, str) or not path_in_repo.strip():
+                # Falling back to the repository root would serve the whole
+                # thing as one plugin, which is a guess, not a default.
+                raise _Skip("a git-subdir entry needs a path")
+            subdir = _join("", path_in_repo)
         return _fetch(config, declared, path, ref), subdir
     raise _Skip(f"source type {kind} is not supported")
 

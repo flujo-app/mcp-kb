@@ -326,6 +326,17 @@ def test_a_git_subdir_entry_keeps_the_path_as_its_subdir(tmp_path):
     assert (plugin.subdir, plugin.fetch.ref) == ("plugins/x", "v1")
 
 
+def test_a_git_subdir_entry_with_no_path_is_skipped(tmp_path):
+    """Falling back to the repository root would publish the whole thing as one
+    plugin -- a guess, and this reader never guesses."""
+    catalog = read(
+        tmp_path,
+        entry(source={"source": "git-subdir", "url": "https://gitlab.com/g/r"}),
+    )
+
+    assert skip_reason(catalog) == "a git-subdir entry needs a path"
+
+
 @pytest.mark.parametrize("kind", ["npm", "archive", "command", "carrier-pigeon"])
 def test_a_source_type_this_server_does_not_install_is_skipped(tmp_path, kind):
     """`command` is never supported: nothing fetched is ever executed."""
