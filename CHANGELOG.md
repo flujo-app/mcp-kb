@@ -62,6 +62,8 @@ at start into a cache volume, and every agent reads them from one address space.
 
 - **`GET /health`** reports the generation, the libraries, the skill and prompt counts and each source's own status — `ok`, `stale` or `failed`, with anything it ships but cannot serve listed under `skipped` — and answers 200 whenever the process is serving, so one unreachable remote never takes a working catalogue down.
 
+- **A scope that names nothing is refused**, with what there is instead: a library, folder or tag that does not exist fails every request with -32602, so a client with a typo in its URL fails to connect and says why instead of connecting to an empty catalogue.
+
 - **Refused credentials stop the server at boot.** A source whose WebDAV server answers 401 or 403, or whose git remote refuses authentication, while it is first built exits the process with code 3 naming the source, so Kubernetes restarts it until the account works; an unreachable remote still fails only its own source.
 
 - **A log that says what the catalogue did**: one line when a source comes up, fails, goes stale, recovers or skips something, and nothing while it stays as it was. `LOG_LEVEL` sets one level and one line format for everything the process writes.

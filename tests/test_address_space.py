@@ -585,8 +585,10 @@ async def test_a_library_scope_reaches_every_source_of_the_library(url):
     assert await _read(url, "skill://grafana/shared/style.md", library="grafana")
 
 
-async def test_a_bare_folder_name_selects_nothing(url):
-    assert await _rows(url, library="grafana-lgtm") == []
+async def test_a_bare_folder_name_is_refused_as_no_such_library(url):
+    """A folder name is not a library, and is not looked for in every library."""
+    with pytest.raises(Exception, match=r"no such library\. The libraries are:"):
+        await _rows(url, library="grafana-lgtm")
 
 
 async def test_a_library_file_named_manifest_is_not_labelled_json(tmp_path):

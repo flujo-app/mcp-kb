@@ -58,6 +58,7 @@ from .catalogue.uris import Catalogue
 from .config import Config
 from .mcp import prompts, resources, tools
 from .mcp.announce import AnnounceChanges
+from .mcp.pins import RefuseEmptyScope, what_is_wrong
 from .mcp.request import client_reads_resources, client_uses_prompts
 
 log = logging.getLogger(__name__)
@@ -134,6 +135,9 @@ class KnowledgeBase:
         prompt_tools = prompts.register(self.mcp, lambda: self.snapshot)
         mirrors = dict.fromkeys(resource_tools, client_reads_resources)
         mirrors.update(dict.fromkeys(prompt_tools, client_uses_prompts))
+        self.mcp.add_middleware(
+            RefuseEmptyScope(lambda scope: what_is_wrong(scope, config, self.snapshot))
+        )
         self.mcp.add_middleware(resources.HideMirrorTools(mirrors))
         self.mcp.add_middleware(AnnounceChanges(self))
         routes.register(self.mcp, self)
