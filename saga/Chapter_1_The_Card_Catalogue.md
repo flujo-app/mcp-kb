@@ -2321,6 +2321,83 @@ docs once the schema lands).
    bound the fallback to the entry's listed paths?
 3. `prompts` or `commands` for the field — this server's word, or Claude's?
 
+### §C1.31 — Third pass: named sources, plugins at the top, and selecting by tag and category (2026-09-17)
+
+**Dr K's revision of the sketch** (`stuff/config.yaml`):
+
+- **`sources:` are named backends**, each with its own `url`, `auth`, `cache` and
+  `refresh`: `nextcloud` is `webdav+http://…/remote.php/dav/files` with its
+  credentials, `github` is `git+https://github.com`. A plugin never carries
+  credentials; its `source` is a path under a named backend written as a URI
+  whose scheme is that backend's name — `nextcloud://mcp-kb/ai`,
+  `github://penpot/penpot-ai-kit@<sha>`. `file://` needs no definition.
+- **`plugins:` is a top-level list**, defined once, and libraries draw on it.
+- **A git subdirectory is `//`** — `github://my-team/my-repo//foo@main` — the
+  hashicorp go-getter convention kustomize and Terraform use.
+- **A library can select plugins by tag**: a list of comma-separated strings,
+  where the commas inside one string are AND and the list items are OR —
+  `["foo,bar", "baz"]` is (foo AND bar) OR baz.
+
+**Issues found in the revision.**
+
+1. **`tags` on a library now means two things.** On `grafana` and `kubed` it
+   *labels* everything the library serves; on `oncall` it *selects* plugins.
+   One key cannot do both — `kubed: tags: [homelab]` would start pulling in
+   every plugin tagged `homelab`. The selector needs its own key.
+2. **The ref syntax mixes conventions.** go-getter and kustomize write
+   `//subdir?ref=main`; `@main` is pip's. Taking `//` from one and `@` from the
+   other makes a URL neither tool reads.
+3. **`homelab-prompts` is listed by name in `grafana` while also being defined
+   at the top** — fine, and exactly the `name@library` question from §C1.30
+   settled the other way: plugins at the top need no `@library` at all.
+
+**Research: how tools combine a category with tags.**
+
+| Tool | Within one field | Across fields |
+|---|---|---|
+| Faceted search (the e-commerce norm) | OR — Blue *or* Red | AND — Nike *and* (Blue or Red) *and* size 10 |
+| GitHub search | `label:a,b` is OR | `label:a label:b` (repeated) is AND |
+| WordPress `WP_Query` | `tag=a,b` OR, `tag=a+b` AND; same for `category_name` | category and tag narrow together |
+| Algolia `facetFilters` | nested array is OR | flat array is AND — `(A AND B) OR C` cannot be written |
+| Kubernetes label selectors | `in (a,b)` is OR | comma-separated requirements are AND |
+
+Two things hold everywhere. Across fields it is always AND: a category and a
+set of tags narrow each other, which is the "categories first, then tags"
+reading. And a field with one value per item — a Claude plugin has one
+`category` — only means anything with OR: "in design *and* engineering" matches
+nothing. What differs is what a comma means inside a field: OR on GitHub and
+WordPress (and in this server's `?tags=` today), AND in Kubernetes selectors
+and in Dr K's proposal.
+
+**Recommendation (open for Dr K).**
+
+- **Categories are OR, and narrow first.** A plugin has one category, so a
+  list of categories can only mean any of them; `category` and `tags` then AND
+  together, as every faceted search does.
+- **One rule for lists and commas, the same in YAML and in the URL.** Dr K's
+  rule — a comma inside one value is AND, separate values are OR — applied to
+  tags and categories alike:
+
+  ```yaml
+  select:
+    categories: [design, engineering]   # any of these
+    tags: ["foo,bar", baz]             # (foo and bar) or baz
+  ```
+
+  ```
+  ?categories=design&categories=engineering&tags=foo,bar&tags=baz
+  ```
+
+  A comma in a category (`design,engineering`) can never match a plugin and is
+  refused with a message saying to list them, through the scope refusal #20
+  added. This keeps one comma meaning across the whole query. The cost: it
+  reverses today's `?tags=a,b` (any-of), which this server can do without a
+  deprecation window; and a category list in a URL is written by repeating the
+  parameter rather than with a comma.
+- The alternative — Dr K's `categories=foo,bar` as OR — reads well on its own,
+  but beside `tags=foo,bar` meaning AND it puts two meanings of one comma in
+  one URL.
+
 ## Closing questions for Dr K
 
 *Superseded by §C1.22 — the name, here and in question 1, is `mcp-kb`. What was
