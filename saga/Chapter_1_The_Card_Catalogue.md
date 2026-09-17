@@ -568,6 +568,8 @@ not imply more.
 
 ### §C1.9 — Decision (recommended): `mcp` — resources and prompts only, namespaced, plus tool → resource mappings
 
+*Resource namespacing superseded by §C1.23 (decision 7): a proxied server's resource URIs pass through verbatim. Prompt namespacing and the tool → resource mappings stand.*
+
 **The proxy.** A `ProxyProvider` subclass whose `_list_tools` returns nothing and
 whose tool lookup finds nothing, added with `namespace=<name>`. So a proxied
 server's resource `n8n://workflow-sdk/reference` is served as
@@ -1130,6 +1132,9 @@ def test_a_file_source_is_served_in_place(tree):
 
 ### §C1.16 — Decision (locked by Dr K, 2026-09-15): the name is `mcp-school`
 
+*Superseded by §C1.22 — the name is `mcp-kb`. The reasoning below stands; only
+the word it landed on changed.*
+
 Dr K wants `mcp` in the name and something that reads as a knowledge dump, and
 proposed two: **`mcp-school`** first, then **`mcp-resource-gateway`**. Both are
 free on PyPI, npm and `kubed-io` as of 2026-09-15, along with `mcp-library`,
@@ -1367,6 +1372,8 @@ and `refresh` does it without one.
 
 ### §C1.19 — Decision (recommended): a library is the grouping, tags are the cross-cut, and both are selectable
 
+*The URI shape `skill://<library>/<skill>` below is superseded by §C1.23. The library/tag model stands — and its retirement of `pack` and `X-Skill-Pack`, recorded here but never done in code, is decided again there and scheduled in §C1.24.*
+
 This supersedes §C1.11, and it is Dr K's idea: *something like "library" to cover
 one little group of skills + prompts + mcp-tool-to-resource, so that something
 like "grafana" can attach a skill and some prompts and they appear to be in the
@@ -1508,7 +1515,329 @@ FastMCP's own `PromptsAsTools`, which keeps that shape, and prompts stay a separ
 kind. Worth revisiting only if a client appears that reads resources but will never
 call a prompt tool.
 
+---
+
+### §C1.22 — Decision (locked by Dr K, 2026-09-16): the name is `mcp-kb`
+
+`school` was the answer to §C1.16's question — a word that says "knowledge",
+collides with no product category, and earns the metaphor the chapter runs on.
+It is still all three. What it is not is *literal*: a reader meeting
+`mcp-school` for the first time has to be told what it holds, where **kb** tells
+them. Knowledge base is the category this actually is, nobody has to be taught
+the abbreviation, and it is two letters at every call site where the metaphor
+was costing seven.
+
+The general rule of §C1.16 survives intact, and is worth restating because it is
+the one that rejected `mcp-resource-gateway`: **a name that lands inside an
+existing product category inherits that category's promises.** "Knowledge base"
+promises a collection you read. That is exactly the product.
+
+| What | From | To |
+|---|---|---|
+| repo | `kubed-io/mcp-school` | `kubed-io/mcp-kb` |
+| distribution | `mcp-school` | `kubed-mcp-kb` |
+| package | `mcp_school` | `kubed.mcp_kb` |
+| console script | `mcp-school` | `mcp-kb` |
+| image | `kubed/mcp-school` | `kubed/mcp-kb` |
+| paths | `/etc/mcp-school`, `/var/cache/mcp-school` | `/etc/mcp-kb`, `/var/cache/mcp-kb` |
+| the catalogue class | `School` | `KnowledgeBase` |
+
+The `skill://` scheme, the `X-Skill-*` headers and the `CONFIG` / `CACHE_DIR`
+environment variables are deliberately unchanged: they are the contract a
+deployed client holds, and none of them says the project's name.
+
+**The distribution regains the `kubed-` prefix, and the package moves into the
+`kubed` namespace.** `kubed.mcp_kb` sits beside `kubed.selenium_flow` in a
+PEP 420 namespace package — which means **there is no `kubed/__init__.py` in
+either repository**, and a test in each asserts it. Add one and the two stop
+installing side by side, silently, in whichever environment resolves second.
+
+The one-sentence statement of §C1.1 that §C1.16 wanted for the repository
+description travels with the rename, minus the word it was wrong about: *an MCP
+knowledge base — skills, prompts and agent material collected from git, WebDAV
+and folders into one catalogue, served as resources, or as tools for clients
+without them.*
+
+**The package is organised by responsibility, on the sibling's shape.**
+`catalogue/` is what is served and how it is found, addressed and persisted;
+`sources/` is where bytes come from, with revalidation among them because
+`cache: live` is a source concern and not a serving one; `mcp/` is what an agent
+sees, and the per-request scope that shapes it; `spec/` is the OpenAPI document
+for the HTTP surface. `server.py` keeps `KnowledgeBase` and stays the
+composition root. The seams were already in the module boundaries — this only
+made the directories agree with them.
+
+**The wiki is the manual.** `README.md` advertises and links; `AGENTS.md` holds
+the rules and the traps; the wiki at `kubed-io/mcp-kb/wiki` — a submodule at
+`wiki/`, three of its pages generated from the live config models, a live
+server's tool list and the OpenAPI document — is where depth goes. A generated
+page cannot describe a server that no longer exists, and `tests/test_wiki.py`
+fails when a committed page and the generator disagree.
+
+**The first release computes from a `v0.0.1` tag on the first commit.** Nothing
+has ever shipped under either name, so the CHANGELOG's first section is `Added`
+and nothing else: there is no version for a `Changed` or a `Fixed` to be
+relative to. `duplocloud/version-bump` needs a base tag to bump from and 404s on
+an untagged repository *after* a green dry run, so the tag goes on before the
+first publish rather than being discovered by it.
+
+### §C1.23 — Decision (locked by Dr K, 2026-09-16): skill URIs follow the MCP Skills extension, and the library is the first segment
+
+**How this came up.** Loading the grafana pack and reading its URIs side by side
+with what installing the same repository as a Claude Code plugin produces showed
+three things wrong with the address space §C1.19 left behind, none of which the
+tests could see because the tests asserted the shape they were written against:
+
+| On disk | Installed as a Claude Code plugin | Served by mcp-kb (0.0.x) |
+|---|---|---|
+| `skills/grafana-lgtm/loki/SKILL.md` | plugin `grafana-lgtm`, skill `grafana-lgtm:loki` | `skill://grafana/loki` |
+| `skills/grafana-k6/k6/SETUP.md` | a file in plugin `grafana-k6` | `skill://grafana/k6/SETUP.md` |
+| the folder `skills/grafana-lgtm/` | a plugin you choose to install | `skill://grafana-lgtm`, an index at the top level |
+
+1. **A folder looked like a skill.** `skill://grafana-lgtm` sat beside
+   `skill://grafana` at the top of the address space and returned a list of
+   skills, which reads as a skill named `grafana-lgtm` with sub-skills in it. It is
+   a directory — the upstream packages it as a *plugin*, and "group" was this
+   project's own word for it, not the ecosystem's.
+2. **The instructions lived at a directory address.** `skill://grafana/loki`
+   returned `SKILL.md`. On a standard FastMCP skill server that address is not
+   found, so an agent that learned the shorthand here fails against selenium-flow
+   and the reverse.
+3. **`pack` never left.** §C1.19 retired the word and deleted `X-Skill-Pack`; the
+   config and the scoping moved to `library`, but the code, the served
+   descriptions ("The grafana pack — 50 skills"), the URI grammar in the docs and
+   the header alias all kept `pack`. The decision was recorded and not carried out.
+
+**There is a standard, and it answers every question this raised.** The MCP Skills
+extension — SEP-2640, extension identifier `io.modelcontextprotocol/skills`, a
+released specification at `modelcontextprotocol/ext-skills`
+(`specification/stable/skills.mdx`) — defines how skills are served over MCP.
+What it settles:
+
+- **Grammar.** `skill://<skill-path>/<file-path>`. `<skill-path>` is one or more
+  segments, "nested to arbitrary depth". Its **final segment MUST equal the skill's
+  `name`**; the preceding segments are "a server-chosen organizational prefix …
+  by domain, team, version, or any other axis". `skill://acme/billing/refunds/SKILL.md`
+  is the spec's own example: prefix `acme/billing`, skill `refunds`.
+- **The skill's URI names `SKILL.md`.** A skill is `skill://<skill-path>/SKILL.md`;
+  the bare `skill://<skill-path>` is defined as the skill's *root directory*.
+- **Identity is the URI, not the name.** "A skill's `name` is a label, not an
+  identifier." Within a server the URI identifies a skill; across servers it is
+  the pair of server identity and URI. Two skills named `refunds` at different
+  paths are both legitimate.
+- **A prefix is not a skill.** Nesting means a `SKILL.md` inside another skill's
+  directory, and it carries its own consent rules. A directory with no `SKILL.md`
+  is organisation, nothing more.
+- **Loading by URI is required.** "Hosts MUST support loading by URI, including
+  skills that do not appear in a listing", and an unknown URI is `-32602`. A URI a
+  server names in its instructions, an error message or another skill has to
+  resolve exactly as written.
+- **Relative references resolve against the skill's root**, "as a filesystem path
+  would resolve".
+- **Discovery gets its own methods, content does not.** A server declaring the
+  extension implements `skills/list` (flat, paginated, each entry carrying the
+  frontmatter and a manifest of every file with its SHA-256 and size) and
+  `skills/get`. Files are still read with `resources/read`: a skill is still
+  resources. `resources/directory/read` is optional behind `directoryRead: true`.
+
+Adoption, as the extension's own implementation table records it on 2026-09-16:
+the four official SDKs have it in progress; FastMCP's `SkillsProvider` is
+`pre-v1` with "its own `skill://` shape" (which is where `_manifest` comes from);
+Hugging Face's server is `v1`; fast-agent, the MCP Inspector, MCPJam and ChatGPT
+plugins are `partial` hosts. Claude Code's own client in this session exposes
+resource tools only — list, read, and a directory read that answers "Directory
+listing is not enabled in this build".
+
+**What this chapter decides.**
+
+**1. A skill's URI is `skill://<library>/<path>/<name>/SKILL.md`.** `<path>` is the
+skill directory's path below its source's conventional skill root — the roots
+`harvest.SKILL_ROOTS` already knows (`skills/`, `.github/skills/`,
+`.claude/skills/`, `.agents/skills/`, or the source root itself) — so it mirrors
+the disk and invents nothing.
+
+| On disk (source root →) | URI |
+|---|---|
+| `skills/grafana-lgtm/loki/SKILL.md` | `skill://grafana/grafana-lgtm/loki/SKILL.md` |
+| `skills/grafana-k6/k6/SETUP.md` | `skill://grafana/grafana-k6/k6/SETUP.md` |
+| `skills/brainstorming/SKILL.md` (superpowers) | `skill://superpowers/brainstorming/SKILL.md` |
+
+Stripping the conventional root keeps the URI short without changing any
+relationship between skills: every skill in a source loses the same leading
+segment, so a sibling reference such as superpowers' `../using-superpowers/…`
+or grafana's `../testing/SKILL.md` still resolves to the skill it names. That is
+the property the spec's relative-resolution rule depends on, and 0.0.x broke it
+for grafana by dropping the plugin folder.
+
+**2. The library is the first segment, and it does the job "server" does across
+servers.** A host keys a skill by server plus URI; inside one mcp-kb that
+aggregates many libraries, the library prefix is what keeps two libraries'
+skills apart. A `library=` argument beside the URI was considered and rejected:
+`resources/read` takes a URI and nothing else, so a native resource reader could
+never pass it, and the tool mirror would stop being a mirror (§C1.10). The
+connection scope `?library=grafana` remains the way to make one client *see* one
+library — it narrows what is served, it does not rename it.
+
+**3. Names are not required to be unique.** An intermediate proposal in this
+discussion was flat URIs — `skill://<name>/SKILL.md` everywhere, with a duplicate
+name across libraries a loud configuration error. It contradicts "a skill's
+`name` is a label, not an identifier", and it would have made the catalogue's
+correctness depend on no two upstreams ever choosing the same word. Withdrawn.
+Two sources that produce the *same URI* — possible only when both feed one
+library with the same path — are a real conflict: the second source fails,
+named in `/health`, and serves nothing.
+
+**4. A directory address serves nothing.** `skill://grafana/grafana-lgtm/loki` and
+`skill://grafana` are directories under the spec. Reading one returns not found,
+exactly as FastMCP's provider does, and the error names the index or the
+`_manifest` to read instead. When FastMCP implements `resources/directory/read`,
+these become real directory resources; until then they are addresses, not
+content.
+
+**5. The index resources stay, at file addresses.** An index is a small markdown
+page listing skill URIs with their descriptions — this project's own addition,
+not the spec's. It exists because listing every skill in `resources/list` costs
+~16 k tokens per listing (§C1.18), and because until a client speaks
+`skills/list` it is the only cheap way to discover a catalogue this size. It moves
+off the directory addresses it occupied:
+
+| Index | 0.0.x | Now |
+|---|---|---|
+| a library | `skill://grafana` | `skill://grafana/_index.md` |
+| a folder of skills | `skill://grafana-lgtm` | `skill://grafana/grafana-lgtm/_index.md` |
+| files outside any skill | `skill://penpot/_files` | `skill://penpot/_files.md` |
+
+`resources/list` keeps listing the indexes, not the skills; `?skills=full` keeps
+listing every `SKILL.md`. When `skills/list` arrives the indexes become the
+fallback for clients without it, the same relationship the tool mirrors have to
+native resources and prompts.
+
+**6. Pack-level files keep their source-relative path under the library.**
+penpot's `shared/tokens-schema.json` is `skill://penpot/shared/tokens-schema.json`.
+penpot's skills cite those files as repository-root paths (`shared/…`, in
+backticks) rather than as relative links, so no URI shape makes them resolve
+from a skill's root; `_files.md` is how an agent finds them.
+
+**7. A proxied MCP server's resources keep their upstream URIs verbatim.** This
+supersedes the resource half of §C1.9, which namespaced them
+(`n8n://workflow-sdk/reference` → `n8n://n8n/workflow-sdk/reference`). The spec's
+"load by URI" rule is why: selenium-flow's instructions tell an agent to read
+`skill://selenium-flow/SKILL.md`, and n8n's MCP server tells it to read
+`n8n://workflow-sdk/reference`. Re-served under a prefix, both instructions would
+point at nothing. The upstream already chose its URIs, and the spec treats them
+as the skill's identity; an aggregator does not get to rename them. A URI claimed
+by two sources is the conflict of decision 3. Prompt names keep §C1.9's
+namespacing — a prompt is addressed by name, not by URI, and no upstream
+instruction depends on the unprefixed form.
+
+**8. `pack` leaves the code, as §C1.19 already decided.** `library` in every
+identifier, served description, document and wiki page; the `X-Skill-Pack`
+header alias is deleted with no deprecation window, because there is one
+installation and no second user to protect; `index.json`'s version is bumped,
+which costs one full rebuild on the first start.
+
+**9. The shipped example demonstrates libraries and tags.** `examples/config.yaml`
+gains a `libraries:` block with tags and shows `library:` and `tags:` on sources,
+so the feature a reader is told about is one they can see configured.
+
+**Deferred, and why.**
+
+- `skills/list` and `skills/get`: wait for FastMCP or the official Python SDK to
+  ship the extension (Python SDK PR #3485 is open). Implementing them here first
+  would mean owning the capability negotiation and a manifest format that the
+  framework will then replace.
+- `resources/directory/read`: not implemented by FastMCP 4.0.x, and disabled in the
+  client this was tested from.
+- `_manifest`: stays in FastMCP's shape until `skills/list` carries manifests.
+- Pinning `kubed-io/actions` and `duplocloud/version-bump`: they float on `@main`
+  across every kubed-io repository; `kubed-io/actions` publishes no tags and
+  version-bump's `main` is ahead of its newest tag. A cross-repository change for
+  when both cut releases.
+
+### §C1.24 — The plan for the next pull request: the address space
+
+One pull request, after `mcp-kb` (#18) merges. Everything below is in scope and
+nothing else is.
+
+**Global constraints.**
+
+- Every existing *behavioural* test is kept and its URI expectations are updated
+  to the new grammar; no test is deleted to make the change pass. A test that
+  asserted the old shape is rewritten to assert the new one, not removed.
+- Every served URI, listing row and index body is covered by a test that reads it
+  back through a real `KnowledgeBase` over MCP, not through a helper.
+- Every new test is proved non-vacuous: break what it guards, watch it fail,
+  restore.
+- The scope rules of §C1.19 hold on every new address — an out-of-scope URI stays
+  indistinguishable from a missing one, `_index.md` included.
+- No backward compatibility: no redirects from 0.0.x URIs, no alias headers.
+
+**Tasks.**
+
+1. **Rename `pack` → `library`** throughout `kubed/mcp_kb/**`, tests, `AGENTS.md`,
+   `.github/copilot-instructions.md`, the README and the wiki's hand-written
+   pages. Delete `X-Skill-Pack` from `mcp/request.py` and every document. Bump
+   `catalogue/index.py`'s `INDEX_VERSION`. Served descriptions say "library" and
+   "folder", never "pack" or "group". Pure rename first, as its own commit, so
+   the grammar change that follows reads cleanly.
+2. **The skill URI grammar.** `catalogue/uris.py` builds and parses
+   `skill://<library>/<path>/<name>/SKILL.md`, where `<path>` comes from
+   `harvest` relative to the source's conventional skill root; the skill's
+   files are addressed under the same prefix. `SkillIndex` resolves by full
+   skill path, not by bare name. Tests: the grafana-shaped fixture (a folder of
+   skills two levels down) reads back at its real path; a sibling reference
+   `../other/SKILL.md` resolves to the sibling; two skills with the same name in
+   different folders are both served.
+3. **Directory addresses serve nothing.** A read at a skill root, a folder or a
+   library returns not found; the resource read and the `read_resource` mirror
+   both name `_index.md` / `_manifest` in the not-found text. Tests for each of the
+   three directory kinds, through the resource and through the tool.
+4. **Indexes at `_index.md` and `_files.md`.** Library index, folder index and the
+   pack-level files index move to file addresses; `resources/list` lists exactly
+   those; `?skills=full` lists every `SKILL.md` at its new URI. Tests pin the
+   listing rows and the index bodies.
+5. **URI and prompt-name conflicts fail the second source.** When two sources in
+   one library produce the same skill URI, the same pack-level file URI or the
+   same prompt name (`<library>_<file stem>` — two `prompts/same.md` files today
+   both serve as `lib_same`, and `get_prompt` cannot tell them apart), the later
+   source's record is `failed` with the conflict named, and the first keeps
+   serving. Tests with two `file://` sources, one per kind of conflict.
+6. **Documents and the generated wiki.** `Skills.md` rewritten on the new grammar
+   with the directory, index and manifest rules; `Scoping.md`, `Installing.md`,
+   `Sources.md`, the README's address-space section, `AGENTS.md`'s "surface"
+   section and the CHANGELOG `[Unreleased]` lines that describe URIs, all brought
+   level; `generate_wiki.py --check` green.
+7. **The example.** `examples/config.yaml` with a `libraries:` block carrying tags,
+   and `library:` / `tags:` on at least two sources; `tests/test_example_config.py`
+   asserts the served URIs of one skill per library.
+8. **The cluster installation follows after merge**, not in this pull request:
+   `/projects/cluster/apps/mcp-school` renamed to `apps/mcp-kb` on the new image,
+   its config gaining the same `libraries:` shape, the old Deployment and Service
+   deleted by hand (a different applyset prunes nothing), and `.mcp.json` pointed
+   at the new Service.
+
+**Also in this pull request — review findings on #18 deferred to where the code
+is rewritten anyway:**
+
+- The listing emits one `skill://<group>` row per library when two libraries
+  share a folder name. Removed by task 4, since folder indexes move under their
+  library; task 4's listing test covers two libraries with the same folder.
+- `read_resource`'s description documents only skill-owned files, not the
+  pack-level forms `list_resources` returns. Rewritten with task 2's grammar.
+- `list_resources` is annotated `list[dict]`; it returns rows of four strings, so
+  `list[dict[str, str]]` lets a client read the row shape from `tools/list`.
+- `tests/test_wiki.py`'s shadowing guard compares nested stems only against
+  top-level pages, so two nested notes with the same basename pass while GitHub
+  addresses both at one URL. The guard counts duplicate stems across every file.
+
+**Proxy passthrough (decision 7) is recorded, not built** — it belongs to the
+`mcp+http` epic, which has not started. This pull request only ensures nothing in
+the new grammar would prevent it: a proxied URI need not begin with a library.
+
 ## Closing questions for Dr K
+
+*Superseded by §C1.22 — the name, here and in question 1, is `mcp-kb`. What was
+asked stands; only the word it was asked under changed.*
 
 Answered in the second pass: the name is `mcp-school` (§C1.16); `git+https://`
 stands, now argued from PEP 610 rather than taste (§C1.17); the cache gets an
@@ -1517,7 +1846,8 @@ is the update path (§C1.18).
 
 Still open:
 
-1. **§C1.19 — is `library` the right word** for the grouping, now that the
+1. *Answered 2026-09-16 in §C1.23: `library` stays, and becomes the first segment of every skill URI.*
+   **§C1.19 — is `library` the right word** for the grouping, now that the
    project is `mcp-school`? `subject`, `course` and `department` all fit the
    metaphor better, and this is the one word that appears in every URI. My
    preference is to keep `library`: it is what the thing is, and the metaphor

@@ -18,9 +18,9 @@ from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
 
-from mcp_school import School
-from mcp_school.config import Config
-from mcp_school.scope import Scope
+from kubed.mcp_kb import KnowledgeBase
+from kubed.mcp_kb.config import Config
+from kubed.mcp_kb.mcp.scope import Scope
 from tests.test_header_scope import _free_port
 
 pytestmark = pytest.mark.unit
@@ -67,7 +67,7 @@ def url(tmp_path_factory):
         }
     )
     port = _free_port()
-    app = School(config, tmp_path_factory.mktemp("cache")).mcp.http_app()
+    app = KnowledgeBase(config, tmp_path_factory.mktemp("cache")).mcp.http_app()
     server = uvicorn.Server(
         uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
     )
@@ -187,7 +187,7 @@ async def test_the_prompt_tools_are_held_to_the_scope(url):
 def mixed(tmp_path):
     """One library fed by two differently-tagged sources, and two libraries that
     share a group name. The shapes the simple fixture above cannot express."""
-    from mcp_school.prompts import PromptProvider
+    from kubed.mcp_kb.mcp.prompts import PromptProvider
 
     def skill(root, *parts):
         d = root.joinpath("skills", *parts)
@@ -216,8 +216,8 @@ def mixed(tmp_path):
             ],
         }
     )
-    school = School(config, tmp_path / "cache")
-    return school, PromptProvider(lambda: school.snapshot)
+    knowledge_base = KnowledgeBase(config, tmp_path / "cache")
+    return knowledge_base, PromptProvider(lambda: knowledge_base.snapshot)
 
 
 def test_a_tag_scope_cannot_read_another_sources_pack_file(mixed):
@@ -226,8 +226,8 @@ def test_a_tag_scope_cannot_read_another_sources_pack_file(mixed):
     Admitting pack files by library alone let an `ops` scope — which does see a
     skill in `obs` — read the `ui` source's file by guessing its URI.
     """
-    school, _ = mixed
-    catalogue = school.snapshot.catalogue
+    knowledge_base, _ = mixed
+    catalogue = knowledge_base.snapshot.catalogue
     ops, ui = Scope(tags=frozenset({"ops"})), Scope(tags=frozenset({"ui"}))
 
     assert catalogue.read("skill://obs/shared/tokens.md", ops) is None
@@ -235,8 +235,8 @@ def test_a_tag_scope_cannot_read_another_sources_pack_file(mixed):
 
 
 def test_a_tag_scope_does_not_list_another_sources_pack_files(mixed):
-    school, _ = mixed
-    catalogue = school.snapshot.catalogue
+    knowledge_base, _ = mixed
+    catalogue = knowledge_base.snapshot.catalogue
     ops, ui = Scope(tags=frozenset({"ops"})), Scope(tags=frozenset({"ui"}))
 
     assert catalogue.read("skill://obs/_files", ops) is None
@@ -247,10 +247,10 @@ def test_a_tag_scope_does_not_list_another_sources_pack_files(mixed):
 def test_a_group_name_shared_by_two_libraries_selects_both_libraries_prompts(mixed):
     """Group names are not unique. Resources admitted every library holding a
     `core` group; prompts stopped at the first one found."""
-    school, prompts = mixed
+    knowledge_base, prompts = mixed
     core = Scope("core")
 
-    assert sorted({s.pack for s in school.index.visible(core)}) == ["alpha", "beta"]
+    assert sorted({s.pack for s in knowledge_base.index.visible(core)}) == ["alpha", "beta"]
     assert sorted(p.name for p in prompts.visible(core)) == ["alpha_p", "beta_p"]
 
 
@@ -260,7 +260,7 @@ def test_a_selector_naming_a_group_and_a_prompts_only_library_selects_both(tmp_p
     Resources read the selector both ways; prompts treated the library name as a
     fallback for when no group matched, so the prompts-only `notes` vanished.
     """
-    from mcp_school.prompts import PromptProvider
+    from kubed.mcp_kb.mcp.prompts import PromptProvider
 
     d = tmp_path / "alpha" / "skills" / "notes" / "x"
     d.mkdir(parents=True)
@@ -278,8 +278,8 @@ def test_a_selector_naming_a_group_and_a_prompts_only_library_selects_both(tmp_p
             ]
         }
     )
-    school = School(config, tmp_path / "cache")
+    knowledge_base = KnowledgeBase(config, tmp_path / "cache")
 
-    visible = PromptProvider(lambda: school.snapshot).visible(Scope("notes"))
+    visible = PromptProvider(lambda: knowledge_base.snapshot).visible(Scope("notes"))
 
     assert sorted(p.name for p in visible) == ["alpha_a", "notes_n"]

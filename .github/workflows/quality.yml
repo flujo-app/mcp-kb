@@ -1,21 +1,21 @@
 name: 🛡️ Quality
 
 # The static-analysis and audit gates, kept out of test.yml so a red here names
-# the thing that is wrong instead of burying it in a test run. Four independent
+# the thing that is wrong instead of burying it in a test run. Five independent
 # jobs, all fast, all parallel:
 #
 #   CodeQL            the code scanner — Python source AND the workflows here
 #   Dependency Audit  pip-audit over the resolved RUNTIME dependency set
 #   Workflow Audit    zizmor over .github — CI supply chain and token hygiene
 #   Dockerfile Lint   hadolint over the image that actually ships
+#   OpenAPI Spec      redocly over the generated /health, /reindex contract
 #
 # CodeQL supports Python natively, so it IS the code-scanning engine here. The
-# other three cover what a code scanner does not look at — dependencies, CI
-# configuration, and the image.
-#
-# There is no spec job, unlike the selenium-flow sibling: this server publishes
-# no OpenAPI contract. Its contract is the `skill://` grammar, and that is
-# asserted in tests/test_uris.py rather than linted as a document.
+# other four cover what a code scanner does not look at — dependencies, CI
+# configuration, the image, and the one document this server serves that isn't
+# Python: the `skill://` grammar itself has no spec job, and is asserted in
+# tests/test_uris.py instead, because it is a resource scheme, not a document
+# a client generates code from.
 #
 # Runs on pull requests and on pushes to main, so the badge tracks trunk and a
 # direct push is gated the same way a PR is.
@@ -96,7 +96,7 @@ jobs:
     - name: Install Runtime Dependencies
       run: pip install --editable .
 
-    # --exclude-editable drops mcp-school itself. It is not on PyPI, so
+    # --exclude-editable drops kubed-mcp-kb itself. It is not on PyPI, so
     # leaving it in makes pip-audit fail to resolve the very package being
     # audited — which reads like a broken audit rather than a missing release.
     - name: Freeze Runtime Dependencies
@@ -168,3 +168,50 @@ jobs:
       with:
         dockerfile: Dockerfile
         failure-threshold: warning
+
+  # ---------------------------------------------------------------------------
+  # openapi.yaml is a build artifact, not a tracked file, so it has to be
+  # written before it can be linted. Linting it the way a consumer's tooling
+  # would read it catches what pytest's own assertions do not.
+  # ---------------------------------------------------------------------------
+  spec:
+    name: OpenAPI Spec
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+
+    - name: Checkout
+      uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Setup Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: '3.14'
+        cache: pip
+        cache-dependency-path: pyproject.toml
+
+    # The generator imports the package to build the spec, so the package
+    # itself is the dependency, not just a YAML writer.
+    - name: Install
+      run: pip install .
+
+    - name: Generate OpenAPI
+      run: python scripts/generate_openapi.py
+
+    # Pinned to a major rather than @latest: an unpinned linter can turn main
+    # red on a release nobody in this repo made. Dependabot does not watch
+    # `npx`, so this line is bumped by hand when a major lands.
+    - name: Lint OpenAPI
+      run: npx --yes @redocly/cli@2 lint openapi.yaml
+
+    - name: Upload OpenAPI Spec
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: openapi-spec
+        path: openapi.yaml
+        if-no-files-found: error

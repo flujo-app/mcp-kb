@@ -4,8 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from mcp_school.config import Include
-from mcp_school.harvest import group_of, pack_files, patterns, prompt_files, skill_dirs
+from kubed.mcp_kb.catalogue.harvest import (
+    group_of,
+    pack_files,
+    patterns,
+    prompt_files,
+    skill_dirs,
+)
+from kubed.mcp_kb.config import Include
 
 
 @pytest.fixture

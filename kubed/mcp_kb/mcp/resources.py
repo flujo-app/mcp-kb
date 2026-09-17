@@ -6,8 +6,8 @@ mirror of it, kept for the clients -- n8n above all -- to which a resource-only
 server looks empty.
 
 One provider serves the whole address space rather than one provider per skill.
-FastMCP's ``SkillsDirectoryProvider`` is the obvious alternative and was what
-this server used; it is wrong here for two reasons that only show up at scale:
+FastMCP's ``SkillsDirectoryProvider`` is the obvious alternative, and it is
+wrong here for two reasons that only show up at scale:
 
 - It names a skill after its folder, so two packs shipping a ``testing/`` become
   one, and the loser is not merely shadowed but absent from the server. With
@@ -34,8 +34,8 @@ from fastmcp.server.middleware import Middleware
 from fastmcp.server.providers.base import Provider
 from fastmcp.utilities.versions import VersionSpec
 
+from ..catalogue.uris import Catalogue
 from .request import full_listing, requested_scope
-from .uris import Catalogue
 
 
 class CatalogueProvider(Provider):

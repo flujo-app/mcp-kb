@@ -20,14 +20,15 @@ rules:
   #   that own the release path. The tag-mutation attack hash-pinning defends
   #   against needs the publisher's own account.
   #
-  # `ref-pin` still fails anything floating — a bare branch like `@main` or an
-  # unpinned `@master` — which is the part that actually bites.
+  # `ref-pin` requires *a* ref and accepts a branch as one, so it fails only a
+  # `uses:` with no ref at all. It does not forbid `@main`.
   unpinned-uses:
     config:
       policies:
-        # kubed-io/actions and duplocloud/version-bump are both referenced at
-        # @main and are first-party to this release path, so they are named
-        # rather than covered by the blanket rule.
+        # kubed-io/actions and duplocloud/version-bump stay on @main on purpose.
+        # kubed-io/actions publishes no tags, and version-bump's main is ahead
+        # of its latest tag, so a tag pin would run older release code than the
+        # sibling repos do. Named here so that choice is visible, not implied.
         kubed-io/*: ref-pin
         duplocloud/*: ref-pin
         "*": ref-pin
@@ -42,16 +43,22 @@ rules:
 
   # The checkout in publish.yml MUST keep its credentials: duplocloud/version-bump
   # commits the rolled changelog and pushes the tag through the remote checkout
-  # configured — the only thing the job exists for. It uploads no artifact, so
-  # the credential has nowhere to leak to.
+  # configured — the only thing the job exists for. The one artifact that job
+  # uploads is `notes/release-notes.md`, written outside the checkout, so the
+  # credential in `.git/config` is not in anything that leaves the runner.
   artipacked:
     ignore:
     - publish.yml
+    # wiki.yml pushes the regenerated pages from inside the `wiki/` submodule,
+    # which authenticates with what checkout left in that submodule's remote —
+    # so the credential has to survive the checkout. The job uploads no
+    # artifact, so it has nowhere to leak to.
+    - wiki.yml
 
   # `gh release create` in a script step would work, but softprops/action-gh-release
-  # is the house standard across every kubed-io repo's publish.yml, and a release
-  # body this long is far more legible as a YAML block than as a heredoc inside a
-  # shell script. Consistency across the sibling repos is worth more here than
+  # is the house standard across every kubed-io repo's publish.yml, and it takes
+  # the composed body as `body_path:` plus the two distribution files in one
+  # declaration. Consistency across the sibling repos is worth more here than
   # dropping one dependency.
   superfluous-actions:
     ignore:

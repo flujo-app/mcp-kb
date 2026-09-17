@@ -1,98 +1,111 @@
-# mcp-school
+# 📚 mcp-kb
 
-A resource and prompt gateway for MCP. Serves [Agent Skills](https://code.claude.com/docs/en/skills)
-and prompts over MCP, so any client can discover and read them — including clients that only
-speak tools.
+**An MCP knowledge base.** Skills, prompts and agent material collected from git, WebDAV and folders into one catalogue, served as resources — or as tools, for clients without them. 🗂️
 
-The image bakes nothing. A source is a dependency, declared in a config file and
-fetched at container start — see `examples/config.yaml`, the four packs this
-image used to bake, now read straight from GitHub:
+[![🧪 Test](https://github.com/kubed-io/mcp-kb/actions/workflows/test.yml/badge.svg)](https://github.com/kubed-io/mcp-kb/actions/workflows/test.yml)
+[![🛡️ Quality](https://github.com/kubed-io/mcp-kb/actions/workflows/quality.yml/badge.svg)](https://github.com/kubed-io/mcp-kb/actions/workflows/quality.yml)
+[![📸 Image Builder](https://github.com/kubed-io/mcp-kb/actions/workflows/image.yml/badge.svg)](https://github.com/kubed-io/mcp-kb/actions/workflows/image.yml)
+[![📖 Wiki](https://github.com/kubed-io/mcp-kb/actions/workflows/wiki.yml/badge.svg)](https://github.com/kubed-io/mcp-kb/wiki)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Docker](https://img.shields.io/badge/docker-kubed%2Fmcp--kb-2496ed?logo=docker&logoColor=white)](https://hub.docker.com/r/kubed/mcp-kb)
+[![FastMCP](https://img.shields.io/badge/FastMCP-4-8a2be2)](https://gofastmcp.com/)
 
-```
-docker run -p 8000:8000 -v mcp-school-cache:/var/cache/mcp-school \
-  -v $PWD/examples/config.yaml:/etc/mcp-school/config.yaml:ro \
-  kubed/mcp-school:latest
-```
+---
 
-## One address space
+## The whole idea, in one breath
 
-Everything this server serves is a `skill://` URI, and reading one is the only
-operation there is:
+Your [Agent Skills](https://code.claude.com/docs/en/skills) and prompts are scattered — a repo on GitHub, a folder somebody edits in Nextcloud, a ConfigMap in the cluster. Name them in one config file and every agent reads them from one address space, over MCP.
 
 ```
-skill://<pack>                      an index: every skill in a pack
-skill://<group>                     an index: every skill in a group
-skill://<pack>/<skill>              that skill's instructions
-skill://<pack>/<skill>/_manifest    what else it ships
-skill://<pack>/<skill>/<path>       one of those files
-skill://<pack>/_files               files the pack ships outside its skills
-skill://<pack>/<path>               one of those
+sources (git · WebDAV · folders)  ──▶  mcp-kb  ──▶  agents (resources, or tools)
 ```
 
-One segment is an index, two or more is content. That is the whole grammar.
+**The image bakes nothing.** A source is a dependency — a URL, an optional pinned commit, and a credential that is a *reference* to an environment variable rather than a value — fetched at container start into a cache volume. 🪄
 
-Progressive disclosure lives in the address space rather than in a tool list, so the
-listing stays small no matter how many skills are installed:
+---
+
+## 🔤 One address space
+
+Everything served is a `skill://` URI, and reading one is the only operation there is.
 
 ```
-list                                  →  12 indexes, ~1.9 KB
-read skill://grafana-lgtm             →  6 skills, as URIs
-read skill://grafana/loki             →  the instructions to follow
+skill://<library>                     an index: every skill in it
+skill://<library>/<skill>             that skill's instructions
+skill://<library>/<skill>/_manifest   what else it ships
+skill://<library>/<skill>/<path>      one of those files
+skill://<library>/_files              what the library ships outside its skills
 ```
 
-Currently served: **90 skills** across four packs.
+**One segment is an index, two or more is content.** That is the whole grammar. Progressive disclosure lives in those addresses rather than in a tool list, so a listing is a dozen index rows whether the catalogue holds nine skills or ninety.
 
-## Resources first, tools as a mirror
+📖 [Skills](https://github.com/kubed-io/mcp-kb/wiki/Skills)
 
-MCP has a primitive for material an agent reads, and it is the resource. So resources
-are the interface, and a client that speaks them sees **no tools at all**.
+---
 
-Many clients only implement tools — n8n's MCP Client Tool is one — and to those a
-resource-only server looks empty. They get the same interface as two tools:
+## 🪞 Resources first, tools as a mirror
 
-| tool | mirrors |
-| --- | --- |
-| `list_resources()` | `resources/list` — the same `uri`/`name`/`description`/`mimeType` rows |
+MCP already has a primitive for material an agent reads, and it is the **resource**. So resources are the interface, and a client that speaks them sees *no tools at all*.
+
+Many clients only implement tools — n8n's MCP Client Tool above all — and to those a resource-only server looks empty. They get the same interface as four tools, revealed with `?resources=off`, `?prompts=off`, or both:
+
+| Tool | Mirrors |
+|---|---|
+| `list_resources()` | `resources/list` — the same `uri`/`name`/`description` rows |
 | `read_resource(uri)` | `resources/read` — the same URI |
 | `list_prompts()` | `prompts/list` — each prompt's name, description and arguments |
 | `get_prompt(name, arguments)` | `prompts/get` — the rendered, role-tagged messages |
 
-Each pair is turned on separately, because a client may have one feature and not the
-other — `?resources=off`, `?prompts=off`, or both, on the MCP URL (or the
-`X-MCP-Resources` / `X-MCP-Prompts` headers):
+The vocabulary is the protocol's own, so an agent that can drive MCP resources can drive these with nothing new to learn. Each pair is hidden from a client that has the real feature, and stays callable either way.
 
-```
-http://mcp-school.flow.svc.cluster.local:8000/mcp?resources=off&prompts=off
-```
+📖 [Tools](https://github.com/kubed-io/mcp-kb/wiki/Tools) · [Installing](https://github.com/kubed-io/mcp-kb/wiki/Installing)
 
-The tools are hidden from clients that have the real feature, because advertising both
-shapes is two ways to ask one question. They stay callable either way.
+---
 
-## Choosing a library, or tags
+## 🎯 One server, many narrow agents
 
-A client can be narrowed to part of the catalogue, and the narrowing is a ceiling the
-model cannot widen past — enforced on resources, prompts and every mirror tool:
+A client can be given part of the catalogue and no more, and the narrowing is a **ceiling the model cannot widen past** — enforced on resources, prompts and every mirror tool alike:
 
-| on the MCP URL | header | sees |
-| --- | --- | --- |
+| On the MCP URL | Header | Sees |
+|---|---|---|
 | `?library=grafana` | `X-Skill-Library` | that whole library, or one of its groups |
 | `?tags=ops,ui` | `X-Skill-Tags` | anything carrying **any** of the tags, across libraries |
 | `?library=grafana&tags=ops` | both | the tagged part of that one library |
 
-A header beats the URL. `X-Skill-Pack` still works as an alias for `X-Skill-Library`.
-Set it once in the client's connection config — in n8n, a Header Auth credential on the
-MCP Client Tool node, a plumbed constant rather than something the model fills in.
+A header beats the URL, which is what makes a scope pinned inside a credential something the caller cannot edit away. It is a plumbed constant, never a tool argument — there is no way for a model to ask for material it was not given.
 
-A deployment that should serve less gets a config that lists less.
+📖 [Scoping](https://github.com/kubed-io/mcp-kb/wiki/Scoping)
 
-## Prompts
+---
 
-A prompt is a template a person picks and fills in before the model sees anything —
-Claude Code lists them as slash commands. A source serves them like anything
-else it ships: `prompts/**/*.md` by convention, or an explicit `include.prompts`
-glob, named `<pack>_<file-stem>`.
+## 🔌 Sources
 
-Each is YAML frontmatter declaring its arguments, then a body with `{{ placeholders }}`:
+A source is a dependency, declared like one:
+
+```yaml
+sources:
+- name: superpowers
+  url: github://obra/superpowers
+  ref: b36e0829c6d0140e93cfef2ca599b1b07d4a7797
+  include:
+    skills: ["skills/*"]
+    prompts: []
+```
+
+| Scheme | Backend |
+|---|---|
+| `file:///path` | a directory on this machine, served in place — ConfigMap mounts included |
+| `github://org/repo`, `git+https://`, `git+http://`, `git+file://` | a git remote, cloned bare and shallow and exported at a commit |
+| `webdav+https://`, `webdav+http://` | a WebDAV folder — Nextcloud above all — copied into the cache |
+
+Pin a `ref` and the image serves the same bytes in a year; track a branch and give it a `refresh:` and something goes and looks. `cache: live` on a WebDAV source revalidates a file by ETag as it is read, so **a file edited in Nextcloud is served on the next read**. A credential is always an `{env: NAME}` reference — a URL carrying its own `user:token@` is refused.
+
+📖 [Sources](https://github.com/kubed-io/mcp-kb/wiki/Sources) · [Configuration](https://github.com/kubed-io/mcp-kb/wiki/Configuration)
+
+---
+
+## 💬 Prompts
+
+A skill is read by the model when it decides to. A **prompt** is picked by a person, who fills in a few arguments first — Claude Code lists them as slash commands. YAML frontmatter declares the arguments, the body carries `{{ placeholders }}`, and the same libraries, tags and scopes apply:
 
 ```markdown
 ---
@@ -106,168 +119,84 @@ arguments:
 Investigate the logs of **{{ app }}** over the last {{ since }}.
 ```
 
-Double braces, because prompt bodies are full of LogQL and JSON. A library or tag
-scope applies to prompts exactly as to skills, and a library holding only prompts is
-still selectable by name.
+Double braces, because prompt bodies here are full of LogQL and JSON.
 
-## Sources
+📖 [Prompts](https://github.com/kubed-io/mcp-kb/wiki/Prompts)
 
-A source is a dependency, declared like one in the config file:
+---
 
-```yaml
-sources:
-- name: superpowers
-  url: github://obra/superpowers
-  ref: b36e0829c6d0140e93cfef2ca599b1b07d4a7797
-  include:
-    skills: ["skills/*/SKILL.md"]
+## 🚀 Running it
+
+```bash
+docker run -p 8000:8000 \
+  -v mcp-kb-cache:/var/cache/mcp-kb \
+  -v "$PWD/examples/config.yaml:/etc/mcp-kb/config.yaml:ro" \
+  kubed/mcp-kb:latest
 ```
 
-| scheme | backend |
-| --- | --- |
-| `file://` | a directory on this machine, served in place — must be absolute (`file:///path`) |
-| `git+https://`, `git+http://`, `git+file://` | a git remote, cloned bare and shallow |
-| `github://org/repo` | shorthand for `git+https://github.com/org/repo.git` |
-| `webdav+https://`, `webdav+http://` | a WebDAV folder — Nextcloud above all — copied into the cache |
+Two mounts and that is the deployment. `examples/config.yaml` serves four pinned GitHub packs out of the box. Then point an MCP client at `http://localhost:8000/mcp`.
 
-`ref` is a branch, tag or commit; pin a commit and an image is reproducible, leave
-it unset and the source tracks the remote's default branch. `subdirectory` narrows
-the harvest to a path within the clone — the shipped example reaches the same
-effect with `include` globs like `skills/*/SKILL.md` instead, without setting one.
-`auth` supplies HTTP Basic credentials for a private remote as `{username, password:
-{env: NAME}}` — GitHub wants `x-access-token` and a `GITHUB_TOKEN`-style PAT. The
-username takes an `{env:}` reference too, for the common case where a service
-account's name is issued alongside its password and repeating it here is how the
-two drift apart. It is
-the only way in: a URL carrying its own `user:token@` is refused, because git saves
-a remote URL to disk verbatim and the URL is quoted back in what `/health` reports.
+The cache wants to be writable by uid **65534**, which the container runs as: a named Docker volume needs nothing, a Kubernetes `emptyDir` needs `fsGroup: 65534`.
 
-One difference between the backends worth knowing: a symlink in a git repository is
-served as a regular file holding the link's target as its text. Behind `file://` a
-symlink is followed when it lands inside the source root — which is what makes a
-Kubernetes ConfigMap mount, all symlinks, servable — and left out when it escapes.
+📖 [Deployment](https://github.com/kubed-io/mcp-kb/wiki/Deployment) · [Installing](https://github.com/kubed-io/mcp-kb/wiki/Installing)
 
-A pack that factors shared material up out of its skills — penpot references `shared/*`
-from 190 places — adds those directories to `include.files`, and they are served at
-`skill://<pack>/<path>` alongside the skills that cite them.
+---
 
-A git source is cloned once and re-exported on its `refresh` interval (`30s`, `5m`,
-`1h`); left unset, it is read once at boot and only rebuilt on restart.
+## ⚙️ Configuration
 
-### A WebDAV folder, and `cache: live`
+Every flag has an environment fallback: containers are configured with env vars, developers reach for flags. These say **how** to run; the config file says **what** to serve.
 
-The URL *is* the folder, so a Nextcloud share is the path you see in its web UI
-under `remote.php/dav/files/<user>/`. `auth` is required — WebDAV has no useful
-anonymous mode — and the password is an `{env:}` reference to a Nextcloud **app
-password**, never the account's own:
+| Env | Flag | Default | Notes |
+|---|---|---|---|
+| `CONFIG` | `--config` | `/etc/mcp-kb/config.yaml` | The config file listing the sources to serve |
+| `CACHE_DIR` | `--cache-dir` | `/var/cache/mcp-kb` | Where a non-`file://` source materialises, and where `index.json` lives |
+| `TRANSPORT` | `--transport` | `http` | `http` or `stdio` |
+| `HOST` | `--host` | `0.0.0.0` | Bind address, http only |
+| `PORT` | `--port` | `8000` | Port, http only |
 
-```yaml
-- name: notes
-  url: webdav+https://cloud.example.com/remote.php/dav/files/drk/Skills
-  auth:
-    username: {env: NEXTCLOUD_USER}      # or the literal name
-    password: {env: NEXTCLOUD_PASSWORD}
-  cache: live
-  refresh: 5m
-  include:
-    skills: ["*/SKILL.md"]
-```
+Per request, on the MCP URL — each with a header form that beats it:
 
-`cache` is the dial. `snapshot`, the default, is every other mirrored source: the
-folder is copied at index time and read from disk thereafter, so a request touches
-no network at all. `cache: live` keeps that copy and revalidates a file as it is
-read — one PROPFIND for its ETag, and a download only if the ETag moved. **A file
-edited in Nextcloud is served on the next read**, with no refresh and no restart.
+| Parameter | Header | Does |
+|---|---|---|
+| `?resources=off` | `X-MCP-Resources` | Reveals the resource mirror tools |
+| `?prompts=off` | `X-MCP-Prompts` | Reveals the prompt mirror tools |
+| `?library=<name>` | `X-Skill-Library` (alias `X-Skill-Pack`) | Restricts this client to one library or group |
+| `?tags=a,b` | `X-Skill-Tags` | Restricts it to anything carrying any of those tags |
+| `?skills=full` | `X-Skill-Listing` | Lists every skill, for clients that sync them to disk |
 
-What live mode does *not* do is notice a **new** file. One that did not exist when
-the folder was indexed has no URI, so nothing ever asks to read it — and the same
-goes for a renamed or deleted one. Nor does it refresh a skill's **description**:
-listing rows come from the harvest, so an edited description appears when the
-source is rebuilt. That is what `refresh: 5m` above is for, and `POST /reindex`
-forces it now. Live mode is for the bodies of the files that are already there.
+`mcp-kb schema` prints the config JSON Schema, which is also committed as `config.schema.json` for an editor to validate against live.
 
-A server that stops answering is not an outage: a revalidation that fails is logged
-and the read is served from the copy on disk. A server that has gone *quiet* rather
-than refused — accepting connections and never replying — costs one read a bounded
-timeout, and that source is then left unrevalidated for half a minute, so the reads
-behind it come straight off disk. `/health` marks such a source `cooling`, and it
-comes back by itself as soon as the server answers again.
+📖 [Configuration](https://github.com/kubed-io/mcp-kb/wiki/Configuration)
 
-One caveat if the folder is not Nextcloud's. Revalidation is only as sharp as the
-server's ETag — Nextcloud derives one from the content, but a server that derives it
-from mtime and size can miss an edit that changed neither, and one that sends no
-ETag at all falls back to exactly that pair. `cache: snapshot` plus a `refresh`
-interval is the honest setting there.
+---
 
-## Configuration
+## 🩺 Operations
 
-| variable | default | meaning |
-| --- | --- | --- |
-| `CONFIG` | `/etc/mcp-school/config.yaml` | config file listing the sources to serve |
-| `CACHE_DIR` | `/var/cache/mcp-school` | directory a non-`file://` source materialises into |
-| `TRANSPORT` | `http` | `http` or `stdio` |
-| `HOST` | `0.0.0.0` | bind address |
-| `PORT` | `8000` | port |
+`GET /health` reports the generation being served, the libraries, the skill and prompt counts, and each source's own status — `ok`, `stale` or `failed`. It needs no credentials and answers 200 whenever the process is serving, *including* when a source failed to load: one unreachable remote must not take a working catalogue down.
 
-See `examples/config.yaml` for what the image ships, and `config.schema.json` — a
-plain `Config.model_json_schema()` — for the full shape of a source.
+`POST /reindex` rebuilds every source now and answers with the same body plus what it rebuilt. `GET /openapi.yaml` is the machine-readable contract for both.
 
-Per request: `?resources=off` and `?prompts=off` reveal the tool mirrors, `?library=`
-and `?tags=` narrow what is served, and `?skills=full` enumerates every skill in the
-listing (for clients that sync skills to disk).
+📖 [Operations](https://github.com/kubed-io/mcp-kb/wiki/Operations) · [Endpoints](https://github.com/kubed-io/mcp-kb/wiki/Endpoints)
 
-`GET /health` reports status, the libraries and skill/prompt counts, and each
-configured source's own status.
+---
 
-## Index and refresh
+## 🛠 Contributing
 
-`CACHE_DIR/index.json` is the on-disk catalogue: what each source yielded last
-time, rows enough to rebuild every skill and prompt without re-reading a
-single file. Cold start reads it and serves in milliseconds; a background pass
-then checks each source's fingerprint and rebuilds only the ones that moved,
-so a pod restart never has to re-harvest a source that has not changed.
+Setup, the layout, what is generated and what is not, and what CI will say about
+it: [CONTRIBUTING.md](CONTRIBUTING.md). The rules worth reading before changing
+behaviour are [AGENTS.md](AGENTS.md), and why they are what they are is
+[`saga/`](saga/).
 
-`refresh: 5m` on a source schedules that check; a source with none is never
-revisited on its own:
+---
 
-```yaml
-- name: superpowers-tip
-  url: github://obra/superpowers
-  ref: main
-  refresh: 5m
-```
+## 🔗 References
 
-`POST /reindex` forces a rebuild of every source immediately, fingerprint
-check skipped, and answers with `/health`'s body plus `rebuilt`, the source
-names actually rebuilt this pass — since the fingerprint check is skipped,
-that is every source that did not fail identically to how it already had,
-changed or not, not only the ones whose content moved.
+- [Model Context Protocol](https://modelcontextprotocol.io/) · [FastMCP](https://gofastmcp.com/)
+- [Agent Skills](https://code.claude.com/docs/en/skills) · [the skill format](https://code.claude.com/docs/en/skills#skill-structure)
+- [The wiki](https://github.com/kubed-io/mcp-kb/wiki) · [Docker Hub](https://hub.docker.com/r/kubed/mcp-kb)
 
-A session that persists across requests is told, once, the next time it asks
-— MCP 2026-07-28 has no sessions of its own, so a sessionless client gets no
-such notice and instead relies on `cache_ttl`, which this server advertises as
-the shortest `refresh` among its sources.
+---
 
-## Deploying
+## 📜 Licence
 
-The image is the whole artifact: point `CONFIG` at a config file and `CACHE_DIR` at a
-writable volume, and it serves whatever the config names. Kubernetes manifests, node
-placement and everything else about running this somewhere are the installer's
-concern — this repo ships none of its own.
-
-`CACHE_DIR` has to be writable by uid **65534**, which the container runs as. A Docker
-named volume inherits the directory's ownership and needs nothing; a Kubernetes
-`emptyDir` or PVC mounts root-owned, so the pod needs `securityContext.fsGroup: 65534`.
-Without it the server logs that it cannot write `index.json` and re-harvests every
-source on every restart.
-
-## Development
-
-```
-pip install -e .[test]
-pytest
-```
-
-## License
-
-MIT
+MIT. See [LICENSE](LICENSE).

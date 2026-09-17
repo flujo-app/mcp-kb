@@ -1,6 +1,6 @@
 """``cache: live``: a read revalidates the file it is about to serve.
 
-Every test drives a real ``School`` over the real WebDAV server
+Every test drives a real ``KnowledgeBase`` over the real WebDAV server
 (``tests/webdav_server.py``), which refuses an unauthenticated request. What is
 being proved is one sentence: *a file edited upstream is served on the next
 read, and everything else about the server stays where it was.*
@@ -23,9 +23,10 @@ import time
 import httpx
 import pytest
 
-from mcp_school import School, live
-from mcp_school.config import Config, WebdavSource
-from mcp_school.prompts import PromptProvider
+from kubed.mcp_kb import KnowledgeBase
+from kubed.mcp_kb.config import Config, WebdavSource
+from kubed.mcp_kb.mcp.prompts import PromptProvider
+from kubed.mcp_kb.sources import live
 from tests.webdav_server import PASSWORD, USERNAME
 
 pytestmark = pytest.mark.unit
@@ -48,7 +49,7 @@ def no_ttl(monkeypatch):
     monkeypatch.setattr(live, "TTL_SECONDS", 0.0)
 
 
-def _school(webdav, tmp_path, cache="live"):
+def _knowledge_base(webdav, tmp_path, cache="live"):
     config = Config.model_validate(
         {
             "sources": [
@@ -66,7 +67,7 @@ def _school(webdav, tmp_path, cache="live"):
             ]
         }
     )
-    return School(config, tmp_path / "cache")
+    return KnowledgeBase(config, tmp_path / "cache")
 
 
 # -- what live mode buys -------------------------------------------------------
@@ -75,30 +76,30 @@ def _school(webdav, tmp_path, cache="live"):
 def test_an_edit_upstream_is_visible_on_the_next_read_without_a_refresh(
     webdav, tmp_path
 ):
-    school = _school(webdav, tmp_path)
-    assert "first" in school.catalogue.read(URI)
+    knowledge_base = _knowledge_base(webdav, tmp_path)
+    assert "first" in knowledge_base.catalogue.read(URI)
 
     webdav.skill("x", "edited in nextcloud, and rather longer than before")
 
-    assert "edited in nextcloud" in school.catalogue.read(URI)
-    assert school.generation == 0, "no refresh happened; the read did the work"
+    assert "edited in nextcloud" in knowledge_base.catalogue.read(URI)
+    assert knowledge_base.generation == 0, "no refresh happened; the read did the work"
 
 
 def test_a_pack_level_file_is_revalidated_too(webdav, tmp_path):
     """A skill's instructions are not the only thing a live source serves."""
-    school = _school(webdav, tmp_path)
-    assert school.catalogue.read(GUIDE) == "pack-level guidance\n"
+    knowledge_base = _knowledge_base(webdav, tmp_path)
+    assert knowledge_base.catalogue.read(GUIDE) == "pack-level guidance\n"
 
     webdav.write("docs/guide.md", "guidance, revised and lengthened upstream\n")
 
-    assert "revised and lengthened" in school.catalogue.read(GUIDE)
+    assert "revised and lengthened" in knowledge_base.catalogue.read(GUIDE)
 
 
 async def test_a_live_prompt_renders_the_edited_body(webdav, tmp_path):
     """A prompt's body lives in memory, so live mode has to re-read it."""
     webdav.write("prompts/p.md", PROMPT.format(body="the first body"))
-    school = _school(webdav, tmp_path)
-    provider = PromptProvider(lambda: school.snapshot)
+    knowledge_base = _knowledge_base(webdav, tmp_path)
+    provider = PromptProvider(lambda: knowledge_base.snapshot)
 
     prompt = await provider.get_prompt("notes_p")
     assert "the first body" in await prompt.render({})
@@ -118,11 +119,11 @@ def test_a_manifest_is_priced_against_the_server_before_it_is_served(
     """A size and a hash are claims about bytes. Served without revalidating,
     they describe the copy on disk and the very next read serves something
     else."""
-    school = _school(webdav, tmp_path)
-    before = json.loads(school.catalogue.read(f"{URI}/_manifest"))
+    knowledge_base = _knowledge_base(webdav, tmp_path)
+    before = json.loads(knowledge_base.catalogue.read(f"{URI}/_manifest"))
 
     webdav.skill("x", "edited in nextcloud, and rather longer than before")
-    after = json.loads(school.catalogue.read(f"{URI}/_manifest"))
+    after = json.loads(knowledge_base.catalogue.read(f"{URI}/_manifest"))
 
     assert after != before
     assert after["files"][0]["size"] > before["files"][0]["size"]
@@ -130,32 +131,32 @@ def test_a_manifest_is_priced_against_the_server_before_it_is_served(
 
 def test_a_new_upstream_file_needs_a_refresh(webdav, tmp_path):
     """Revalidation prices a file that has a URI. A new one has none yet."""
-    school = _school(webdav, tmp_path)
+    knowledge_base = _knowledge_base(webdav, tmp_path)
     webdav.skill("y", "a skill added after the folder was indexed")
 
-    assert school.catalogue.read("skill://notes/y") is None
-    assert [s.name for s in school.index.visible()] == ["x"]
+    assert knowledge_base.catalogue.read("skill://notes/y") is None
+    assert [s.name for s in knowledge_base.index.visible()] == ["x"]
 
-    assert school.refresh() == ["notes"]
-    assert "a skill added after" in school.catalogue.read("skill://notes/y")
+    assert knowledge_base.refresh() == ["notes"]
+    assert "a skill added after" in knowledge_base.catalogue.read("skill://notes/y")
 
 
 def test_reads_within_the_ttl_do_not_hit_the_server(webdav, tmp_path, monkeypatch):
     """One read of a skill is several reads of its files; one PROPFIND is enough."""
     monkeypatch.setattr(live, "TTL_SECONDS", 60.0)
-    school = _school(webdav, tmp_path)
-    school.catalogue.read(URI)
+    knowledge_base = _knowledge_base(webdav, tmp_path)
+    knowledge_base.catalogue.read(URI)
     webdav.requests.clear()
 
-    school.catalogue.read(URI)
-    school.catalogue.read(URI)
+    knowledge_base.catalogue.read(URI)
+    knowledge_base.catalogue.read(URI)
 
     assert webdav.requests == []
 
 
 def test_a_snapshot_source_never_revalidates(webdav, tmp_path, monkeypatch):
     """The default dial is disk and nothing else: not one request on a read."""
-    school = _school(webdav, tmp_path, cache="snapshot")
+    knowledge_base = _knowledge_base(webdav, tmp_path, cache="snapshot")
     reached = []
 
     def boom(*args, **kwargs):
@@ -167,8 +168,8 @@ def test_a_snapshot_source_never_revalidates(webdav, tmp_path, monkeypatch):
     monkeypatch.setattr(live, "fetch_file", boom)
     webdav.requests.clear()
 
-    assert "first" in school.catalogue.read(URI)
-    assert school.catalogue.read(GUIDE) == "pack-level guidance\n"
+    assert "first" in knowledge_base.catalogue.read(URI)
+    assert knowledge_base.catalogue.read(GUIDE) == "pack-level guidance\n"
     assert reached == [], "the read path never reached the network"
     assert webdav.requests == []
 
@@ -182,24 +183,24 @@ def test_a_flaky_server_degrades_to_the_cached_copy(webdav, tmp_path):
     The copy is on disk and complete; a server that has stopped answering is a
     reason to serve it unrevalidated, never a reason to fail the read.
     """
-    school = _school(webdav, tmp_path)
-    assert "first" in school.catalogue.read(URI)
+    knowledge_base = _knowledge_base(webdav, tmp_path)
+    assert "first" in knowledge_base.catalogue.read(URI)
 
     webdav.stop()
 
-    assert "first" in school.catalogue.read(URI)
-    assert school.catalogue.read(GUIDE) == "pack-level guidance\n"
+    assert "first" in knowledge_base.catalogue.read(URI)
+    assert knowledge_base.catalogue.read(GUIDE) == "pack-level guidance\n"
 
 
 def test_a_failed_revalidation_says_nothing_about_the_credentials(
     webdav, tmp_path, caplog
 ):
-    school = _school(webdav, tmp_path)
-    school.catalogue.read(URI)
+    knowledge_base = _knowledge_base(webdav, tmp_path)
+    knowledge_base.catalogue.read(URI)
     webdav.stop()
 
     with caplog.at_level("WARNING"):
-        school.catalogue.read(URI)
+        knowledge_base.catalogue.read(URI)
 
     assert caplog.text, "a revalidation that failed is worth a line in the log"
     assert PASSWORD not in caplog.text
@@ -209,12 +210,12 @@ def test_a_failed_revalidation_says_nothing_about_the_credentials(
 def test_a_failed_revalidation_names_the_source_once(webdav, tmp_path, caplog):
     """fetch_file's error already carries the source, and the log line adds it:
     `notes: revalidating … failed: notes: …` reads as two sources."""
-    school = _school(webdav, tmp_path)
-    school.catalogue.read(URI)
+    knowledge_base = _knowledge_base(webdav, tmp_path)
+    knowledge_base.catalogue.read(URI)
     webdav.stop()
 
     with caplog.at_level("WARNING"):
-        school.catalogue.read(URI)
+        knowledge_base.catalogue.read(URI)
 
     assert caplog.text.count("notes:") == 1
     assert caplog.text.count("skills/x/SKILL.md") == 1
@@ -232,14 +233,14 @@ def test_a_server_that_hangs_is_asked_once_and_then_left_alone(
     """
     monkeypatch.setattr(live, "REVALIDATE_TIMEOUT", 0.2)
     monkeypatch.setattr(live, "COOLDOWN_SECONDS", 60.0)
-    school = black_hole(tmp_path)
+    knowledge_base = black_hole(tmp_path)
 
     with caplog.at_level("WARNING"):
-        first = _elapsed(school, URI)
-        after = [_elapsed(school, URI) for _ in range(5)]
-        other = _elapsed(school, GUIDE)
+        first = _elapsed(knowledge_base, URI)
+        after = [_elapsed(knowledge_base, URI) for _ in range(5)]
+        other = _elapsed(knowledge_base, GUIDE)
 
-    assert "first" in school.catalogue.read(URI), "the cached copy is still served"
+    assert "first" in knowledge_base.catalogue.read(URI), "the cached copy is still served"
     assert first < 1.0, f"one read must not cost the httpx default: {first:.2f}s"
     assert max(after) < 0.05, f"a wedged server must cost nothing twice: {after}"
     assert other < 0.05, "the cooldown covers the source, not the one file"
@@ -251,13 +252,13 @@ async def test_health_says_a_live_source_is_cooling_after_a_failure(
 ):
     """An operator reading /health has to be able to tell "nothing changed"
     from "we stopped asking"."""
-    school = _school(webdav, tmp_path)
-    school.catalogue.read(URI)
+    knowledge_base = _knowledge_base(webdav, tmp_path)
+    knowledge_base.catalogue.read(URI)
     monkeypatch.setattr(live, "fetch_file", _wedged)
-    school.catalogue.read(URI)
+    knowledge_base.catalogue.read(URI)
 
-    transport = httpx.ASGITransport(app=school.mcp.http_app())
-    async with httpx.AsyncClient(transport=transport, base_url="http://school") as http:
+    transport = httpx.ASGITransport(app=knowledge_base.mcp.http_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://knowledge_base") as http:
         body = (await http.get("/health")).json()
 
     assert body["sources"]["notes"]["cooling"] is True
@@ -266,17 +267,17 @@ async def test_health_says_a_live_source_is_cooling_after_a_failure(
 def test_a_source_that_answers_again_stops_cooling(webdav, tmp_path, monkeypatch):
     """The cooldown is a pause, not a verdict: a folder comes back by itself."""
     monkeypatch.setattr(live, "COOLDOWN_SECONDS", 0.05)
-    school = _school(webdav, tmp_path)
+    knowledge_base = _knowledge_base(webdav, tmp_path)
     answering = live.fetch_file
     monkeypatch.setattr(live, "fetch_file", _wedged)
-    school.catalogue.read(URI)
-    assert school.snapshot.stats("notes")["cooling"] is True
+    knowledge_base.catalogue.read(URI)
+    assert knowledge_base.snapshot.stats("notes")["cooling"] is True
 
     monkeypatch.setattr(live, "fetch_file", answering)
     time.sleep(0.1)
-    school.catalogue.read(URI)
+    knowledge_base.catalogue.read(URI)
 
-    assert "cooling" not in school.snapshot.stats("notes")
+    assert "cooling" not in knowledge_base.snapshot.stats("notes")
 
 
 def test_the_ttl_runs_from_the_answer_and_not_from_the_question(
@@ -286,8 +287,8 @@ def test_the_ttl_runs_from_the_answer_and_not_from_the_question(
     slower than the TTL leaves the same file due for another the instant it
     comes back -- so a slow server is asked once per read, not once per TTL."""
     monkeypatch.setattr(live, "TTL_SECONDS", 0.3)
-    school = _school(webdav, tmp_path)
-    school.catalogue.read(URI)
+    knowledge_base = _knowledge_base(webdav, tmp_path)
+    knowledge_base.catalogue.read(URI)
     answering = live.fetch_file
 
     def slow(*args, **kwargs):
@@ -296,11 +297,11 @@ def test_the_ttl_runs_from_the_answer_and_not_from_the_question(
 
     time.sleep(0.35)
     monkeypatch.setattr(live, "fetch_file", slow)
-    school.catalogue.read(URI)
+    knowledge_base.catalogue.read(URI)
 
     monkeypatch.setattr(live, "fetch_file", answering)
     webdav.requests.clear()
-    school.catalogue.read(URI)
+    knowledge_base.catalogue.read(URI)
 
     assert webdav.requests == [], "the TTL must bound a slow server too"
 
@@ -314,22 +315,22 @@ def test_the_revalidator_follows_the_export_a_refresh_created(webdav, tmp_path):
     A revalidator that outlived its snapshot would go on writing into the
     export nothing is serving any more, and the edit would never appear.
     """
-    school = _school(webdav, tmp_path)
-    retired = school.index.get("x").path
+    knowledge_base = _knowledge_base(webdav, tmp_path)
+    retired = knowledge_base.index.get("x").path
     webdav.skill("y", "a second skill, which moves the whole folder's digest")
-    assert school.refresh() == ["notes"]
-    current = school.index.get("x").path
+    assert knowledge_base.refresh() == ["notes"]
+    current = knowledge_base.index.get("x").path
     assert current != retired
 
     webdav.skill("x", "edited after the refresh, and longer than it was")
 
-    assert "edited after the refresh" in school.catalogue.read(URI)
+    assert "edited after the refresh" in knowledge_base.catalogue.read(URI)
     assert "first" in (retired / "SKILL.md").read_text(), "the retired export stands"
 
 
 def test_one_client_serves_every_live_read(webdav, tmp_path, monkeypatch):
     """A client per read is a TCP connection and a TLS handshake per read."""
-    school = _school(webdav, tmp_path)
+    knowledge_base = _knowledge_base(webdav, tmp_path)
     built = []
     original = live.client
 
@@ -339,21 +340,21 @@ def test_one_client_serves_every_live_read(webdav, tmp_path, monkeypatch):
 
     monkeypatch.setattr(live, "client", counted)
 
-    school.catalogue.read(URI)
-    school.catalogue.read(URI)
-    school.catalogue.read(GUIDE)
+    knowledge_base.catalogue.read(URI)
+    knowledge_base.catalogue.read(URI)
+    knowledge_base.catalogue.read(GUIDE)
 
     assert built == ["notes"]
 
 
 async def test_health_reports_what_a_live_source_revalidated(webdav, tmp_path):
-    school = _school(webdav, tmp_path)
-    school.catalogue.read(URI)
+    knowledge_base = _knowledge_base(webdav, tmp_path)
+    knowledge_base.catalogue.read(URI)
     webdav.skill("x", "edited in nextcloud, and rather longer than before")
-    school.catalogue.read(URI)
+    knowledge_base.catalogue.read(URI)
 
-    transport = httpx.ASGITransport(app=school.mcp.http_app())
-    async with httpx.AsyncClient(transport=transport, base_url="http://school") as http:
+    transport = httpx.ASGITransport(app=knowledge_base.mcp.http_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://knowledge_base") as http:
         body = (await http.get("/health")).json()
 
     source = body["sources"]["notes"]
@@ -366,11 +367,11 @@ async def test_health_says_nothing_about_the_backend_or_the_credentials(
     webdav, tmp_path
 ):
     """A backend is config-only, and /health is not where it stops being one."""
-    school = _school(webdav, tmp_path)
-    school.catalogue.read(URI)
+    knowledge_base = _knowledge_base(webdav, tmp_path)
+    knowledge_base.catalogue.read(URI)
 
-    transport = httpx.ASGITransport(app=school.mcp.http_app())
-    async with httpx.AsyncClient(transport=transport, base_url="http://school") as http:
+    transport = httpx.ASGITransport(app=knowledge_base.mcp.http_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://knowledge_base") as http:
         body = (await http.get("/health")).text
 
     assert PASSWORD not in body
@@ -379,9 +380,9 @@ async def test_health_says_nothing_about_the_backend_or_the_credentials(
 
 
 def test_a_snapshot_source_reports_no_live_fields(webdav, tmp_path):
-    school = _school(webdav, tmp_path, cache="snapshot")
+    knowledge_base = _knowledge_base(webdav, tmp_path, cache="snapshot")
 
-    assert "live" not in school.status["notes"]
+    assert "live" not in knowledge_base.status["notes"]
 
 
 # -- helpers -------------------------------------------------------------------
@@ -392,15 +393,15 @@ def _wedged(*args, **kwargs):
     raise TimeoutError("timed out")
 
 
-def _elapsed(school, uri: str) -> float:
+def _elapsed(knowledge_base, uri: str) -> float:
     start = time.monotonic()
-    school.catalogue.read(uri)
+    knowledge_base.catalogue.read(uri)
     return time.monotonic() - start
 
 
 @pytest.fixture
 def black_hole(webdav, monkeypatch):
-    """A school whose revalidations go to a socket that accepts and never answers.
+    """A knowledge base whose revalidations go to a socket that accepts and never answers.
 
     Not "refused", which is instant and is what the flaky-server test already
     covers. This is the Nextcloud failure mode that costs a timeout. The folder
@@ -410,7 +411,7 @@ def black_hole(webdav, monkeypatch):
     """
 
     def build(tmp_path):
-        school = _school(webdav, tmp_path)
+        knowledge_base = _knowledge_base(webdav, tmp_path)
         listener = socket.socket()
         listener.bind(("127.0.0.1", 0))
         listener.listen(16)
@@ -432,6 +433,6 @@ def black_hole(webdav, monkeypatch):
         answering = live.client
         monkeypatch.setattr(live, "client", lambda _, **kwargs: answering(void, **kwargs))
         monkeypatch.setattr(live, "TTL_SECONDS", 0.0)
-        return school
+        return knowledge_base
 
     return build

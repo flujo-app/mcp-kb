@@ -6,8 +6,8 @@ import os
 import stat
 from pathlib import Path
 
+from ..catalogue.harvest import CONVENTIONAL_DOTDIRS, inside
 from ..config import FileSource
-from ..harvest import CONVENTIONAL_DOTDIRS, inside
 from .errors import SourceError
 
 

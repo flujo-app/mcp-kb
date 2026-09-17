@@ -17,7 +17,7 @@ from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.utilities.skills import download_skill, get_skill_manifest, list_skills
 
-from mcp_school import School
+from kubed.mcp_kb import KnowledgeBase
 from tests.conftest import make_config
 
 
@@ -32,7 +32,7 @@ def server_url(skills_dir_module, prompts_dir_module):
     """Serve the skills app on a loopback port for the duration of the module."""
     port = _free_port()
     config = make_config(skills_dir_module, prompts_dir_module)
-    app = School(config, skills_dir_module / "_cache").mcp.http_app()
+    app = KnowledgeBase(config, skills_dir_module / "_cache").mcp.http_app()
     uvicorn_config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
     server = uvicorn.Server(uvicorn_config)
     thread = threading.Thread(target=server.run, daemon=True)
@@ -116,6 +116,25 @@ async def test_skills_full_enumerates_every_skill(server_url):
     assert sum(1 for u in uris if u.endswith("/SKILL.md")) == 4
 
 
+@pytest.mark.integration
+async def test_skills_full_reaches_the_mirror_too(server_url):
+    """The combination a tools-only client that syncs skills to disk sends.
+
+    ``?resources=off&skills=full`` is not two unrelated knobs: the first is why
+    the client is calling a tool at all, and the second is what it is calling it
+    for. A mirror that honours the listing shape for ``resources/list`` and
+    drops it for ``list_resources()`` hands that client the indexes and no
+    ``/SKILL.md`` at all, with no error to notice.
+    """
+    rows = json.loads(
+        await call(f"{server_url}?resources=off&skills=full", "list_resources")
+    )
+    assert "skill://flatsource/alpha/SKILL.md" in [row["uri"] for row in rows]
+    assert sum(1 for row in rows if row["uri"].endswith("/SKILL.md")) == 4
+    cheap = json.loads(await call(f"{server_url}?resources=off", "list_resources"))
+    assert not any(row["uri"].endswith("/SKILL.md") for row in cheap)
+
+
 # -- the pack pin -------------------------------------------------------------
 
 
@@ -128,6 +147,18 @@ async def test_no_header_sees_every_pack(server_url):
 @pytest.mark.integration
 async def test_the_pin_hides_the_other_pack_from_the_listing(server_url):
     uris = await resource_uris(server_url, headers={"X-Skill-Pack": "flatsource"})
+    assert uris == ["skill://flatsource"]
+
+
+@pytest.mark.integration
+async def test_a_header_beats_the_same_setting_in_the_url(server_url):
+    """The header is set in a credential, by an admin; the parameter rides on a
+    URL somebody may paste. So a pasted ``?library=`` cannot reach past the pin
+    an admin already set, and the two are read in that order everywhere.
+    """
+    uris = await resource_uris(
+        f"{server_url}?library=deepsource", headers={"X-Skill-Pack": "flatsource"}
+    )
     assert uris == ["skill://flatsource"]
 
 

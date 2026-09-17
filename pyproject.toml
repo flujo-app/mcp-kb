@@ -1,6 +1,6 @@
 [project]
-name = "mcp-school"
-description = "A resource and prompt gateway for MCP: serves skills, prompts and other agent material from many sources"
+name = "kubed-mcp-kb"
+description = "An MCP knowledge base: skills, prompts and agent material collected from git, WebDAV and folders into one catalogue, served as resources, or as tools for clients without them."
 readme = "README.md"
 dynamic = ["version"]
 requires-python = ">=3.11"
@@ -72,20 +72,27 @@ test = [
   # imported directly, so declared here or CI fails where the pod passed.
   "wsgidav",
   "cheroot",
+  # tests/test_openapi.py validates the built document against the spec
+  # itself, not just against its own hand-written assertions.
+  "openapi-spec-validator",
+  # …and validates a real /health body against the document's own schemas, so
+  # a type cannot drift. It arrives with openapi-spec-validator either way;
+  # named here because a test imports it directly.
+  "jsonschema",
 ]
 
 [build-system]
-requires = ["setuptools>=61.0", "setuptools_scm[toml]>=6.2"]
+requires = ["setuptools>=77.0.3", "setuptools_scm[toml]>=6.2"]
 build-backend = "setuptools.build_meta"
 
 [project.urls]
 Homepage = "https://github.com/kubed-io"
-Repository = "https://github.com/kubed-io/mcp-school"
-Issues = "https://github.com/kubed-io/mcp-school/issues"
-Changelog = "https://github.com/kubed-io/mcp-school/blob/main/CHANGELOG.md"
+Repository = "https://github.com/kubed-io/mcp-kb"
+Issues = "https://github.com/kubed-io/mcp-kb/issues"
+Changelog = "https://github.com/kubed-io/mcp-kb/blob/main/CHANGELOG.md"
 
 [project.scripts]
-mcp-school = "mcp_school.main:main"
+mcp-kb = "kubed.mcp_kb.main:main"
 
 [tool.setuptools_scm]
 
@@ -96,7 +103,13 @@ mcp-school = "mcp_school.main:main"
 # control, and a build from an exported tarball has no such checkout to sweep.
 # tests/test_packaging.py holds this list to the tree and then proves the built
 # wheel imports with no .git present.
-packages = ["mcp_school", "mcp_school.sources"]
+packages = [
+  "kubed.mcp_kb",
+  "kubed.mcp_kb.catalogue",
+  "kubed.mcp_kb.mcp",
+  "kubed.mcp_kb.sources",
+  "kubed.mcp_kb.spec",
+]
 
 [tool.pytest.ini_options]
 minversion = "6.0"

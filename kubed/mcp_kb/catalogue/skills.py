@@ -21,8 +21,8 @@ from pathlib import Path, PurePosixPath
 import frontmatter
 import yaml
 
+from ..mcp.scope import EVERYTHING, Scope
 from . import harvest
-from .scope import EVERYTHING, Scope
 
 
 @dataclass(frozen=True)

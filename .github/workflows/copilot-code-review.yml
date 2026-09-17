@@ -1,0 +1,56 @@
+name: Copilot Code Review
+
+# The environment Copilot's CODE REVIEWER runs in, which is a different job from
+# the coding agent's.
+#
+# Without this file, code review falls back to `copilot-setup-steps.yml`, which
+# provisions for an agent that is going to EDIT this package: full history for
+# setuptools_scm, an editable install with [test,build], and a Verify step that
+# runs the console script. A reviewer needs none of it — it reads a diff — and
+# every one of those is a way for a review to fail over something unrelated to
+# the change. The reviewer also takes its setup from the default branch while
+# checking out the pull request, so a PR that renames the console script failed
+# Verify on every review until it merged.
+#
+# So this is deliberately the smallest thing that can run: a shallow checkout,
+# no submodules, no install.
+#
+# The job MUST still be named `copilot-setup-steps` — that exact name is how
+# GitHub finds it, in this file as well as in the other one.
+
+on:
+  workflow_dispatch:
+  # Same shape as copilot-setup-steps.yml: the triggers exist only so a change
+  # to this file is validated like any other workflow, and `branches` on the
+  # push stops a pull request reporting two identical runs for one commit.
+  push:
+    branches: [main]
+    paths:
+    - .github/workflows/copilot-code-review.yml
+  pull_request:
+    branches: [main]
+    paths:
+    - .github/workflows/copilot-code-review.yml
+
+permissions:
+  contents: read
+
+jobs:
+
+  copilot-setup-steps:
+    # The job ID is fixed by GitHub; the display name is not. Both Copilot
+    # workflows must use the same job ID, so without a display name they would
+    # both report a check called `copilot-setup-steps`.
+    name: Copilot Review Setup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+
+    # Shallow, and no submodules: the reviewer wants the files as they are, not
+    # a buildable checkout, and the wiki submodule is a second repository whose
+    # only reader is a test this job does not run.
+    - name: Checkout
+      uses: actions/checkout@v7
+      with:
+        persist-credentials: false

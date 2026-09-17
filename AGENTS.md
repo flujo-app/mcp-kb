@@ -1,132 +1,165 @@
-# Working on mcp-school
+# AGENTS.md
 
-An MCP server that serves Agent Skills — `SKILL.md` packages — over HTTP so
-clients that cannot read a filesystem (n8n agents, above all) can still use
-them. The image bakes nothing: a source is a dependency declared in a config
-file, and it is cloned or read at container **start**, into a cache volume.
+Agent context for `mcp-kb`. Read this before working in this repo.
+
+An MCP knowledge base: skills, prompts and agent material collected from git,
+WebDAV and folders into one catalogue, served as MCP resources — or as tools,
+for the clients that have none. The image bakes nothing; a source is a
+dependency declared in a config file and read at container **start**, into a
+cache volume.
+
+## Read first
+
+**The design record lives in [`saga/`](saga/).** This file is the operating
+manual — the rules and invariants you must not break. The saga is *why* they are
+what they are, plus what has been weighed and set aside. Decisions there are
+cited as `§C1.n` and are the reference for anything here that says "see the
+saga".
+
+[Chapter 1 — The Card Catalogue](saga/Chapter_1_The_Card_Catalogue.md) is the
+whole design: a config file of sources (§C1.3, §C1.4), one per backend (§C1.5 —
+§C1.7), the index and the `snapshot`/`live` dial (§C1.18), libraries and tags
+(§C1.19), and the name (§C1.22).
+
+Three other places, and none of them overlaps this file:
+
+- **[The wiki](https://github.com/kubed-io/mcp-kb/wiki)** is the manual — how to
+  connect a client, declare a source, deploy it, read `/health`. It is a
+  submodule at `wiki/`, and three of its pages are generated from the live code.
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** is the loop: setup, what CI runs, how
+  the changelog is written, what is generated and what is not.
+- **[README.md](README.md)** advertises. It links into the wiki and explains
+  nothing.
+
+This repo ships **an image and a Python distribution, and nothing else.** There
+are no Kubernetes manifests here and no `deploy/`: a deployment is the
+installer's, against whatever image tag it chooses.
 
 ## Layout
 
 | Path | What it is |
 | --- | --- |
-| `mcp_school/config.py` | the config file's schema — `Config`, `load_config`, `Library`, `FileSource`, `GitSource`, `WebdavSource` |
-| `mcp_school/harvest.py` | turns a source's `include` globs into skill dirs, prompt files and pack files |
-| `mcp_school/sources/` | turns a config source into a local directory — `file://`, `git+…`/`github://`, `webdav+…` — and fingerprints it, to detect a changed one; `export.py` is the per-version materialise git and WebDAV share |
-| `mcp_school/index.py` | `Index`/`SourceRecord`, the on-disk `index.json` a cold start reads instead of re-harvesting |
-| `scripts/requirements.py` | prints the dependency list out of `pyproject.toml` for the image build |
-| `examples/config.yaml` | the worked example the image ships — the four packs as `github://` sources |
+| `kubed/mcp_kb/server.py` | `KnowledgeBase` — the composition root: cold start, the refresh loop, which snapshot is current. No tool bodies |
+| `kubed/mcp_kb/main.py` | CLI and env parsing, and the `mcp-kb` console script |
+| `kubed/mcp_kb/routes.py` | the plain-HTTP surface: `/health`, `/reindex`, `/openapi.yaml` |
+| `kubed/mcp_kb/config.py` | the config file's model — `Config`, `Library`, `Include`, the `*Source` models, `EnvRef`, `schema()` |
+| `kubed/mcp_kb/catalogue/` | what is served, and how it is found, addressed and persisted |
+| ⤷ `harvest.py` | the `include` globs, and what counts as a skill, a prompt or a pack file |
+| ⤷ `skills.py` | the domain — `Skill`, `SkillIndex`, and the scoping rules. Imports no FastMCP |
+| ⤷ `uris.py` | the `skill://` address space — `Catalogue`, the grammar |
+| ⤷ `index.py` | `Index`/`SourceRecord`, the on-disk `index.json` a cold start reads |
+| ⤷ `snapshot.py` | `Snapshot`, `build_snapshot` — the immutable view every request reads |
+| ⤷ `refresh.py` | when a source is due to be looked at again, and what a failure does to the last good one |
+| `kubed/mcp_kb/sources/` | where bytes come from — `file.py`, `git.py`, `webdav.py`, the shared per-version `export.py`, `errors.py`, and `live.py`, because revalidation is a source concern |
+| `kubed/mcp_kb/mcp/` | what an agent sees |
+| ⤷ `resources.py` | the resources, which are the interface |
+| ⤷ `tools.py`, `prompts.py` | the two mirror pairs, and the middleware that hides them |
+| ⤷ `request.py`, `scope.py` | what the current request says about itself, and the `Scope` it becomes |
+| ⤷ `announce.py` | `AnnounceChanges` — telling a session its listing moved |
+| `kubed/mcp_kb/spec/` | `builder.py`, the OpenAPI document for the HTTP surface |
+| `scripts/` | `generate_openapi.py`, `generate_wiki.py`, and `requirements.py` for the image build |
+| `examples/config.yaml` | the worked config the image ships — four packs as `github://` sources |
 | `config.schema.json` | `Config.model_json_schema()`, committed so an editor can validate a config live |
-| `mcp_school/skills.py` | the catalogue — `Skill`, loading, and `SkillIndex` |
-| `mcp_school/uris.py` | the `skill://` address space — `Catalogue`, the grammar |
-| `mcp_school/resources.py` | the resources, and the mirror-hiding middleware |
-| `mcp_school/tools.py` | the two mirror tools |
-| `mcp_school/request.py` | what the current request says about itself |
-| `mcp_school/live.py` | `cache: live` — the `Revalidator` a read goes through before it serves a file |
-| `mcp_school/prompts.py` | loads, renders and scopes the prompts |
-| `mcp_school/routes.py` | plain HTTP endpoints (`/health`, `/reindex`) |
-| `mcp_school/snapshot.py` | `Snapshot`, `build_snapshot` — the immutable view of the catalogue every request reads |
-| `mcp_school/server.py` | `School` — wiring, cold start, refresh, no tool bodies |
-| `mcp_school/main.py` | CLI and env parsing; the only file reading `os.environ` |
+| `wiki/` | the GitHub wiki, as a submodule |
 
-## Adding a source
+## Where code goes
 
-`examples/config.yaml` — the worked example the image ships — is what you edit
-to try one. A source is a dependency, declared like one:
+The split follows the layout proposed in `modelcontextprotocol/python-sdk#1681`:
+**MCP wiring separate from tool implementations**, with pure logic factored out
+of the handlers. FastMCP has no `APIRouter` equivalent (`PrefectHQ/fastmcp#948`
+closed unanswered), so each module exposes a `register(...)` the server calls.
+Mounting sub-servers is the other option and is wrong here: it namespaces tool
+names with a prefix, and these names are the agent's API.
 
-```yaml
-sources:
-- name: penpot
-  url: github://penpot/penpot-ai-kit
-  ref: c63d8e3717323fad859e794848e5a602b155a7ec
-  include:
-    skills: ["skills/*/SKILL.md"]
-    files: ["shared/**/*", "workflows/**/*"]
-```
+- **Adding a tool** → `mcp/tools.py`. Never `server.py`. But think first: the
+  tools are a *mirror* of the resources and the prompts, and one that is not
+  breaks the promise the whole design rests on — that a client which knows how
+  to read MCP resources already knows how to drive this server.
+- **Changing the URI grammar, or what a URI resolves to** → `catalogue/uris.py`.
+  Resources and tools both project from `Catalogue`, so a change there lands on
+  both at once, which is the point.
+- **Adding an endpoint** → `routes.py`, and its response shape in `spec/`, or
+  the published contract starts lying.
+- **Changing what counts as a skill, a prompt or a pack file** →
+  `catalogue/harvest.py` for the rule, `catalogue/uris.py` for where it applies.
+- **Changing who may see one** → `catalogue/skills.py` for the rule,
+  `catalogue/uris.py` for where it is applied. Every `Catalogue` method takes a
+  `Scope`, so there is no method that can be called without deciding about it —
+  a handler that reimplements that filter is how a pinned client ends up seeing
+  another library.
+- **Adding a prompt** → a file matching a source's `include.prompts` glob (or
+  the convention), exposed as `<library>_<file stem>`. No code. Every
+  placeholder must be a declared argument and a required argument cannot have a
+  default; the server skips a file that breaks either rule, and
+  `tests/test_prompts.py` loads a broken one to prove it.
+- **A library referencing files outside its skills** → that source's
+  `include.files`. They are served at `skill://<library>/<path>` and listed
+  under `_files`, never indexed as skills.
+- **A new flag or env var** → `main.py`, which is the whole configuration
+  surface. Nothing else in the package reads `os.environ`, except `{env: NAME}`
+  resolution in `config.py`, which is the one other reader — and it resolves a
+  credential where it is declared so it never travels as a plain `str`.
+- **Anything that changes what the catalogue holds** goes through
+  `KnowledgeBase.refresh` and produces a new `Snapshot`; never mutate one.
 
-`url` picks the backend: `file:///path` (absolute, no host) is served in
-place; `git+https://`, `git+http://` and `git+file://` clone bare and shallow;
-`github://org/repo` is shorthand for `git+https://github.com/org/repo.git`;
-`webdav+https://` and `webdav+http://` copy a WebDAV folder, which needs an
-`auth` (a Nextcloud app password, as `{env: NAME}`) and takes a
-`cache: snapshot|live` dial — see the README for what `live` does and does not
-buy.
-`ref` is a branch, tag or commit — a git source with no `ref` tracks the
-remote's default branch, and one with no `refresh` is read once at boot and
-never rebuilt until the process restarts. `subdirectory` narrows a git source
-to a path within the clone; `include` globs (see below) can reach the same
-effect without it, which is what the shipped example does.
+`catalogue/` imports no FastMCP, deliberately: the catalogue is testable without
+an MCP client, and `tests/test_skills.py` and `tests/test_uris.py` exercise the
+scoping rules directly rather than only through a tool call.
 
-`include` is globs per kind, relative to the source root; setting one
-*replaces* its convention rather than appending to it (`harvest.DEFAULTS` is
-what applies when `include` is left out entirely), and `[]` turns that kind
-off. A source joins a library — its own name unless it names one with
-`library:`, which is how several sources present as one grouping. A pack that
-references shared material outside its skills — penpot does, 190 times —
-names those directories in `include.files`, never `skills`, so they are served
-at `skill://<pack>/<path>` rather than indexed as skills themselves.
-`config.schema.json` is `Config.model_json_schema()`; add a `#
-yaml-language-server: $schema=./config.schema.json` modeline to a config file
-for an editor to validate it live, and regenerate the committed schema with
-`mcp-school schema > config.schema.json` after touching `config.py` —
-`tests/test_schema.py` fails when the two drift.
+## The surface, and why the tools are a mirror
 
-Then verify locally before pushing:
+Resources are the interface. The tools mirror them and nothing else:
+`list_resources()` returns the rows `resources/list` returns,
+`read_resource(uri)` takes the URI `resources/read` takes, and `list_prompts` /
+`get_prompt` do the same for prompts. An agent that can drive MCP resources can
+drive this server without learning anything.
 
-```bash
-python3 -m pytest -q
-mcp-school --config examples/config.yaml --cache-dir /tmp/mcp-school-cache \
-  --transport http --port 18000
-```
+Progressive disclosure lives in the address space, so adding a library adds
+neither tools nor listing rows:
 
-Then, from another shell, `curl -s localhost:18000/health` to confirm every
-source is `ok`. A git source needs the network for that first run; a pinned
-commit needs it once, to clone, and never again.
+| call | returns | cost |
+| --- | --- | --- |
+| list | one index per library and per group | ~1.9 KB for 90 skills |
+| read `skill://grafana-lgtm` | that group's skills, as URIs | ~4k chars |
+| read `skill://grafana/loki` | the instructions to follow | one file |
 
-Nesting depth does **not** matter. `harvest.skill_dirs` walks for `SKILL.md`
-through the `include` globs, so a flat source (`<pack>/<skill>/SKILL.md`,
-n8n) and a nested one (`<pack>/<group>/<skill>/SKILL.md`, grafana) both work.
-`harvest.group_of` turns the directory *containing* a skill into its `group`,
-which is why grafana has seven selectable groups and n8n has none worth
-naming.
+Reads return **only** what was asked for. A skill body may cite
+`references/FOO.md`; citing it does not fetch it. That laziness is the point —
+keep it when changing this code.
 
-## Bumping a pinned ref
+A client declares it cannot read resources with `?resources=off` or
+`X-MCP-Resources: off`, and only then is the resource mirror listed; prompts
+work the same way with `?prompts=off`. There is no protocol signal for either —
+prompts are a server capability, so a client cannot advertise using them. The
+tools stay callable either way: hiding one from a listing is presentation,
+refusing to run one would be a different and worse contract.
 
-Edit `ref` in the config and restart — a git source resolves it fresh on the
-next cold start, and the cache under the old commit is simply superseded. A
-source tracking a floating branch with a `refresh` interval needs no bump at
-all; it repins itself on its own schedule. Either way this is a config change,
-never a code change, and it ships however the config gets to the running
-container — this repo has no opinion on that path.
+Two ways to hard-scope, both ceilings the model cannot widen past:
 
-## Shipping a change
+- **A `Scope`, per client** — `?library=` / `?tags=` or the `X-Skill-Library` /
+  `X-Skill-Tags` headers (`X-Skill-Pack` is an alias). One deployment serves
+  many narrow agents; in n8n it is a Header Auth credential on the MCP Client
+  Tool node. Prefer this — a second copy of the server is a whole extra pod for
+  something a header solves.
+- **A config that lists less**, per deployment. Narrower blast radius, but a
+  whole pod.
 
-One workflow. It does not run on a push to main.
+They compose: the header narrows within whatever the config loads. Header
+scoping only exists inside an HTTP request, so it is inert over stdio — which is
+why `tests/test_header_scope.py` runs a real uvicorn server.
 
-**`🧬 Publish Version`** (`workflow_dispatch`) — four jobs:
-
-```
-test    → the full 3.11 → 3.14 matrix; gates everything below
-version → rolls CHANGELOG, commits + tags main
-image   → checks out that tag, builds and pushes kubed/mcp-school:vX.Y.Z
-package → checks out that tag, builds the sdist + wheel as a GHA artifact
-release → downloads that artifact and cuts the GitHub Release
-```
-
-Run it once with **`push: false`** first. That is a real dry run: it runs the
-tests, computes the next version, and builds both the image and the package
-without pushing any of them. Then run with `push: true`. The dry run is what
-stops a successful tag from stranding on a failed build.
-
-`image.yml` on its own, on a push to main, publishes `:main` and `:latest` for
-testing; publish is the only workflow that ever writes a semver tag. Nothing
-here deploys anything — that is the installer's job, against whatever image
-tag it chooses.
+`GET /health` reports the libraries, the skill and prompt counts, the
+catalogue's generation and when it was built, and each source's own status and
+fingerprint. `POST /reindex` returns the same payload plus `rebuilt`. Between
+them they answer the three questions worth asking of a running instance: did
+every configured source load, which generation is being served, and has a
+refresh picked up an edit yet.
 
 ## Things that already cost someone an afternoon
 
 - **`USER` in the Dockerfile must be numeric.** A Kubernetes pod spec with
-  `runAsNonRoot: true` refuses a non-numeric user — `image has non-numeric
-  user (nobody), cannot verify user is non-root` — and sits in
+  `runAsNonRoot: true` refuses a non-numeric user — `image has non-numeric user
+  (nobody), cannot verify user is non-root` — and sits in
   `CreateContainerConfigError`. It is `USER 65534` here; an installation's own
   `runAsUser` has to match it.
 - **The image build hands a venv between stages, and it has two rules.**
@@ -136,168 +169,100 @@ tag it chooses.
   `COPY . .` must stay *after* the dependency install: `.git` is in the build
   context for setuptools_scm, so copying the source first invalidates the
   dependency layer on every commit, docs-only ones included. Both are asserted
-  in `tests/test_packaging.py`, because the shape they replaced — builder builds
+  in `tests/test_packaging.py`, because the shape they replace — builder builds
   a wheel, runner installs it and every dependency a second time — reads as
   perfectly ordinary Dockerfile.
-- **The prompt mirror is FastMCP's `PromptsAsTools`, subclassed only to add read-only
-  annotations.** Keep it FastMCP's: a prompt is role-tagged messages, which a
-  resource or a hand-written tool would flatten to text.
+- **`kubed/` is a PEP 420 namespace and has no `__init__.py`.** That is what
+  lets `kubed.mcp_kb` and the sibling `kubed.selenium_flow` install side by
+  side. Adding one breaks the pair silently, in whichever environment resolves
+  second; `tests/test_packaging.py` fails if one appears.
+- **The prompt mirror is FastMCP's `PromptsAsTools`**, subclassed only to add
+  read-only annotations. Keep it FastMCP's: a prompt is role-tagged messages,
+  which a resource or a hand-written tool would flatten to text.
 - **Do not reach for `ResourcesAsTools`, or back for `SkillsDirectoryProvider`.**
-  Both enumerate every skill on every listing call — `resources/list` was 77KB
-  for this catalogue before `Catalogue` replaced it with a dozen indexes.
-  `SkillsDirectoryProvider` also keys a skill on its folder name alone, so two
-  packs shipping a `testing/` collapse into one and the loser vanishes from the
-  server entirely. Neither failure raises anything.
+  Both enumerate every skill on every listing call — `resources/list` is 1.9 KB
+  for this catalogue and was 77 KB before `Catalogue` replaced it with a dozen
+  indexes. `SkillsDirectoryProvider` also keys a skill on its folder name alone,
+  so two libraries shipping a `testing/` collapse into one and the loser
+  vanishes from the server entirely. Neither failure raises anything.
 - **A provider that stores a `Catalogue` serves the old generation forever** —
-  read through the getter (`lambda: school.snapshot.catalogue`), never a
+  read through the getter (`lambda: knowledge_base.snapshot.catalogue`), never a
   captured reference. A `Revalidator` has the same shape of bug and a nastier
-  symptom: a refresh exports a source to a *new* directory, so one that outlived
+  symptom: a refresh exports a source to a *new* directory, so one that outlives
   its snapshot goes on revalidating into a tree nothing is serving, and the edit
   never appears. It is built in `build_snapshot` and retired with the snapshot.
-- **`live` is a per-file ETag revalidation, not fsspec's `filecache`.** The saga
-  proposed chaining `filecache::webdav+https://…`, which is the off-the-shelf
-  answer and the wrong one: it stores files under hashed names in a cache
-  directory of its own, and everything downstream of a source here — the
-  harvest, the URI grammar, the traversal guard, `_manifest` — needs a real
-  directory tree of `Path`s. ~80 lines over webdav4 is the cost of keeping that
-  invariant.
+- **`live` is a per-file ETag revalidation, not fsspec's `filecache`.** Chaining
+  `filecache::webdav+https://…` is the off-the-shelf answer and the wrong one:
+  it stores files under hashed names in a cache directory of its own, and
+  everything downstream of a source here — the harvest, the URI grammar, the
+  traversal guard, `_manifest` — needs a real directory tree of `Path`s. ~80
+  lines over webdav4 is the cost of keeping that invariant.
 - **A fingerprint is published, so it stays small.** `build_snapshot` puts
   `record.fingerprint` straight into `/health` and `index.py` writes it to
-  `index.json`. A WebDAV source's whole `{path: etag}` map went into both before
-  it was reduced to a digest and a count. Whatever a new backend's fingerprint
-  returns, it is a thing an operator reads and a thing rewritten to disk on
-  every rebuild.
-- **A live read blocks the whole event loop, and that is still true.** The
-  resource and prompt handlers are `async`, and `Catalogue.read` under them is
-  synchronous — so ten concurrent reads of a source 300ms away take 3.0s,
-  perfectly serialized, and nothing else on the loop runs meanwhile, not
-  another source's read and not `/health`. What is bounded is the *failure*:
-  `REVALIDATE_TIMEOUT` caps one read and `COOLDOWN_SECONDS` stops a wedged
-  server costing anything after the first. **Making the read path async — a
-  thread for the blocking call, or an async webdav client — is the outstanding
-  follow-up**, and it is a change to `resources.py`, `prompts.py` and
-  `uris.py`, not to `live.py`.
+  `index.json`. Whatever a new backend's fingerprint returns is a thing an
+  operator reads and a thing rewritten to disk on every rebuild — a WebDAV
+  source's whole `{path: etag}` map does not belong in either.
+- **A live read blocks the whole event loop.** The resource and prompt handlers
+  are `async` and `Catalogue.read` under them is synchronous, so ten concurrent
+  reads of a source 300 ms away take 3.0 s, perfectly serialized, with nothing
+  else on the loop running meanwhile — not another source's read and not
+  `/health`. What is bounded is the *failure*: `REVALIDATE_TIMEOUT` caps one
+  read and `COOLDOWN_SECONDS` stops a wedged server costing anything after the
+  first. **Making the read path async — a thread for the blocking call, or an
+  async WebDAV client — is the outstanding follow-up**, and it is a change to
+  `mcp/resources.py`, `mcp/prompts.py` and `catalogue/uris.py`, not to
+  `sources/live.py`.
 - **An export is named by its version, so a rebuild of a version that has not
   moved is a rebuild over a tree being read.** That is the one case a repair
   happens at all — an export that lost files, or one a killed fetch left a temp
-  file in. `Exports.ensure` publishes to the next free name (`<version>.1`)
-  for exactly this reason; a "simplification" that renames onto `<version>`
-  brings back 2% empty reads under load. `tests/test_exports.py` holds it.
+  file in. `Exports.ensure` publishes to the next free name (`<version>.1`) for
+  exactly this reason; renaming onto `<version>` "for simplicity" brings back 2%
+  empty reads under load. `tests/test_exports.py` holds it.
 - **wsgidav's ETag is `inode-mtime-size`.** The test server's, not Nextcloud's,
   which is content-derived — so a test that edits a served file must change its
   *length*, or two writes in the same second are one ETag and the revalidation
   test passes for the wrong reason.
-
-## Where code goes
-
-The split follows the layout proposed in `modelcontextprotocol/python-sdk#1681`:
-**MCP wiring separate from tool implementations**, with pure logic factored out
-of the handlers. FastMCP has no `APIRouter` equivalent (`PrefectHQ/fastmcp#948`
-closed unanswered), so each module exposes a `register(mcp, index)` that the
-server calls. Mounting sub-servers is the other option and is wrong here: it
-namespaces tool names with a prefix, and these three names are the agent's API.
-
-- **Adding a tool** → `tools.py`. Never `server.py`. But think first: the tools
-  are a *mirror* of the resources, and a third tool that is not one breaks the
-  promise that drives the whole design — that a client which knows how to read
-  MCP resources already knows how to drive this server.
-- **Changing the URI grammar, or what a URI resolves to** → `uris.py`. Both
-  halves project from `Catalogue`, so a change there lands on both at once,
-  which is the point.
-- **Adding an endpoint** → `routes.py`.
-- **Adding a prompt** → a file matching a source's `include.prompts` glob (or the
-  `prompts/**/*.md` convention), named `<pack>_<file-stem>`. No code. Every
-  placeholder must be a declared argument and a required argument cannot have a
-  default; the server skips a file that breaks either rule, so
-  `tests/test_prompts.py` loads a broken one to prove that.
-- **A pack references files outside its skills** → add them to that source's
-  `include.files`. They are served at `skill://<pack>/<path>` and listed under
-  `skill://<pack>/_files`, never indexed as skills. The spec says a skill is
-  self-contained, so most sources need none — grep the SKILL.md files for
-  `shared/`-style paths before reaching for it.
-- **Changing what counts as a skill, or who may see one** → `skills.py` for the
-  rule, `uris.py` for where it is applied. Every `Catalogue` method takes
-  `pinned`, so there is no method that can be called without deciding about the
-  scope — a handler that reimplemented that filter is how a pinned client ends
-  up seeing another pack.
-- **A new flag or env var** → `main.py`, which is the whole configuration
-  surface. Nothing else in the package reads `os.environ`, except the
-  `{env: NAME}` resolver in `config.py`, which is the one other reader of the
-  environment.
-- **Anything that changes what the catalogue holds** goes through
-  `School.refresh` and produces a new `Snapshot`; never mutate one.
-
-`skills.py` imports no FastMCP, which is deliberate: the catalogue is testable
-without an MCP client, and `tests/test_skills.py` exercises the scoping rules
-directly rather than only through the tools.
-
-## The surface, and why it is two tools
-
-Resources are the interface. The tools are a mirror of them and nothing else:
-`list_resources()` returns the rows `resources/list` returns, `read_resource(uri)`
-takes the URI `resources/read` takes. An agent that can drive MCP resources can
-drive this server without learning anything, which is the whole design.
-
-Progressive disclosure moved into the address space, so adding packs adds
-neither tools nor listing rows:
-
-| call | returns | cost |
-| --- | --- | --- |
-| list | one index per pack and per group | ~1.9 KB for 90 skills |
-| read `skill://grafana-lgtm` | that group's skills, as URIs | ~4k chars |
-| read `skill://grafana/loki` | the instructions to follow | one file |
-
-Reads return **only** what was asked for. A skill body may cite
-`references/FOO.md`; citing it does not fetch it. That laziness is the point —
-keep it when changing this code.
-
-A client declares it cannot read resources with `?resources=off` or
-`X-MCP-Resources: off`, and only then is the resource mirror listed; prompts work
-the same way with `?prompts=off`. There is no protocol signal for either — prompts
-are a server capability, so a client cannot advertise using them. It stays callable
-either way: hiding a tool from a listing is presentation, refusing to run one
-would be a different and worse contract.
-
-Two ways to hard-scope, both ceilings the model cannot widen past:
-
-- **A `Scope`, per client** — `?library=` / `?tags=` or the `X-Skill-Library` /
-  `X-Skill-Tags` headers (`X-Skill-Pack` is an alias). One deployment serves many
-  narrow agents; in n8n it is a Header Auth credential on the MCP Client Tool node.
-  Every listing and read takes a `Scope` and must decide about it, so a new code
-  path cannot forget one.
-  Prefer this — a second copy of the server is a whole extra pod for no reason
-  a header could not solve first.
-- **A config that lists less**, per deployment. A deployment that should serve
-  less gets a config that lists less — narrower blast radius but a whole pod.
-
-They compose: the header narrows within whatever the config loads. Header
-scoping only exists inside an HTTP request, so it is inert over stdio — the
-tests in `tests/test_header_scope.py` run a real uvicorn server for that reason.
-
-`GET /health` reports the libraries, the skill and prompt counts, the
-catalogue's generation and when it was built, and each source's own status and
-fingerprint:
-
-```
-{"status":"ok","generation":N,"built":"...","libraries":[...],"skills":N,"prompts":N,"sources":{...}}
-```
-
-`POST /reindex` returns the same payload plus `"rebuilt":[names]`. Between them
-they answer the three questions worth asking of a running instance: did every
-configured source load, which generation is being served, and has a refresh
-picked up an edit yet.
+- **A glob ending in `**` is written `dir/**/*`.** Before Python 3.13 a trailing
+  `**` matches directories only, so the pattern serves nothing on the oldest
+  supported interpreter and everything on the newest, with no error either way.
+  `harvest._globstar` normalises one in a config; in this repo's own code, write
+  it out.
 
 ## House rules that apply here
 
-- Every PR needs a `CHANGELOG.md` entry under `[Unreleased]`; `pr.yml` enforces
-  it. Dependabot PRs carry the `no changelog` label, and `pr.yml` also skips the
-  gate for them unconditionally — a label is repository state anyone can delete,
-  and Dependabot silently drops a label that does not exist.
-- The gates on a PR are `Test (3.11)`, `Test (3.14)`, `Package`, and the four `quality.yml`
-  jobs. The image is deliberately not built on a PR; `quality.yml` lints the
-  Dockerfile and `package.yml` builds the wheel it wraps.
+- **The changelog is the release notes, not a work log.** `publish.yml` hands
+  `[Unreleased]` to `duplocloud/version-bump`, which puts it straight into the
+  GitHub Release with no editing pass in between. One short line per entry,
+  saying what someone can now do; the reasoning belongs here in `AGENTS.md`.
+  Internal work earns no line at all and takes the `no changelog` label. Only
+  ever edit `[Unreleased]`, and never write a version heading — `setuptools_scm`
+  reads versions from git tags and the release flow owns them. Full rules in
+  [CONTRIBUTING.md](CONTRIBUTING.md#the-changelog).
+- **`openapi.yaml` is generated and not committed.** It is in `.gitignore`.
+  Changes go in `spec/`; `scripts/generate_openapi.py` writes a copy to lint.
+- **The wiki is generated where the code knows the answer.**
+  `Configuration.md`, `Tools.md` and `Endpoints.md` come from
+  `scripts/generate_wiki.py`; hand-written prose for one goes in
+  `wiki/notes/<page>.notes.md`. The `.notes.md` suffix is load-bearing: a GitHub
+  wiki addresses a page by *basename* whatever directory it is in, so
+  `notes/Tools.md` would answer to the same URL as `Tools.md` and GitHub would
+  serve the fragment. `tests/test_wiki.py` fails on both drift and shadowing.
+- **Run Publish once with `push: false` first.** That is a real dry run: it runs
+  the tests, computes the next version, and builds both the image and the
+  package without pushing any of them. A failed build after a successful tag
+  strands a tag on a nonexistent image, which is exactly what the dry run buys.
+- **A credential never reaches a log, an error, a path on disk, the index,
+  `/health` or a served body.** A backend is config-only: no cache path, clone
+  path, WebDAV URL or backend name in a served URI, a listing row, a prompt name
+  or a body. A source URL carrying its own `user:token@` is refused, and the
+  refusal does not quote it back.
+- **Absent and out-of-scope must stay indistinguishable.** Every URI here is
+  guessable by design, so knowing a skill's name must not be enough to confirm
+  it exists.
 - `.github/zizmor.yml` and `.hadolint.yaml` record *why* each relaxed rule is
   relaxed. An ignore without a reason does not belong in either.
-- No `Makefile`. Everything is `pyproject.toml` plus `scripts/requirements.py`.
-- No auth on this server, by design: every skill it serves is public markdown
-  that is already on GitHub. Do not add a token without a reason to.
+- No `Makefile`. Everything is `pyproject.toml` plus the scripts in `scripts/`.
+- **No auth on this server, by design.** Every skill it serves is public
+  markdown already on GitHub, it has no write path, and it holds no credentials
+  beyond the `{env:}` references it resolves outbound. Do not add a token
+  without a concrete threat.

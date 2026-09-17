@@ -17,15 +17,19 @@ import sys
 from pathlib import Path
 
 from .config import ConfigError, load_config, schema
-from .server import School
+from .server import KnowledgeBase
 
-DEFAULT_CONFIG = Path("/etc/mcp-school/config.yaml")
-DEFAULT_CACHE_DIR = Path("/var/cache/mcp-school")
+DEFAULT_CONFIG = Path("/etc/mcp-kb/config.yaml")
+DEFAULT_CACHE_DIR = Path("/var/cache/mcp-kb")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="mcp-school", description="Serve Agent Skills over MCP."
+        prog="mcp-kb",
+        description=(
+            "Serve a knowledge base of skills, prompts and agent material "
+            "over MCP."
+        ),
     )
     parser.add_argument(
         "command",
@@ -67,7 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Entry point for the ``mcp-school`` console script."""
+    """Entry point for the ``mcp-kb`` console script."""
     args = build_parser().parse_args(argv)
     if args.command == "schema":
         print(json.dumps(schema(), indent=2))
@@ -76,9 +80,9 @@ def main(argv: list[str] | None = None) -> None:
         config = load_config(args.config)
     except ConfigError as exc:
         # A bad config must fail loudly at boot, not silently serve nothing.
-        print(f"mcp-school: {exc}", file=sys.stderr)
+        print(f"mcp-kb: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
-    server = School(config, args.cache_dir)
+    server = KnowledgeBase(config, args.cache_dir)
     server.run(transport=args.transport, host=args.host, port=args.port)
 
 

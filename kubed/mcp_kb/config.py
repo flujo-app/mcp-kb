@@ -183,6 +183,15 @@ class BasicAuth(Strict):
             return self.username.resolve().get_secret_value()
         return self.username
 
+    def pair(self) -> tuple[str, str]:
+        """Both halves, resolved together, for a client that wants the pair.
+
+        One call because either half may be an ``{env:}`` reference and so
+        either may be unset: a backend turning that into a failure of its own
+        source needs one guard around the resolution, not two.
+        """
+        return self.user(), self.password.resolve().get_secret_value()
+
 
 class GitSource(MirrorSource):
     """A git repository, cloned bare and shallow, exported at a ref."""
@@ -264,13 +273,6 @@ SCHEMES: dict[str, str] = {  # url scheme -> union tag
     "github": "git",
     "webdav+https": "webdav",
     "webdav+http": "webdav",
-}
-# Not read yet: the union's tags are the keys, and E6's backend registry is
-# written against this mapping rather than against a second copy of it.
-MODELS: dict[str, type[SourceBase]] = {
-    "file": FileSource,
-    "git": GitSource,
-    "webdav": WebdavSource,
 }
 
 

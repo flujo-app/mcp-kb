@@ -53,7 +53,7 @@ from .export import Exports
 # Written at the root of an export: the commit it holds, then how many files it
 # took. Hidden, so harvest.py's dot-file rule keeps it out of every listing by
 # itself.
-COMMIT_FILE = ".mcp-school-commit"
+COMMIT_FILE = ".mcp-kb-commit"
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
@@ -77,7 +77,7 @@ def fingerprint_git(source: GitSource, cache: Path, root: Path) -> dict:
     """The exported commit and its extent, plus what ``ref`` points at right now.
 
     Two different commits mean the export is behind the remote, which is
-    exactly when ``School.refresh`` should rebuild -- and the same two mean it
+    exactly when ``KnowledgeBase.refresh`` should rebuild -- and the same two mean it
     is not, however long ago the clone happened. ``files`` is what makes the
     export's own integrity part of the answer: a tree that lost files since it
     was written has moved as surely as the remote has, and a rebuild is what
@@ -158,12 +158,10 @@ def _callbacks(source: GitSource) -> pygit2.RemoteCallbacks | None:
     if source.auth is None:
         return None
     try:
-        user = source.auth.user()
-        password = source.auth.password.resolve().get_secret_value()
+        user, password = source.auth.pair()
     except ConfigError as exc:
-        # Both halves can be {env:} references, so both can be unset. Outside
-        # this guard a ConfigError is not a SourceError, and one unset variable
-        # would abort the whole pass instead of failing its own source.
+        # Outside this guard a ConfigError is not a SourceError, and one unset
+        # variable would abort the whole pass instead of failing its own source.
         raise SourceError(f"{source.name}: {exc}") from exc
     return pygit2.RemoteCallbacks(credentials=pygit2.UserPass(user, password))
 
@@ -267,12 +265,7 @@ def _tip(source: GitSource, cache: Path) -> str:
 
 def _exports(source: GitSource, cache: Path) -> Exports:
     """This source's export space: one directory per commit, stamped with it."""
-    return Exports(
-        name=source.name,
-        home=cache / "src" / source.name,
-        stamp=COMMIT_FILE,
-        version=SHA,
-    )
+    return Exports.under(cache, source.name, stamp=COMMIT_FILE, version=SHA)
 
 
 def _export(source: GitSource, cache: Path, bare: str, commit: str) -> Path:

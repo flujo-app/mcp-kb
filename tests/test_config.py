@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from mcp_school.config import (
+from kubed.mcp_kb.config import (
     BasicAuth,
     Config,
     ConfigError,
@@ -402,14 +402,14 @@ def test_a_username_can_be_a_literal_or_an_env_reference(monkeypatch):
     account is recreated, so `{env:}` has to be accepted on both halves of the
     pair -- while GitHub's literal `x-access-token` keeps working.
     """
-    monkeypatch.setenv("ACCOUNT", "mcp-school")
+    monkeypatch.setenv("ACCOUNT", "mcp-kb")
     monkeypatch.setenv("SECRET", "hunter2")
 
     literal = BasicAuth(username="x-access-token", password={"env": "SECRET"})
     assert literal.user() == "x-access-token"
 
     referenced = BasicAuth(username={"env": "ACCOUNT"}, password={"env": "SECRET"})
-    assert referenced.user() == "mcp-school"
+    assert referenced.user() == "mcp-kb"
     assert referenced.password.resolve().get_secret_value() == "hunter2"
 
 

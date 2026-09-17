@@ -4,9 +4,9 @@ import os
 
 import pytest
 
-from mcp_school.config import Config, FileSource
-from mcp_school.sources import SourceError, fingerprint, materialise, materialise_all
-from mcp_school.sources.file import fingerprint_file
+from kubed.mcp_kb.config import Config, FileSource
+from kubed.mcp_kb.sources import SourceError, fingerprint, materialise, materialise_all
+from kubed.mcp_kb.sources.file import fingerprint_file
 
 
 def test_a_file_source_is_served_in_place(tmp_path):

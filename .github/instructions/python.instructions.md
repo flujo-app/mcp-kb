@@ -1,6 +1,6 @@
 ---
 description: 'Python conventions for this repo'
-applyTo: 'mcp_school/**/*.py,scripts/**/*.py,tests/**/*.py'
+applyTo: 'kubed/**/*.py,scripts/**/*.py,tests/**/*.py'
 ---
 # Python conventions
 
@@ -60,7 +60,7 @@ calls, so they arrive as strings.
 - `pathlib` over `os.path`; f-strings over `%` or `.format`.
 - Module docstrings explain *why the module exists*, matching the existing files —
   not a restatement of the class names inside it.
-- ruff is the linter and the gate (`ruff check mcp_school scripts`). `tests/` is
+- ruff is the linter and the gate (`ruff check kubed scripts`). `tests/` is
   excluded by `[tool.ruff]`; don't ask for lint compliance there.
 
 ## Errors

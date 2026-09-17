@@ -56,11 +56,11 @@ if TYPE_CHECKING:
 # Written at the root of an export: what every file's ETag was when it was
 # copied, which is what a live read revalidates against. Hidden, so harvest.py's
 # dot-file rule keeps it out of every listing by itself.
-ETAGS_FILE = ".mcp-school-etags.json"
+ETAGS_FILE = ".mcp-kb-etags.json"
 
 # The export's completion stamp: the version it holds, then how many files it
 # took. export.py writes it, last of all.
-VERSION_FILE = ".mcp-school-version"
+VERSION_FILE = ".mcp-kb-version"
 
 VERSION = re.compile(r"^[0-9a-f]{64}$")
 
@@ -95,13 +95,11 @@ def client(source: WebdavSource, *, timeout: float | None = None) -> WebdavFileS
     is not, and ``live.py`` passes one; see ``REVALIDATE_TIMEOUT``.
     """
     try:
-        user = source.auth.user()
-        password = source.auth.password.resolve().get_secret_value()
+        user, password = source.auth.pair()
     except ConfigError as exc:
         # Config, not authentication: the variable was never set, so there is
-        # nothing to ask the server and no 401 to report. Both halves may be
-        # {env:} references, so both are resolved inside this guard -- outside
-        # it, one unset variable aborts the pass instead of failing its source.
+        # nothing to ask the server and no 401 to report. Outside this guard one
+        # unset variable aborts the pass instead of failing its own source.
         raise SourceError(f"{source.name}: {exc}") from exc
     opts = {} if timeout is None else {"timeout": timeout}
     return WebdavFileSystem(
@@ -216,12 +214,7 @@ def fetch_file(
 
 def _exports(source: WebdavSource, cache: Path) -> Exports:
     """This source's export space: one directory per ETag set, stamped with it."""
-    return Exports(
-        name=source.name,
-        home=cache / "src" / source.name,
-        stamp=VERSION_FILE,
-        version=VERSION,
-    )
+    return Exports.under(cache, source.name, stamp=VERSION_FILE, version=VERSION)
 
 
 def _etags(source: WebdavSource, fs: WebdavFileSystem) -> dict[str, str]:

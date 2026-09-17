@@ -3,7 +3,7 @@
 Every unit test here runs against a repository built in ``tmp_path`` and
 addressed as ``git+file:///…``. No test in the suite may need github.com to be
 reachable, so the one test that does is marked ``integration`` and skipped
-unless ``MCP_SCHOOL_NETWORK`` is set.
+unless ``MCP_KB_NETWORK`` is set.
 
 libgit2's local transport refuses a shallow fetch outright, so a ``git+file://``
 clone is a whole one and cannot show either the depth or a credential -- a local
@@ -24,11 +24,11 @@ from types import SimpleNamespace
 import pygit2
 import pytest
 
-from mcp_school import School
-from mcp_school.config import Config, GitSource
-from mcp_school.sources import SourceError, fingerprint, materialise
-from mcp_school.sources import export as exports
-from mcp_school.sources.git import COMMIT_FILE, resolve
+from kubed.mcp_kb import KnowledgeBase
+from kubed.mcp_kb.config import Config, GitSource
+from kubed.mcp_kb.sources import SourceError, fingerprint, materialise
+from kubed.mcp_kb.sources import export as exports
+from kubed.mcp_kb.sources.git import COMMIT_FILE, resolve
 
 SIGNATURE = pygit2.Signature("Test", "test@example.com", 1700000000, 0)
 
@@ -191,13 +191,13 @@ def test_a_new_export_leaves_the_old_one_whole(origin, tmp_path):
 def test_a_read_in_flight_survives_a_refresh_that_moved_the_ref(origin, tmp_path):
     """server.py's contract, for a git source: a request already in flight
     finishes against the catalogue it started with."""
-    school = School(_config(origin, ref="main"), tmp_path / "cache")
-    serving = school.snapshot
+    knowledge_base = KnowledgeBase(_config(origin, ref="main"), tmp_path / "cache")
+    serving = knowledge_base.snapshot
     _advance(origin)
 
-    assert school.refresh() == ["pack"]
+    assert knowledge_base.refresh() == ["pack"]
     assert "second" in serving.catalogue.read("skill://pack/x")
-    assert "third" in school.catalogue.read("skill://pack/x")
+    assert "third" in knowledge_base.catalogue.read("skill://pack/x")
 
 
 @pytest.mark.unit
@@ -245,11 +245,11 @@ def test_a_truncated_export_is_rebuilt_across_a_restart(origin, tmp_path):
     tree whose bodies are gone."""
     cache = tmp_path / "cache"
     config = _config(origin, ref="main")
-    School(config, cache)
+    KnowledgeBase(config, cache)
     export = next((cache / "src" / "pack").iterdir())
     (export / "skills" / "x" / "SKILL.md").unlink()
 
-    restarted = School(config, cache)
+    restarted = KnowledgeBase(config, cache)
     restarted.refresh()
 
     assert restarted.status["pack"]["status"] == "ok"
@@ -484,15 +484,15 @@ def test_a_git_source_is_served_without_naming_git_anywhere(origin, tmp_path):
             ]
         }
     )
-    school = School(config, tmp_path / "cache")
+    knowledge_base = KnowledgeBase(config, tmp_path / "cache")
 
-    assert [s.name for s in school.index.visible()] == ["x"]
-    assert school.status["pack"]["status"] == "ok"
-    rows = "\n".join(str(entry) for entry in school.catalogue.entries())
+    assert [s.name for s in knowledge_base.index.visible()] == ["x"]
+    assert knowledge_base.status["pack"]["status"] == "ok"
+    rows = "\n".join(str(entry) for entry in knowledge_base.catalogue.entries())
     assert COMMIT_FILE not in rows
     assert "cache" not in rows
     assert origin.second not in rows
-    assert school.resources.files("pack") == ["docs/guide.md"]
+    assert knowledge_base.resources.files("pack") == ["docs/guide.md"]
 
 
 # -- a remote that actually authenticates --------------------------------------
@@ -674,7 +674,7 @@ def test_a_pin_below_the_shallow_tip_is_fetched_by_sha(private, tmp_path, monkey
 
 @pytest.mark.integration
 @pytest.mark.skipif(
-    not os.environ.get("MCP_SCHOOL_NETWORK"), reason="needs GitHub over the network"
+    not os.environ.get("MCP_KB_NETWORK"), reason="needs GitHub over the network"
 )
 def test_github_shorthand_against_the_real_thing(tmp_path):
     source = GitSource(

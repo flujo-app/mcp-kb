@@ -4,9 +4,10 @@ Operational, not agent-facing: these answer "what is this pod running?" for a
 kubelet probe or a human with curl, and are deliberately outside the MCP
 protocol so checking them needs no MCP client.
 
-Both routes read the school's current snapshot when they are called, not one
-captured at registration, so what they report is what the server is serving
-right now.
+``/health`` and ``/reindex`` read the knowledge base's current snapshot when
+they are called, not one captured at registration, so what they report is
+what the server is serving right now. ``/openapi.yaml`` describes those two
+routes and is the one built once, at registration -- see ``spec/builder.py``.
 """
 
 from __future__ import annotations
@@ -14,21 +15,28 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+import yaml
 from fastmcp import FastMCP
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
+
+from .spec import build_spec
 
 if TYPE_CHECKING:
-    from .server import School
+    from .server import KnowledgeBase
 
 log = logging.getLogger(__name__)
 
 
-def register(mcp: FastMCP, school: School) -> None:
+def register(mcp: FastMCP, knowledge_base: KnowledgeBase) -> None:
     """Register the HTTP routes on ``mcp``."""
+    # Built once, here, rather than per request or lazily on first hit: the
+    # document describes the routes this function registers, not the
+    # catalogue, so nothing about it can change while the process runs.
+    spec_yaml = yaml.safe_dump(build_spec(), sort_keys=False, width=100)
 
     def report() -> dict:
-        snapshot = school.snapshot
+        snapshot = knowledge_base.snapshot
         # A stale source is still being served from its last good harvest, so
         # its library is still here; only a failed one has nothing to list.
         libraries = sorted(
@@ -52,6 +60,15 @@ def register(mcp: FastMCP, school: School) -> None:
                 for name, info in snapshot.status.items()
             },
         }
+
+    @mcp.custom_route("/openapi.yaml", methods=["GET"])
+    async def openapi_yaml(_request: Request) -> Response:
+        """This HTTP surface as OpenAPI 3.1.
+
+        Unauthenticated, like /health: there is no auth on this server at
+        all, so there is no credential to gate a description of it behind.
+        """
+        return Response(spec_yaml, media_type="text/yaml")
 
     @mcp.custom_route("/health", methods=["GET"])
     async def health(_request: Request) -> JSONResponse:
@@ -86,7 +103,7 @@ def register(mcp: FastMCP, school: School) -> None:
         for good.
         """
         try:
-            rebuilt = await school.refresh_async(force=True)
+            rebuilt = await knowledge_base.refresh_async(force=True)
         except Exception as exc:
             log.exception("reindex failed")
             return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)

@@ -6,11 +6,10 @@ returns, ``read_resource`` takes the URI ``resources/read`` takes. An agent that
 knows how to drive MCP resources already knows how to drive these, because the
 vocabulary is the same one -- list addresses, read an address.
 
-That is the whole design rule here. The previous surface invented a second
-vocabulary (``read_skill(skill, file)``, ``read_pack_file(pack, file)``) for the
-same act, which meant a model had to learn where a file lived before it could
-ask for it -- and a reference inside a SKILL.md does not say which side of that
-line it falls on.
+That is the whole design rule here. A second vocabulary for the same act --
+``read_skill(skill, file)`` beside ``read_pack_file(pack, file)`` -- makes a
+model learn where a file lives before it can ask for it, and a reference inside
+a SKILL.md does not say which side of that line it falls on.
 
 Progressive disclosure survives the collapse, because it moved into the address
 space rather than into the tool list::
@@ -29,16 +28,17 @@ from collections.abc import Callable
 
 from fastmcp import FastMCP
 
-from .request import requested_scope
-from .uris import Catalogue
+from ..catalogue.uris import Catalogue
+from .request import full_listing, requested_scope
 
 LIST_TOOL = "list_resources"
 READ_TOOL = "read_resource"
 MIRROR_TOOLS = {LIST_TOOL, READ_TOOL}
 
-# Both only read files baked into the image: nothing changes, a repeat call gives
-# the same answer, and nothing outside this package is reached. Left off, MCP's
-# defaults advertise a tool as destructive, and a client may confirm every read.
+# Both only read the catalogue this pod already harvested: nothing changes, a
+# repeat call gives the same answer, and no source is reached to serve one. Left
+# off, MCP's defaults advertise a tool as destructive, and a client may confirm
+# every read.
 READ_ONLY = {
     "read_only_hint": True,
     "destructive_hint": False,
@@ -67,7 +67,8 @@ def register(mcp: FastMCP, catalogue: Callable[[], Catalogue]) -> set[str]:
         This returns exactly what an MCP `resources/list` would, so a `uri` from
         here can be read with `read_resource` or with your own resource reader.
         """
-        return [entry.as_dict() for entry in catalogue().entries(requested_scope())]
+        entries = catalogue().entries(requested_scope(), full=full_listing())
+        return [entry.as_dict() for entry in entries]
 
     @mcp.tool(annotations={"title": "Read a skill resource", **READ_ONLY})
     def read_resource(uri: str) -> str:

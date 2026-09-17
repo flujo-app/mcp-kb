@@ -33,7 +33,7 @@ on:
     - docker-compose.yaml
     - pyproject.toml
     - .github/workflows/image.yml
-    - mcp_school/**
+    - kubed/**
     # Not in the wheel, but the Dockerfile COPYs it: requirements.py decides
     # which dependencies the venv gets. tests/test_packaging.py derives this
     # from the Dockerfile's own COPY lines rather than trusting the list.
@@ -81,7 +81,7 @@ jobs:
       PUSH: ${{ (github.event_name == 'push' || ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.push)) && 'true' || 'false' }}
     environment:
       name: ${{ (github.event_name == 'push' || ((github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && inputs.push)) && 'dockerhub' || '' }}
-      url: https://hub.docker.com/r/kubed/mcp-school
+      url: https://hub.docker.com/r/kubed/mcp-kb
     steps:
 
     - name: Checkout Code
@@ -129,4 +129,4 @@ jobs:
         # empty output), so the expression never parses an empty string.
         username: ${{ env.PUSH == 'true' && fromJson(steps.secrets.outputs.dockerhub).username || '' }}
         password: ${{ env.PUSH == 'true' && fromJson(steps.secrets.outputs.dockerhub).password || '' }}
-        repository: kubed/mcp-school
+        repository: kubed/mcp-kb

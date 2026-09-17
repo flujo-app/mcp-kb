@@ -2,11 +2,11 @@
 
 Every backend that copies a source into ``<cache>/src/<name>`` has the same
 problem, and it is not about git or about WebDAV: a refresh happens while the
-pre-swap snapshot is still serving the tree the refresh is replacing. E3 shipped
-``rmtree(dest)`` then ``rename(tmp, dest)`` and it corrupted 56 of 222
-concurrent reads on one ordinary refresh; worse, a crash inside that window left
-a half tree still carrying its completion stamp, which the next start trusted
-and served nothing out of while reporting ``ok``.
+pre-swap snapshot is still serving the tree the refresh is replacing.
+``rmtree(dest)`` then ``rename(tmp, dest)`` is the obvious way to do it, and it
+corrupted 56 of 222 concurrent reads on one ordinary refresh; worse, a crash
+inside that window leaves a half tree still carrying its completion stamp,
+which the next start trusts and serves nothing out of while reporting ``ok``.
 
 So a tree is never rewritten in place. Each *version* of a source gets a
 directory of its own under the source's home, and the backend says what a
@@ -87,6 +87,17 @@ class Exports:
     home: Path
     stamp: str
     version: re.Pattern[str]
+
+    @classmethod
+    def under(
+        cls, cache: Path, name: str, *, stamp: str, version: re.Pattern[str]
+    ) -> Exports:
+        """``name``'s export space under ``cache``: one home, a directory per version.
+
+        The layout is the same whichever backend fills it, so it is spelled
+        here rather than once per backend that copies a tree into the cache.
+        """
+        return cls(name=name, home=cache / "src" / name, stamp=stamp, version=version)
 
     def ensure(self, version: str, build: Callable[[Path], None]) -> Path:
         """``version``'s tree under ``home``, built by ``build`` if there is none.

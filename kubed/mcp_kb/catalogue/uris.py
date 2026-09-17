@@ -25,9 +25,8 @@ The grammar, which is the whole API::
 One segment is an index, two or more is content: that is the only rule needed to
 tell them apart, and it is why the group indexes live in the pack's own
 namespace (``skill://grafana-lgtm``) rather than under it. ``selector`` accepts a
-pack or a group for the same reason the old ``pack`` argument did -- an agent
-narrowing to ``grafana-lgtm`` should not first have to learn it lives in
-``grafana``.
+pack or a group for the same reason: an agent narrowing to ``grafana-lgtm``
+should not first have to learn that it lives in ``grafana``.
 
 Pack-qualified, unlike the URIs FastMCP's ``SkillsDirectoryProvider`` mints.
 Those are keyed on the folder name alone, so two packs shipping a ``testing/``
@@ -51,8 +50,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..mcp.scope import EVERYTHING, Scope
 from .harvest import hidden
-from .scope import EVERYTHING, Scope
 from .skills import PackResources, Skill, SkillIndex
 
 SCHEME = "skill://"
@@ -267,7 +266,7 @@ class Catalogue:
                 )
                 for group in groups
             ]
-            if self._resources.files(pack, scope.tags):
+            if self._pack_files(pack, scope):
                 entries.append(
                     Entry(
                         f"{SCHEME}{pack}/{PACK_FILES}",
@@ -291,6 +290,29 @@ class Catalogue:
                 for skill in sorted(visible, key=lambda s: s.qualified)
             ]
         return entries
+
+    # -- what a scope may see -----------------------------------------------
+
+    def _admits(self, pack: str, scope: Scope) -> bool:
+        """Whether a caller restricted to ``scope`` may see ``pack`` at all.
+
+        Asked of the skills, because they are the only thing that knows: a pack
+        is in scope when some skill of it is. ``PackResources`` scopes its own
+        roots by tag and cannot answer this -- it knows which packs exist, not
+        which this caller was given.
+        """
+        return not scope or any(s.pack == pack for s in self._index.visible(scope))
+
+    def _pack_files(self, pack: str, scope: Scope) -> list[str]:
+        """The pack-level files this caller may see, empty when there are none.
+
+        Both halves of the pack-files rule in one place: the listing offers a
+        ``_files`` row exactly when reading one would return a body, and a pack
+        out of scope entirely has neither.
+        """
+        if not self._admits(pack, scope):
+            return []
+        return self._resources.files(pack, scope.tags)
 
     # -- reading ------------------------------------------------------------
 
@@ -345,11 +367,10 @@ class Catalogue:
         if skill is not None:
             return self._skill_file(skill, rest or MAIN_FILE)
         if path == PACK_FILES:
-            return self._pack_files(pack, scope)
+            return self._pack_files_body(pack, scope)
         # Not a skill, so it is pack-level material. PackResources applies its
-        # own scoping, but the scope has to be checked here too: it knows which
-        # packs exist, not which this caller may see.
-        if scope and not any(s.pack == pack for s in self._index.visible(scope)):
+        # own scoping by tag, but pack visibility is this class's to decide.
+        if not self._admits(pack, scope):
             return None
         return self._resources.read(pack, path, scope.tags)
 
@@ -362,6 +383,10 @@ class Catalogue:
                 if self._revalidate is not None:
                     self._revalidate(path)
             return _manifest_json(skill)
+        # The manifest leaves hidden files out, so a read does too: a `.env`
+        # beside a SKILL.md is not served to whoever guesses its name.
+        if hidden(Path(file)):
+            return None
         # Resolve before comparing, which is what blocks ../ and a symlink
         # pointing out of the skill directory.
         target = (skill.path / file).resolve()
@@ -373,10 +398,8 @@ class Catalogue:
             self._revalidate(target)
         return target.read_text(encoding="utf-8", errors="replace")
 
-    def _pack_files(self, pack: str, scope: Scope) -> str | None:
-        if scope and not any(s.pack == pack for s in self._index.visible(scope)):
-            return None
-        files = self._resources.files(pack, scope.tags)
+    def _pack_files_body(self, pack: str, scope: Scope) -> str | None:
+        files = self._pack_files(pack, scope)
         if not files:
             return None
         lines = [f"{SCHEME}{pack}/{f}" for f in files]

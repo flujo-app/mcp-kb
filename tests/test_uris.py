@@ -9,9 +9,9 @@ import json
 
 import pytest
 
-from mcp_school.scope import Scope
-from mcp_school.skills import PackResources, SkillIndex, load_skills
-from mcp_school.uris import Catalogue, parse, uri_for
+from kubed.mcp_kb.catalogue.skills import PackResources, SkillIndex, load_skills
+from kubed.mcp_kb.catalogue.uris import Catalogue, parse, uri_for
+from kubed.mcp_kb.mcp.scope import Scope
 from tests.conftest import build_pack_resources, load_all_skills
 
 

@@ -30,7 +30,7 @@ on:
   push:
     branches: [main]
     paths:
-    - mcp_school/**
+    - kubed/**
     - tests/**
     - scripts/**
     - pyproject.toml
@@ -69,6 +69,9 @@ jobs:
         # setuptools_scm needs history to resolve a version at install time.
         fetch-depth: 0
         persist-credentials: false
+        # tests/test_wiki.py skips without it, and a skipped staleness check is
+        # a pull request that merges a wiki describing the previous server.
+        submodules: true
 
     - name: Setup Python
       uses: actions/setup-python@v7

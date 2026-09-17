@@ -6,9 +6,11 @@ name: 🧬 Publish Version
 #
 #   test    → the full 3.11 → 3.14 matrix. A release is the one moment the
 #             compatibility sweep has to be green, so it gates everything below.
-#   version → roll CHANGELOG [Unreleased], commit + tag on main
-#   image   → check out that tag and build+push kubed/mcp-school:<tag>
+#   version → roll CHANGELOG [Unreleased], commit + tag on main. The ONLY job
+#             that writes a file or a tag; it emits the tag consumed downstream.
+#   image   → check out that tag and push kubed/mcp-kb:<tag>
 #   package → check out that tag and build the sdist + wheel → GHA artifact
+#   wiki    → regenerate and publish the wiki from that tag
 #   release → download the package artifact and cut the GitHub Release
 #
 # `release` runs last and needs no source checkout: it is pure artifact plus
@@ -48,11 +50,10 @@ on:
         default: false
         type: boolean
 
+# Least privilege by default. `version`, `wiki` and `release` opt up in their own
+# blocks; nothing else writes anything or needs a GCP identity.
 permissions:
-  # contents: write because the version job rolls CHANGELOG.md and pushes the
-  # release tag to main.
-  contents: write
-  id-token: write   # GCP workload-identity federation
+  contents: read
 
 jobs:
 
@@ -67,10 +68,20 @@ jobs:
     name: Version
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # commit the rolled CHANGELOG and push the tag to main
+      id-token: write   # GCP workload-identity federation, for the App token
+    # Deliberately NO release-notes output. GitHub refuses to set a job output
+    # whose value contains a registered secret, and the notes always contain
+    # `kubed-io` — every PR link generated for this repo does — which is a
+    # substring of a secret this workflow carries. The runner then logs
+    # "Skip output 'release-notes' since it may contain secret" as a *warning*
+    # and the job goes green with the output silently empty, which is how a
+    # release ships with no notes at all. The notes travel as an artifact
+    # instead: artifact contents are not masked.
     outputs:
       tag: ${{ steps.bump.outputs.tag }}
       version: ${{ steps.bump.outputs.version }}
-      release-notes: ${{ steps.bump.outputs.release-notes }}
     steps:
 
     - name: Validate Branch
@@ -104,6 +115,9 @@ jobs:
       with:
         client-id: ${{ fromJson(steps.secrets.outputs.github_app).github_app_client_id }}
         private-key: ${{ fromJson(steps.secrets.outputs.github_app).github_app_private_key }}
+        # Without a permission-* input the token carries every permission the
+        # App is installed with; a commit and a push need contents alone.
+        permission-contents: write
 
     - name: Checkout
       uses: actions/checkout@v7
@@ -129,6 +143,34 @@ jobs:
         push: ${{ inputs.push }}
         token: ${{ steps.app-token.outputs.token }}
 
+    # A step output is not subject to the job-output secret check, so the notes
+    # are readable here even though they cannot be published as a job output.
+    # Written to a file and carried on as an artifact.
+    #
+    # Empty is a hard failure, not a warning. These notes ARE the release —
+    # rolling CHANGELOG [Unreleased] is the one thing this job exists to do —
+    # and an empty body is exactly the kind of nothing that sails through a
+    # green run and is only noticed by whoever reads the release later.
+    - name: Save the Release Notes
+      env:
+        NOTES: ${{ steps.bump.outputs.release-notes }}
+      run: |
+        mkdir -p notes
+        printf '%s\n' "$NOTES" > notes/release-notes.md
+        if [[ ! -s notes/release-notes.md || -z "$(tr -d '[:space:]' < notes/release-notes.md)" ]]; then
+          echo "::error::The release notes came back empty. The GitHub Release \
+        would have no changelog, so this fails here rather than publishing one."
+          exit 1
+        fi
+        echo "Release notes: $(wc -l < notes/release-notes.md) lines." >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload the Release Notes
+      uses: actions/upload-artifact@v7
+      with:
+        name: release-notes
+        path: notes/release-notes.md
+        retention-days: 1
+
   # Build + push the image at the freshly tagged commit. On a dry run there is no
   # tag, so it builds the current ref without pushing (proves it still builds).
   image:
@@ -148,6 +190,28 @@ jobs:
     uses: ./.github/workflows/package.yml
     with:
       tag: ${{ inputs.push && needs.version.outputs.tag || '' }}
+
+  # Runs alongside `image`, not after it: three of the wiki's pages are generated
+  # from the live config models, a live server's tool list and the OpenAPI
+  # document, none of which has anything to do with the container, so serialising
+  # them would only make the release slower. Deliberately NOT in `release`'s
+  # needs — a wiki that fails to publish should not hold back an image that is
+  # already on Docker Hub.
+  #
+  # It takes no `secrets:` because it needs none: wiki.yml reads GCP_WIF_PROVIDER
+  # and GCP_PROJECT itself, and repository variables reach a called workflow in
+  # the same repository without being passed.
+  wiki:
+    name: Publish Wiki
+    needs: version
+    if: inputs.push
+    permissions:
+      contents: write   # the wiki repo lives under this repository's permissions
+      id-token: write   # GCP workload-identity federation, for the App token
+    uses: ./.github/workflows/wiki.yml
+    with:
+      push: true
+      tag: ${{ needs.version.outputs.tag }}
 
   release:
     name: Release
@@ -169,34 +233,84 @@ jobs:
         name: ${{ needs.package.outputs.package }}
         path: dist
 
+    - name: Download the Release Notes
+      uses: actions/download-artifact@v8
+      with:
+        name: release-notes
+        path: notes
+
+    - name: Show Release Assets
+      run: ls -l dist notes
+
+    # Composed into a file rather than inlined into the action's `body:`, because
+    # the notes cannot travel as a job output — see the `version` job. Everything
+    # around them is static text about where to get what was just published.
+    - name: Compose the Release Body
+      env:
+        SERVER: ${{ github.server_url }}
+        REPO: ${{ github.repository }}
+        RUN_ID: ${{ github.run_id }}
+        TAG: ${{ needs.version.outputs.tag }}
+        WHEEL: ${{ needs.package.outputs.wheel }}
+      run: |
+        {
+          echo "[![Publish](${SERVER}/${REPO}/actions/workflows/publish.yml/badge.svg)](${SERVER}/${REPO}/actions/runs/${RUN_ID})"
+          echo "[![Image Builder](${SERVER}/${REPO}/actions/workflows/image.yml/badge.svg)](${SERVER}/${REPO}/actions/workflows/image.yml)"
+          echo "[![Test](${SERVER}/${REPO}/actions/workflows/test.yml/badge.svg)](${SERVER}/${REPO}/actions/workflows/test.yml)"
+          echo "[![Quality](${SERVER}/${REPO}/actions/workflows/quality.yml/badge.svg)](${SERVER}/${REPO}/actions/workflows/quality.yml)"
+          echo
+          cat notes/release-notes.md
+          echo
+          echo "## Container image"
+          echo
+          echo "The image is what this repo ships, and what a deployment runs:"
+          echo
+          echo '```sh'
+          echo "docker pull kubed/mcp-kb:${TAG}"
+          echo '```'
+          echo
+          echo "## Python package"
+          echo
+          echo "Not on PyPI. The wheel and sdist are attached to this release:"
+          echo
+          echo '```sh'
+          echo "pip install ${SERVER}/${REPO}/releases/download/${TAG}/${WHEEL}"
+          echo '```'
+          echo
+          echo "Or straight from the tag:"
+          echo
+          echo '```sh'
+          echo "pip install git+${SERVER}/${REPO}.git@${TAG}"
+          echo '```'
+          echo
+          echo "The manual is the [wiki](${SERVER}/${REPO}/wiki)."
+        } > body.md
+        cat body.md >> "$GITHUB_STEP_SUMMARY"
+
     - name: Create Release
       uses: softprops/action-gh-release@v3.0.3
       with:
         name: ${{ needs.version.outputs.tag }}
         tag_name: ${{ needs.version.outputs.tag }}
         prerelease: ${{ contains(needs.version.outputs.tag, '-') }}
+        body_path: body.md
         files: |
           dist/${{ needs.package.outputs.sdist }}
           dist/${{ needs.package.outputs.wheel }}
-        body: |
-          [![Image Builder](${{ github.server_url }}/${{ github.repository }}/actions/workflows/image.yml/badge.svg)](${{ github.server_url }}/${{ github.repository }}/actions/workflows/image.yml)
 
-          Image: `kubed/mcp-school:${{ needs.version.outputs.tag }}`
-
-          ${{ needs.version.outputs.release-notes }}
-
+    # The notes are already in the summary, printed by "Compose the Release
+    # Body" — this is the what-shipped-where table that goes above them.
     - name: Summary
       env:
         TAG: ${{ needs.version.outputs.tag }}
-        RELEASE_NOTES: ${{ needs.version.outputs.release-notes }}
+        VERSION: ${{ needs.package.outputs.version }}
+        WHEEL: ${{ needs.package.outputs.wheel }}
       run: |
-        {
-          echo "## Publish"
-          echo ""
-          echo "- **Tag**: $TAG"
-          echo "- **Image**: kubed/mcp-school:$TAG"
-          echo ""
-          echo "### Release Notes"
-          echo ""
-          echo "$RELEASE_NOTES"
-        } >> "$GITHUB_STEP_SUMMARY"
+        cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+        ## Publish
+
+        - **Tag**: \`${TAG}\`
+        - **Version**: \`${VERSION}\`
+        - **Image**: \`kubed/mcp-kb:${TAG}\`
+        - **Wheel**: \`${WHEEL}\`
+        EOF

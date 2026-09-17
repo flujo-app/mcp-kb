@@ -6,8 +6,8 @@ rather than only through the tools that call it.
 
 import pytest
 
-from mcp_school.scope import Scope
-from mcp_school.skills import PackResources, SkillIndex, load_skills
+from kubed.mcp_kb.catalogue.skills import PackResources, SkillIndex, load_skills
+from kubed.mcp_kb.mcp.scope import Scope
 from tests.conftest import build_pack_resources, load_all_skills
 
 
@@ -123,7 +123,7 @@ def test_listing_never_walks_the_disk_after_startup(skills_dir, monkeypatch):
     import os
     import pathlib
 
-    from mcp_school.uris import Catalogue
+    from kubed.mcp_kb.catalogue.uris import Catalogue
 
     skills = load_all_skills(skills_dir)
     resources = build_pack_resources(skills_dir)

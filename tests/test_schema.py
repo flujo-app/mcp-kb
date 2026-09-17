@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from mcp_school.config import schema
-from mcp_school.main import build_parser, main
+from kubed.mcp_kb.config import schema
+from kubed.mcp_kb.main import build_parser, main
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_the_committed_schema_is_the_model():
     committed = json.loads((ROOT / "config.schema.json").read_text())
     assert committed == schema(), (
-        "config.schema.json is stale: run `mcp-school schema > config.schema.json`"
+        "config.schema.json is stale: run `mcp-kb schema > config.schema.json`"
     )
 
 
@@ -33,4 +33,4 @@ def test_serve_with_a_missing_config_exits_2_with_a_message_on_stderr(capsys):
         main(["serve", "--config", "/nope"])
     assert raised.value.code == 2
     err = capsys.readouterr().err
-    assert "mcp-school:" in err and "/nope" in err
+    assert "mcp-kb:" in err and "/nope" in err

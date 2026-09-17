@@ -22,7 +22,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
-from .config import Include
+from ..config import Include
 
 MAIN_FILE = "SKILL.md"
 
@@ -160,9 +160,9 @@ def skill_dirs(root: Path, include: Include) -> list[Path]:
 
     A matched directory contributes every skill beneath it, so pointing at a
     leaf registers one and pointing at a composite registers the set -- which
-    is what a folder of folders already means to a reader. Without this, the
-    directory spelling matched nothing and said nothing, the same silent empty
-    a trailing ``**`` used to give.
+    is what a folder of folders already means to a reader. Without it the
+    directory spelling would match nothing and say nothing -- the same silent
+    empty ``_globstar`` exists to prevent.
     """
     base = root.resolve()
     found: set[Path] = set()

@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+import zipfile
 
 import pytest
 import yaml
@@ -149,7 +150,7 @@ def test_the_pygit2_floor_has_the_api_the_git_source_calls():
 
     1.15 to 1.18 have `ls_remotes` and nothing else, so a lower floor resolves —
     on any interpreter old enough for pip to pick one — to a pygit2 that sends
-    `School.__init__` out with an uncaught `AttributeError`. 1.19 is also the
+    `KnowledgeBase.__init__` out with an uncaught `AttributeError`. 1.19 is also the
     first release to require Python 3.11, which is why the floor here and the
     floor in `requires-python` move together.
     """
@@ -186,7 +187,7 @@ def _version(text: str) -> tuple[int, ...]:
 def test_every_package_in_the_tree_is_declared():
     """`packages` is a literal list, and a subpackage is not implied by it.
 
-    `mcp_school.sources` ships only because setuptools_scm's file finder sweeps
+    `kubed.mcp_kb.sources` ships only because setuptools_scm's file finder sweeps
     the checkout, which a build from an exported tarball has no way to do — so
     the list has to name every package itself, and nothing but this notices
     when a new one is added.
@@ -195,19 +196,20 @@ def test_every_package_in_the_tree_is_declared():
     declared = set(data["tool"]["setuptools"]["packages"])
     found = {
         str(init.parent.relative_to(REPO)).replace("/", ".")
-        for init in REPO.glob("mcp_school/**/__init__.py")
+        for init in REPO.glob("kubed/mcp_kb/**/__init__.py")
     }
     assert found, "no package found in the tree — this test proves nothing"
     assert found == declared
 
 
-@pytest.mark.integration
-def test_the_built_wheel_imports_with_no_checkout_to_sweep(tmp_path):
-    """The end of the argument: build it, install it, import it.
+@pytest.fixture
+def built_wheel(tmp_path):
+    """A wheel built from a copy of the repo with no `.git`.
 
-    Built from a copy with no `.git`, because that is the case the file finder
-    cannot rescue — and installed into a directory of its own, so what imports
-    is the wheel's `mcp_school` and never this repository's.
+    That is the case the setuptools_scm file finder cannot rescue, so what
+    ships is only what `packages` names explicitly. Shared by every test that
+    needs to inspect the wheel itself rather than what `pyproject.toml` merely
+    declares.
     """
     source = tmp_path / "src"
     shutil.copytree(
@@ -219,8 +221,17 @@ def test_the_built_wheel_imports_with_no_checkout_to_sweep(tmp_path):
     )
     env = {**os.environ, "SETUPTOOLS_SCM_PRETEND_VERSION": "0.0.0"}
     _run([sys.executable, "-m", "build", "--wheel", "--no-isolation"], source, env)
-    wheel = next((source / "dist").glob("*.whl"))
+    return next((source / "dist").glob("*.whl")), env
 
+
+@pytest.mark.integration
+def test_the_built_wheel_imports_with_no_checkout_to_sweep(built_wheel, tmp_path):
+    """The end of the argument: build it, install it, import it.
+
+    Installed into a directory of its own, so what imports is the wheel's
+    `kubed.mcp_kb` and never this repository's.
+    """
+    wheel, env = built_wheel
     installed = tmp_path / "installed"
     _run(
         [sys.executable, "-m", "pip", "install", "--no-deps", "-t", str(installed), str(wheel)],
@@ -229,7 +240,22 @@ def test_the_built_wheel_imports_with_no_checkout_to_sweep(tmp_path):
     )
 
     env["PYTHONPATH"] = os.pathsep.join([str(installed), env.get("PYTHONPATH", "")])
-    _run([sys.executable, "-c", "from mcp_school.server import School"], tmp_path, env)
+    _run([sys.executable, "-c", "from kubed.mcp_kb.server import KnowledgeBase"], tmp_path, env)
+
+
+@pytest.mark.integration
+def test_kubed_is_a_namespace_package(built_wheel):
+    """No `kubed/__init__.py`, in the tree or in the wheel.
+
+    That absence is what makes `kubed` a PEP 420 namespace rather than an
+    ordinary package -- the one thing that lets this wheel's `kubed.mcp_kb` and
+    the sibling `selenium-flow`'s `kubed.selenium_flow` install into the same
+    site-packages without one clobbering the other's `kubed/__init__.py`.
+    """
+    assert not (REPO / "kubed" / "__init__.py").exists()
+    wheel, _ = built_wheel
+    with zipfile.ZipFile(wheel) as archive:
+        assert "kubed/__init__.py" not in archive.namelist()
 
 
 def _run(command, cwd, env):
@@ -334,7 +360,7 @@ def test_the_cache_directory_exists_for_the_runtime_user():
     uid `USER` switches to — so it has to be owned before that switch happens."""
     runner = dockerfile_stages()["runner"]
     assert any(
-        "mkdir -p /var/cache/mcp-school" in ln and "chown 65534:65534" in ln
+        "mkdir -p /var/cache/mcp-kb" in ln and "chown 65534:65534" in ln
         for ln in runner
     )
 
@@ -370,7 +396,7 @@ def test_nothing_inherits_the_build_tooling():
 def test_the_env_defaults_match_mains():
     """The image's ``CONFIG``/``CACHE_DIR`` must be the same paths main.py falls
     back to when the env vars are unset, or the two silently drift apart."""
-    from mcp_school.main import DEFAULT_CACHE_DIR, DEFAULT_CONFIG
+    from kubed.mcp_kb.main import DEFAULT_CACHE_DIR, DEFAULT_CONFIG
 
     runner = "\n".join(dockerfile_stages()["runner"])
     config_match = re.search(r"\bCONFIG=(\S+?)\s*\\?$", runner, re.MULTILINE)
@@ -387,7 +413,7 @@ def test_the_copied_venv_is_proved_to_work_at_build_time():
     import pulls the whole dependency tree.
     """
     runner = dockerfile_stages()["runner"]
-    assert any("mcp_school.server" in ln for ln in runner)
+    assert any("kubed.mcp_kb.server" in ln for ln in runner)
 
 
 def test_the_project_install_resolves_its_dependencies():

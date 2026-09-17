@@ -17,11 +17,11 @@ from pathlib import Path
 
 import pytest
 
-from mcp_school import School
-from mcp_school.config import Config, WebdavSource
-from mcp_school.sources import SourceError, fingerprint, materialise
-from mcp_school.sources import export as exports
-from mcp_school.sources.webdav import ETAGS_FILE, VERSION_FILE, client, fetch_file
+from kubed.mcp_kb import KnowledgeBase
+from kubed.mcp_kb.config import Config, WebdavSource
+from kubed.mcp_kb.sources import SourceError, fingerprint, materialise
+from kubed.mcp_kb.sources import export as exports
+from kubed.mcp_kb.sources.webdav import ETAGS_FILE, VERSION_FILE, client, fetch_file
 from tests.webdav_server import PASSWORD, USERNAME
 
 pytestmark = pytest.mark.unit
@@ -461,17 +461,17 @@ def test_a_webdav_source_is_served_without_naming_the_backend_anywhere(
             ]
         }
     )
-    school = School(config, tmp_path / "cache")
+    knowledge_base = KnowledgeBase(config, tmp_path / "cache")
 
-    assert [s.name for s in school.index.visible()] == ["x"]
-    assert school.status["notes"]["status"] == "ok"
-    assert "first" in school.catalogue.read("skill://notes/x")
-    rows = "\n".join(str(entry) for entry in school.catalogue.entries())
+    assert [s.name for s in knowledge_base.index.visible()] == ["x"]
+    assert knowledge_base.status["notes"]["status"] == "ok"
+    assert "first" in knowledge_base.catalogue.read("skill://notes/x")
+    rows = "\n".join(str(entry) for entry in knowledge_base.catalogue.entries())
     assert "webdav" not in rows
     assert "127.0.0.1" not in rows
     assert "cache" not in rows
     assert ETAGS_FILE not in rows and VERSION_FILE not in rows
-    assert school.resources.files("notes") == ["docs/guide.md"]
+    assert knowledge_base.resources.files("notes") == ["docs/guide.md"]
 
 
 def test_a_webdav_source_that_cannot_be_reached_fails_only_itself(webdav, tmp_path):
@@ -494,11 +494,11 @@ def test_a_webdav_source_that_cannot_be_reached_fails_only_itself(webdav, tmp_pa
             ]
         }
     )
-    school = School(config, tmp_path / "cache")
+    knowledge_base = KnowledgeBase(config, tmp_path / "cache")
 
-    assert school.status["notes"]["status"] == "failed"
-    assert school.status["local"]["status"] == "ok"
-    assert [s.name for s in school.index.visible()] == ["y"]
+    assert knowledge_base.status["notes"]["status"] == "failed"
+    assert knowledge_base.status["local"]["status"] == "ok"
+    assert [s.name for s in knowledge_base.index.visible()] == ["y"]
 
 
 def _local(tmp_path: Path) -> Path:

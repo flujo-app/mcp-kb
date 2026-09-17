@@ -44,8 +44,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .config import Source, WebdavSource
-from .sources.webdav import client, fetch_file, recorded_etags
+from ..config import Source, WebdavSource
+from .webdav import client, fetch_file, recorded_etags
 
 if TYPE_CHECKING:
     from webdav4.fsspec import WebdavFileSystem

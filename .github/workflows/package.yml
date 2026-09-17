@@ -106,7 +106,7 @@ jobs:
         echo "Building version: $version"
         {
           echo "version=$version"
-          echo "package=mcp_school-${version}"
+          echo "package=kubed_mcp_kb-${version}"
         } >> "$GITHUB_OUTPUT"
 
     - name: Build
@@ -138,8 +138,8 @@ jobs:
       run: |
         python -m venv /tmp/verify
         /tmp/verify/bin/pip install --quiet "$(echo dist/*.whl)"
-        /tmp/verify/bin/python -c "import mcp_school as m; print('imported', m.__file__)"
-        /tmp/verify/bin/mcp-school --help
+        /tmp/verify/bin/python -c "import kubed.mcp_kb as m; print('imported', m.__file__)"
+        /tmp/verify/bin/mcp-kb --help
 
     - name: Upload Package
       uses: actions/upload-artifact@v7

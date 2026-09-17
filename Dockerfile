@@ -83,7 +83,7 @@ ENV PATH=/opt/venv/bin:$PATH
 
 # A worked example, not the deployed catalogue: `github://` sources that
 # reproduce what this image used to bake. A real deployment mounts its own.
-COPY examples/config.yaml /etc/mcp-school/config.yaml
+COPY examples/config.yaml /etc/mcp-kb/config.yaml
 
 # The venv is copied to the SAME path it was created at, which is the one rule.
 # It is this project's node_modules — one self-contained directory you move
@@ -98,16 +98,16 @@ COPY examples/config.yaml /etc/mcp-school/config.yaml
 # a running pod, so it is checked here — this imports the whole dependency tree,
 # which is what would break if a wheel needed a shared library only the fat
 # image has.
-RUN python -c "from mcp_school.server import School"
+RUN python -c "from kubed.mcp_kb.server import KnowledgeBase"
 
 # Where a source is fetched into at start — a git clone's export, a mirrored
 # file:// tree, whatever the config names. Owned by the runtime user so a
 # source can write its own cache without the container running as root.
-RUN mkdir -p /var/cache/mcp-school && chown 65534:65534 /var/cache/mcp-school
-VOLUME /var/cache/mcp-school
+RUN mkdir -p /var/cache/mcp-kb && chown 65534:65534 /var/cache/mcp-kb
+VOLUME /var/cache/mcp-kb
 
-ENV CONFIG=/etc/mcp-school/config.yaml \
-    CACHE_DIR=/var/cache/mcp-school \
+ENV CONFIG=/etc/mcp-kb/config.yaml \
+    CACHE_DIR=/var/cache/mcp-kb \
     TRANSPORT=http \
     HOST=0.0.0.0 \
     PORT=8000
@@ -117,4 +117,4 @@ EXPOSE 8000
 # non-numeric USER and refuses to start the container.
 USER 65534
 
-ENTRYPOINT ["mcp-school"]
+ENTRYPOINT ["mcp-kb"]

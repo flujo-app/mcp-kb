@@ -25,7 +25,7 @@ these bodies are full of LogQL, PromQL and JSON, which all use single braces.
 
 The exposed name is ``<pack>_<file stem>``. Prompt names are one flat namespace
 per server, and two packs shipping a ``debug.md`` must not collide the way two
-skills named ``testing`` used to.
+skills named ``testing`` otherwise would.
 """
 
 from __future__ import annotations
@@ -48,13 +48,13 @@ from fastmcp.utilities.versions import VersionSpec
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
+from ..catalogue.skills import SkillIndex
 from .request import requested_scope
 from .scope import EVERYTHING, Scope
-from .skills import SkillIndex
 from .tools import READ_ONLY
 
 if TYPE_CHECKING:
-    from .snapshot import Snapshot
+    from ..catalogue.snapshot import Snapshot
 
 log = logging.getLogger(__name__)
 

@@ -1,9 +1,9 @@
-# Local build + smoke test for the kubed/mcp-school image. `docker buildx bake`
+# Local build + smoke test for the kubed/mcp-kb image. `docker buildx bake`
 # reads the build block below -- that is what CI runs, so the tag list and
 # x-bake settings here are the release configuration, not just local convenience.
 services:
-  mcp-school:
-    image: &image kubed/mcp-school:latest
+  mcp-kb:
+    image: &image kubed/mcp-kb:latest
     build:
       context: .
       target: runner
@@ -11,16 +11,16 @@ services:
         PY_VERSION: ${PY_VERSION:-3.14}
       tags:
       - *image
-      - kubed/mcp-school:${GIT_SHA:-latest}
-      - kubed/mcp-school:${GIT_REF:-latest}
-      - kubed/mcp-school:${GIT_TAG:-latest}
+      - kubed/mcp-kb:${GIT_SHA:-latest}
+      - kubed/mcp-kb:${GIT_REF:-latest}
+      - kubed/mcp-kb:${GIT_TAG:-latest}
       x-bake:
         platforms:
         - linux/amd64
         - linux/arm64
-        cache-to: type=gha,mode=max,scope=mcp-school
-        cache-from: type=gha,scope=mcp-school
-    container_name: mcp-school
+        cache-to: type=gha,mode=max,scope=mcp-kb
+        cache-from: type=gha,scope=mcp-kb
+    container_name: mcp-kb
     restart: no
     ports:
     - 8000:8000
@@ -29,8 +29,8 @@ services:
       HOST: ${HOST:-0.0.0.0}
       PORT: ${PORT:-8000}
     volumes:
-    - ./examples/config.yaml:/etc/mcp-school/config.yaml:ro
-    - mcp-school-cache:/var/cache/mcp-school
+    - ./examples/config.yaml:/etc/mcp-kb/config.yaml:ro
+    - mcp-kb-cache:/var/cache/mcp-kb
 
 volumes:
-  mcp-school-cache:
+  mcp-kb-cache:

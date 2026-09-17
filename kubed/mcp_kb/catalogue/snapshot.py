@@ -30,13 +30,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from ..config import Config, Source, WebdavSource
+from ..mcp.prompts import FilePrompt, load_prompts
+from ..sources import SourceError, fingerprint, materialise
+from ..sources.live import Revalidator, is_live
 from . import harvest
-from .config import Config, Source, WebdavSource
 from .index import PromptRow, SkillRow, SourceRecord, now
-from .live import Revalidator, is_live
-from .prompts import FilePrompt, load_prompts
 from .skills import PackResources, Skill, SkillIndex, load_skills
-from .sources import SourceError, fingerprint, materialise
 from .uris import Catalogue
 
 # The record states that still name a tree worth serving. A "stale" record is

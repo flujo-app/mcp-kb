@@ -13,8 +13,8 @@ from pathlib import Path
 import pygit2
 import yaml
 
-from mcp_school.config import Config
-from mcp_school.server import School
+from kubed.mcp_kb.config import Config
+from kubed.mcp_kb.server import KnowledgeBase
 
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE_CONFIG = ROOT / "examples" / "config.yaml"
@@ -80,12 +80,12 @@ def _rewritten_config(tmp_path: Path) -> Config:
 
 def test_the_shipped_config_loads_the_shipped_shape(tmp_path):
     config = _rewritten_config(tmp_path)
-    school = School(config, tmp_path / "cache")
+    knowledge_base = KnowledgeBase(config, tmp_path / "cache")
 
-    assert all(s["status"] == "ok" for s in school.status.values()), school.status
-    assert len(school.resources.files("penpot")) == 2
+    assert all(s["status"] == "ok" for s in knowledge_base.status.values()), knowledge_base.status
+    assert len(knowledge_base.resources.files("penpot")) == 2
 
-    libraries = sorted({s["library"] for s in school.status.values()})
+    libraries = sorted({s["library"] for s in knowledge_base.status.values()})
     assert libraries == ["grafana", "n8n", "penpot", "superpowers"]
 
 
@@ -95,6 +95,6 @@ def test_the_shipped_config_serves_no_prompt_it_did_not_ask_for(tmp_path):
     happens to keep. A source that names one include kind still gets the
     defaults for the others, so each one says `prompts: []` and means it.
     """
-    school = School(_rewritten_config(tmp_path), tmp_path / "cache")
+    knowledge_base = KnowledgeBase(_rewritten_config(tmp_path), tmp_path / "cache")
 
-    assert school.prompts == ()
+    assert knowledge_base.prompts == ()

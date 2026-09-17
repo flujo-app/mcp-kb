@@ -28,9 +28,7 @@ TAGS_HEADER = "x-skill-tags"
 PROMPTS_PARAM = "prompts"
 PROMPTS_HEADER = "x-mcp-prompts"
 
-# How a client declares it cannot read resources. Header beats parameter: the
-# header is set in a credential, by an admin, where the parameter rides on a URL
-# somebody may paste without it.
+# How a client declares it cannot read resources.
 RESOURCES_PARAM = "resources"
 RESOURCES_HEADER = "x-mcp-resources"
 _OFF = ("off", "false", "0", "no", "none")
@@ -71,38 +69,41 @@ def http_request() -> tuple[dict, dict] | None:
     )
 
 
+def _read(header: str, param: str, *aliases: str) -> str | None:
+    """What this request says for one setting, or None when it says nothing.
+
+    Headers first, in the order given, then the query parameter: the header is
+    set in a credential, by an admin, where the parameter rides on a URL
+    somebody may paste without it. Off HTTP there is neither, and None is what
+    every caller reads as "not narrowed, not declared".
+    """
+    http = http_request()
+    if http is None:
+        return None
+    params, headers = http
+    for name in (header, *aliases):
+        if headers.get(name):
+            return headers[name]
+    return params.get(param)
+
+
 def requested_scope() -> Scope:
     """The slice of the catalogue this request is restricted to.
 
     Read from the MCP URL (``?library=grafana&tags=observability``) or headers
-    (``X-Skill-Library``, ``X-Skill-Tags``; ``X-Skill-Pack`` as an alias). A
-    header beats a parameter for the reason given above. It is a ceiling set by
-    whoever configured the client, not a suggestion the model can widen.
+    (``X-Skill-Library``, ``X-Skill-Tags``; ``X-Skill-Pack`` as an alias). It
+    is a ceiling set by whoever configured the client, not a suggestion the
+    model can widen.
     """
-    http = http_request()
-    if http is None:
-        return Scope()
-    params, headers = http
-    library = (
-        headers.get(LIBRARY_HEADER)
-        or headers.get(PACK_HEADER)
-        or params.get(LIBRARY_PARAM)
-        or ""
-    )
-    tags = headers.get(TAGS_HEADER) or params.get(TAGS_PARAM) or ""
+    library = _read(LIBRARY_HEADER, LIBRARY_PARAM, PACK_HEADER) or ""
+    tags = _read(TAGS_HEADER, TAGS_PARAM) or ""
     return Scope.parse(library, tags)
 
 
 def _declared_on(header: str, param: str) -> bool:
     """True unless the client said ``off`` for this capability."""
-    http = http_request()
-    if http is None:
-        return True
-    params, headers = http
-    declared = headers.get(header) or params.get(param)
-    if declared is None:
-        return True
-    return str(declared).strip().lower() not in _OFF
+    declared = _read(header, param)
+    return declared is None or str(declared).strip().lower() not in _OFF
 
 
 def client_uses_prompts() -> bool:
@@ -134,9 +135,5 @@ def full_listing() -> bool:
     tokens per listing for rows it was going to narrow down anyway, which is why
     this is opt-in: ``?skills=full``, or an ``X-Skill-Listing: full`` header.
     """
-    http = http_request()
-    if http is None:
-        return False
-    params, headers = http
-    declared = headers.get(LISTING_HEADER) or params.get(LISTING_PARAM) or ""
+    declared = _read(LISTING_HEADER, LISTING_PARAM) or ""
     return str(declared).strip().lower() == _FULL

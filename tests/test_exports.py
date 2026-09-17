@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from mcp_school.sources.export import (
+from kubed.mcp_kb.sources.export import (
     DISCARD_PREFIX,
     GRACE_SECONDS,
     WORK_DIR,
