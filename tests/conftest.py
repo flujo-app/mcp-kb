@@ -3,9 +3,9 @@
 import pytest
 
 from kubed.mcp_kb.catalogue import harvest
+from kubed.mcp_kb.catalogue.prompts import load_prompts
 from kubed.mcp_kb.catalogue.skills import LibraryFiles, load_skills
 from kubed.mcp_kb.config import Config, Include
-from kubed.mcp_kb.mcp.prompts import load_prompts
 
 # The WebDAV server fixture lives in its own module -- it is a server, not a
 # tree -- and is registered here so a test can ask for `webdav` by name.

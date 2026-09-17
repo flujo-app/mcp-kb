@@ -6,7 +6,7 @@ transport. Turning a config source into a directory is ``sources``'s job;
 deciding what in it counts as a skill, a prompt or a library-level file is
 ``catalogue/harvest.py``'s; building one immutable view of all of it is
 ``catalogue/snapshot.py``'s; the catalogue itself lives in
-``catalogue/skills.py``, ``mcp/prompts.py`` and ``catalogue/uris.py``; and
+``catalogue/skills.py``, ``catalogue/prompts.py`` and ``catalogue/uris.py``; and
 deciding when a source is looked at again is ``catalogue/refresh.py``'s. This
 module walks the config in source order, connects the pieces, and owns the
 one mutable thing in the process: which ``Snapshot`` is current.
@@ -44,6 +44,7 @@ from fastmcp import FastMCP
 
 from . import routes
 from .catalogue.index import INDEX_VERSION, Index, SourceRecord, config_hash, now
+from .catalogue.prompts import FilePrompt
 from .catalogue.refresh import Schedule, keep_last_good, loop, moved, same_failure
 from .catalogue.skills import LibraryFiles, SkillIndex
 from .catalogue.snapshot import (
@@ -56,7 +57,6 @@ from .catalogue.uris import Catalogue
 from .config import Config
 from .mcp import prompts, resources, tools
 from .mcp.announce import AnnounceChanges
-from .mcp.prompts import FilePrompt
 from .mcp.request import client_reads_resources, client_uses_prompts
 
 log = logging.getLogger(__name__)

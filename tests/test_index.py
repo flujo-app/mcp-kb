@@ -16,9 +16,9 @@ from kubed.mcp_kb.catalogue.index import (
     config_hash,
     now,
 )
+from kubed.mcp_kb.catalogue.prompts import FilePrompt
 from kubed.mcp_kb.catalogue.skills import Skill
 from kubed.mcp_kb.config import load_config
-from kubed.mcp_kb.mcp.prompts import FilePrompt
 
 
 def _skill(**overrides):

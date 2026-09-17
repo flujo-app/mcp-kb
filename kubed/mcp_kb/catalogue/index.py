@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Literal
 
 from ..config import Config
-from ..mcp.prompts import FilePrompt
+from .prompts import FilePrompt
 from .skills import Skill
 
 INDEX_VERSION = 2

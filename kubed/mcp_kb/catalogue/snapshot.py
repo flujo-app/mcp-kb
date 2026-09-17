@@ -31,11 +31,11 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from ..config import Config, Source, WebdavSource
-from ..mcp.prompts import FilePrompt, load_prompts
 from ..sources import SourceError, fingerprint, materialise
 from ..sources.live import Revalidator, is_live
 from . import harvest
 from .index import PromptRow, SkillRow, SourceRecord, now
+from .prompts import FilePrompt, load_prompts
 from .skills import LibraryFiles, Skill, SkillIndex, load_skills
 from .uris import Catalogue
 

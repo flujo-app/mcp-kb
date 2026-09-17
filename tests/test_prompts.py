@@ -9,14 +9,10 @@ from fastmcp import Client
 
 from kubed.mcp_kb import KnowledgeBase
 from kubed.mcp_kb.catalogue import harvest
+from kubed.mcp_kb.catalogue.prompts import FilePrompt, load_prompt, load_prompts
 from kubed.mcp_kb.catalogue.skills import SkillIndex
 from kubed.mcp_kb.config import Include
-from kubed.mcp_kb.mcp.prompts import (
-    FilePrompt,
-    PromptProvider,
-    load_prompt,
-    load_prompts,
-)
+from kubed.mcp_kb.mcp.prompts import PromptProvider
 from kubed.mcp_kb.mcp.scope import Scope
 from tests.conftest import load_all_prompts, load_library_prompts, make_config
 
