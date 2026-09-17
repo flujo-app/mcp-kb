@@ -1,6 +1,7 @@
 """The MCP surface: what a client sees, as resources and as the tool mirror."""
 
 import json
+import logging
 
 import pytest
 from fastmcp import Client
@@ -11,7 +12,8 @@ from tests.conftest import make_config
 
 
 async def call(client, name, **args):
-    result = await client.call_tool(name, args)
+    """The tool's text, whether it is a result or an error result."""
+    result = await client.call_tool(name, args, raise_on_error=False)
     return result.content[0].text
 
 
@@ -158,12 +160,19 @@ async def test_read_resource_returns_what_reading_the_uri_returns(skills_dir):
 
 
 @pytest.mark.unit
-async def test_read_resource_explains_an_unknown_uri(skills_dir):
-    """A tool answers with prose; only the resource half raises."""
+async def test_read_resource_explains_an_unknown_uri(skills_dir, caplog):
+    """An error result, so a caller branching on isError sees a miss -- with
+    what to do next in its message, and no traceback in the server's log."""
     server = KnowledgeBase(make_config(skills_dir), skills_dir / "_cache")
-    async with Client(server.mcp) as client:
-        out = await call(client, "read_resource", uri="skill://nope/nope")
+    with caplog.at_level(logging.INFO):
+        async with Client(server.mcp) as client:
+            result = await client.call_tool(
+                "read_resource", {"uri": "skill://nope/nope"}, raise_on_error=False
+            )
+    assert result.is_error
+    out = result.content[0].text
     assert "No resource" in out and "list_resources" in out
+    assert not [r for r in caplog.records if r.levelno >= logging.INFO]
 
 
 @pytest.mark.unit

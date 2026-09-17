@@ -155,8 +155,11 @@ async def _raw(url, uri, library=None):
 
 
 async def _tool(url, uri, library=None):
+    """The mirror's answer, as text, whether it is a body or an error result."""
     async with _client(url, library=library) as client:
-        result = await client.call_tool("read_resource", {"uri": uri})
+        result = await client.call_tool(
+            "read_resource", {"uri": uri}, raise_on_error=False
+        )
     return result.content[0].text
 
 
@@ -285,9 +288,13 @@ async def test_a_directory_is_not_found_and_names_the_file_to_read(url, uri, ins
     error = await _read_error(url, uri)
     assert "not found" in error
     assert instead in error
-    mirrored = await _tool(url, uri)
-    assert mirrored.startswith(f"No resource at '{uri}'.")
-    assert instead in mirrored
+    async with _client(url) as client:
+        mirrored = await client.call_tool(
+            "read_resource", {"uri": uri}, raise_on_error=False
+        )
+    assert mirrored.is_error
+    assert mirrored.content[0].text.startswith(f"No resource at '{uri}'.")
+    assert instead in mirrored.content[0].text
 
 
 LIBRARY_FILE_CITED_FROM_A_SKILL = "skill://grafana/grafana-lgtm/loki/shared/style.md"

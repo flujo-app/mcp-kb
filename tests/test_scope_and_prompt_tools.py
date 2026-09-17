@@ -10,6 +10,7 @@ has skills and a prompt, ``design`` (tagged ``ui``) has skills only, and
 """
 
 import json
+import logging
 import threading
 
 import pytest
@@ -132,6 +133,30 @@ async def test_get_prompt_returns_rendered_role_tagged_messages(url):
     assert [(m["role"], m["content"].strip()) for m in messages] == [
         ("user", "Look at **nextcloud**.")
     ]
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "says"),
+    [
+        ("observe_nope", {}, "Unknown prompt: 'observe_nope'. Call list_prompts()"),
+        ("observe_debug", {}, "Prompt 'observe_debug' needs the argument app."),
+    ],
+)
+async def test_a_prompt_tool_mistake_is_an_error_result_that_says_what_to_do(
+    url, name, arguments, says, caplog
+):
+    """The caller's mistake: an error result, and nothing in the log above DEBUG."""
+    with caplog.at_level(logging.DEBUG, logger="fastmcp"):
+        async with _client(url, "?prompts=off") as client:
+            result = await client.call_tool(
+                "get_prompt",
+                {"name": name, "arguments": arguments},
+                raise_on_error=False,
+            )
+    assert result.is_error
+    assert result.content[0].text.startswith(says)
+    server = [r for r in caplog.records if r.name.startswith("fastmcp.server")]
+    assert [r.getMessage() for r in server if r.levelno > logging.DEBUG] == []
 
 
 # -- library and tags -----------------------------------------------------------

@@ -93,7 +93,7 @@ class FilePrompt:
             return self.template
 
     def render(self, arguments: dict[str, object] | None = None) -> str:
-        """Fill in the placeholders, raising ``ValueError`` on a missing one.
+        """Fill in the placeholders, raising ``MissingArguments`` on a missing one.
 
         Plain and synchronous: the FastMCP-facing wrapper is what turns this
         into the async ``render`` a ``Prompt`` subclass must provide, and what
@@ -111,9 +111,21 @@ class FilePrompt:
             arg.name for arg in self.arguments if arg.required and arg.name not in given
         ]
         if missing:
-            raise ValueError(f"Missing required arguments: {', '.join(missing)}")
+            raise MissingArguments(self.name, missing)
         values = {**self.defaults, **given}
         return PLACEHOLDER.sub(lambda m: values.get(m.group(1), ""), self.body())
+
+
+class MissingArguments(ValueError):
+    """A render was asked for without a required argument: the caller's mistake."""
+
+    def __init__(self, prompt: str, names: list[str]):
+        self.prompt = prompt
+        self.names = names
+        super().__init__(
+            f"Prompt {prompt!r} needs the argument"
+            f"{'s' if len(names) > 1 else ''} {', '.join(names)}."
+        )
 
 
 def _split(text: str) -> tuple[dict, str]:

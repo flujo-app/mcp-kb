@@ -15,19 +15,23 @@ skills is for prompts.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated, Any
 
 from fastmcp import FastMCP
+from fastmcp.exceptions import NotFoundError, ToolError, ValidationError
 from fastmcp.prompts import Prompt, PromptArgument
+from fastmcp.server.dependencies import get_context
 from fastmcp.server.providers.base import Provider
 from fastmcp.server.transforms import PromptsAsTools
+from fastmcp.server.transforms.prompts_as_tools import _format_prompt_result
 from fastmcp.tools.base import Tool
 from fastmcp.utilities.versions import VersionSpec
 from mcp_types import ToolAnnotations
 from pydantic import ConfigDict
 
-from ..catalogue.prompts import FilePrompt
+from ..catalogue.prompts import FilePrompt, MissingArguments
 from .request import requested_scope
 from .scope import EVERYTHING, Scope
 from .tools import READ_ONLY
@@ -42,10 +46,11 @@ class MCPFilePrompt(Prompt):
     Everything a client-facing prompt needs -- the substitution, the missing-
     argument check, the live re-read -- is ``file``'s to do; this class exists
     only to satisfy FastMCP's ``Prompt`` contract and hand the result back.
-    Raising ``ValueError`` here is deliberate rather than FastMCP's own
-    ``PromptError``: the server already wraps any exception a render raises
-    into a ``PromptError`` naming the prompt, so ``file.render`` stays free of
-    a FastMCP import for the one thing it can fail at.
+
+    A missing argument is the one failure translated here. FastMCP treats any
+    other exception out of a render as its own fault: -32603 on the wire and a
+    traceback at ERROR in the log. Its ``ValidationError`` is the caller's
+    fault instead -- -32602 -- and logged at the level it carries.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -53,7 +58,10 @@ class MCPFilePrompt(Prompt):
     file: FilePrompt
 
     async def render(self, arguments: dict[str, object] | None = None) -> str:
-        return self.file.render(arguments)
+        try:
+            return self.file.render(arguments)
+        except MissingArguments as exc:
+            raise ValidationError(str(exc), log_level=logging.DEBUG) from exc
 
 
 def _adapt(file: FilePrompt) -> MCPFilePrompt:
@@ -125,15 +133,49 @@ class ReadOnlyPromptsAsTools(PromptsAsTools):
 
     Its generated tools carry no annotations, and unannotated MCP defaults
     advertise a tool as destructive and non-idempotent -- the same mistake the
-    resource mirror was corrected for. Only the annotations change; what the
-    tools do and return is FastMCP's.
+    resource mirror was corrected for.
+
+    ``get_prompt`` is rebuilt rather than annotated, for its errors. FastMCP's
+    lets an unknown name escape as a bare exception, which the tool runner logs
+    as a traceback at ERROR and reports as "Error calling tool"; and a missing
+    argument is logged as a warning about the tool's arguments, which it is
+    not. Both are the caller's mistake, so both become an error result that says
+    what to do, logged at DEBUG. What a successful call returns is FastMCP's.
     """
 
     def _make_list_prompts_tool(self) -> Tool:
         return _annotate(super()._make_list_prompts_tool(), "List prompts")
 
     def _make_get_prompt_tool(self) -> Tool:
-        return _annotate(super()._make_get_prompt_tool(), "Get a prompt")
+        async def get_prompt(
+            name: Annotated[str, "The name of the prompt to get"],
+            arguments: Annotated[
+                dict[str, Any] | None,
+                "Optional arguments for the prompt",
+            ] = None,
+        ) -> str:
+            """Get a prompt by name with optional arguments.
+
+            Returns the rendered prompt as JSON with a messages array.
+            Arguments should be provided as a dict mapping argument names
+            to values.
+            """
+            ctx = get_context()
+            try:
+                result = await ctx.fastmcp.render_prompt(
+                    name, arguments=arguments or {}
+                )
+            except NotFoundError:
+                raise ToolError(
+                    f"Unknown prompt: {name!r}. Call list_prompts() for the prompts"
+                    " available and the arguments each one takes.",
+                    log_level=logging.DEBUG,
+                ) from None
+            except ValidationError as exc:
+                raise ToolError(str(exc), log_level=logging.DEBUG) from None
+            return _format_prompt_result(result)
+
+        return _annotate(Tool.from_function(fn=get_prompt), "Get a prompt")
 
 
 def _annotate(tool: Tool, title: str) -> Tool:

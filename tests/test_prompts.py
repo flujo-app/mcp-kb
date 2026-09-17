@@ -134,11 +134,20 @@ async def test_rendering_fills_arguments_and_defaults(skills_dir, prompts_dir):
     assert text(blank) == "Hello, Dr K.\n"
 
 
-async def test_a_missing_required_argument_is_refused(skills_dir, prompts_dir):
+async def test_a_missing_required_argument_is_refused(skills_dir, prompts_dir, caplog):
+    """Invalid params naming the argument -- the caller's mistake -- and not the
+    internal error and ERROR traceback FastMCP gives any other render failure."""
+    from mcp.shared.exceptions import MCPError
+    from mcp_types import INVALID_PARAMS
+
     server = KnowledgeBase(make_config(skills_dir, prompts_dir), skills_dir / "_cache")
-    async with Client(server.mcp) as client:
-        with pytest.raises(Exception, match="who"):
-            await client.get_prompt("flatsource_hello", {})
+    with caplog.at_level(logging.INFO):
+        async with Client(server.mcp) as client:
+            with pytest.raises(MCPError) as caught:
+                await client.get_prompt("flatsource_hello", {})
+    assert caught.value.error.code == INVALID_PARAMS
+    assert caught.value.error.message == "Prompt 'flatsource_hello' needs the argument who."
+    assert not [r for r in caplog.records if r.levelno >= logging.INFO]
 
 
 async def test_logql_braces_survive_rendering(skills_dir, prompts_dir):
