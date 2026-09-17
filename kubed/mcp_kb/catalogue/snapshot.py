@@ -382,16 +382,15 @@ class _Claims:
         for skill in skills:
             root = f"{SCHEME}{skill.address}"
             for claimed, owner in self.skills.items():
-                if _within(root, claimed) or _within(claimed, root):
+                if _overlap(root, claimed):
                     return _taken(uri_for(skill), owner)
             for uri, owner in self.files.items():
                 if _overlap(uri, root):
                     return _taken(uri, owner)
         for rel in files:
             uri = f"{SCHEME}{record.library}/{rel}"
-            owner = self.files.get(uri) or next(
-                (o for r, o in self.skills.items() if _overlap(uri, r)), None
-            )
+            claims = (*self.files.items(), *self.skills.items())
+            owner = next((o for c, o in claims if _overlap(uri, c)), None)
             if owner is not None:
                 return _taken(uri, owner)
         for prompt in prompts:

@@ -211,3 +211,26 @@ async def test_a_file_at_a_skill_folders_address_fails_the_later_source(
     assert health["sources"]["first"]["status"] == "ok"
     assert health["sources"]["second"]["status"] == "failed"
     assert "skill://lib/guides" in health["sources"]["second"]["error"]
+
+
+@pytest.mark.parametrize("short_first", [True, False])
+async def test_a_file_at_another_files_folder_fails_the_later_source(
+    tmp_path, short_first
+):
+    """`guides` from one source and `guides/a.md` from another cannot both be
+    served: the first makes `skill://lib/guides` a file, the second a directory.
+    """
+
+    def short(r):
+        _write(r, "guides", "a file")
+
+    def long(r):
+        _write(r, "guides/a.md", "a file in a folder")
+
+    first, second = (short, long) if short_first else (long, short)
+    kb = _pair(tmp_path, first, second, files=("guides", "guides/**/*"))
+    health = await _health(kb)
+
+    assert health["sources"]["first"]["status"] == "ok"
+    assert health["sources"]["second"]["status"] == "failed"
+    assert "skill://lib/guides" in health["sources"]["second"]["error"]
