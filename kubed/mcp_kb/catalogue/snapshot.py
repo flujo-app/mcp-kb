@@ -27,8 +27,9 @@ serve than its error.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from ..config import Config, Source, WebdavSource
 from ..sources import SourceError, fingerprint, materialise
@@ -37,11 +38,17 @@ from . import harvest
 from .index import PromptRow, SkillRow, SourceRecord, now
 from .prompts import FilePrompt, load_prompts
 from .skills import LibraryFiles, Skill, SkillIndex, load_skills
-from .uris import SCHEME, Catalogue, uri_for
+from .uris import INDEX, LIBRARY_FILES, SCHEME, Catalogue, uri_for
+
+log = logging.getLogger(__name__)
 
 # The record states that still name a tree worth serving. A "stale" record is
 # one of them: its harvest is the last good one, which is the whole point.
 SERVABLE = ("ok", "stale")
+
+# Names the server generates at any folder. A library file called one of these
+# would be listed and then never read, since the index answers first.
+RESERVED_NAMES = frozenset({INDEX, LIBRARY_FILES})
 
 
 @dataclass(frozen=True)
@@ -157,10 +164,12 @@ def build_snapshot(
     written is logged and skipped by ``load_prompts``, so it simply stops being
     served rather than taking the source down.
 
-    Sources are taken in config order, and a source that would serve an
-    address or a prompt name an earlier one already serves is failed whole
-    (see ``_Claims``): the earlier one keeps serving, and ``/health`` names the
-    conflict.
+    Within a source, what the address space has no room for is left out and
+    listed under ``skipped`` in ``/health`` (see ``_admit``); everything else
+    of that source is served. Sources are taken in config order, and a source
+    that would serve an address or a prompt name an earlier one already serves
+    is failed whole (see ``_Claims``): the earlier one keeps serving, and
+    ``/health`` names the conflict.
     """
     live_sources = _live_sources(config, records)
     revalidator = Revalidator(live_sources) if live_sources else None
@@ -188,17 +197,19 @@ def build_snapshot(
             tags=[*lib.tags, *source.tags],
             live=is_live(source),
         )
-        own = [row.to_skill() for row in record.skills]
-        conflict = claims.conflict(record, own, loaded)
+        own, files, loaded, skipped = _admit(
+            record, [row.to_skill() for row in record.skills], loaded
+        )
+        conflict = claims.conflict(record, own, files, loaded)
         if conflict is not None:
             status[source.name] = {"status": "failed", "error": conflict}
             continue
-        claims.claim(record, own, loaded)
+        claims.claim(record, own, files, loaded)
         skills += own
         resources.add(
             record.library,
             root,
-            record.files,
+            files,
             [Path(d) for d in record.skill_dirs],
             # What this source's skills carry, since these files serve them.
             tags=[record.library, record.name, "skill", *lib.tags, *source.tags],
@@ -208,9 +219,9 @@ def build_snapshot(
         status[source.name] = {
             "status": record.status,
             "library": record.library,
-            "skills": len(record.skills),
+            "skills": len(own),
             "prompts": len(loaded),
-            "files": len(record.files),
+            "files": len(files),
             "built": record.built,
             "fingerprint": record.fingerprint,
             # Config, so it is here rather than in the counters /health merges
@@ -220,6 +231,7 @@ def build_snapshot(
             # Only a stale record carries one, and an operator reading /health
             # needs to see why what they are being served stopped moving.
             **({"error": record.error} if record.error else {}),
+            **({"skipped": skipped} if skipped else {}),
         }
 
     index = SkillIndex(skills)
@@ -235,6 +247,48 @@ def build_snapshot(
     )
 
 
+def _admit(
+    record: SourceRecord, skills: list[Skill], prompts: list[FilePrompt]
+) -> tuple[list[Skill], list[str], list[FilePrompt], list[dict[str, str]]]:
+    """What of one source the address space has room for, and what it has not.
+
+    Returns the skills, library files and prompts to serve, and a ``skipped``
+    row -- the source-relative path and the reason -- for everything left out.
+    A skipped thing is a defect in the source, not a failure of it: the rest
+    serves, and ``/health`` says what is missing and why.
+
+    A library file is left out when its address is a skill's or lies inside
+    one -- the skill answers that URI, so the file could be listed and never
+    read, or read only under a scope that hides the skill -- and when it is
+    named like an index the server generates.
+    """
+    skipped: list[dict[str, str]] = []
+
+    def skip(path: str, reason: str) -> None:
+        log.warning("source %s: skipping %s: %s", record.name, path, reason)
+        skipped.append({"path": path, "reason": reason})
+
+    roots = sorted((s.address for s in skills), key=len, reverse=True)
+    files: list[str] = []
+    for rel in record.files:
+        name = PurePosixPath(rel).name
+        if name in RESERVED_NAMES:
+            skip(rel, f"{name} is the name of an index the server generates")
+            continue
+        address = f"{record.library}/{rel}"
+        inside = next((r for r in roots if _within(address, r)), None)
+        if inside is not None:
+            skip(rel, f"its address lies inside the skill at {SCHEME}{inside}")
+            continue
+        files.append(rel)
+    return skills, files, prompts, skipped
+
+
+def _within(address: str, root: str) -> bool:
+    """Whether ``address`` is ``root`` or lies under it, segment-wise."""
+    return address == root or address.startswith(f"{root}/")
+
+
 @dataclass
 class _Claims:
     """What the sources built so far serve, so a later one cannot shadow it.
@@ -243,12 +297,12 @@ class _Claims:
     library-level file URI or the same prompt name, and a reader could reach
     only one of each. Serving half of the later source would be worse than
     serving none of it -- its skills cite its own files -- so a conflict fails
-    that source outright. A library file inside another source's skill counts,
-    since the skill would shadow it.
+    that source outright. Overlap counts, not only equality: a library file
+    inside another source's skill, or a skill inside another source's skill,
+    is shadowed by the skill whose address is longer.
 
-    Within one source, the first of two skills at one address wins silently: a
-    tree that reaches one skill through two roots (a symlinked
-    ``.claude/skills``) is not a conflict with anybody.
+    Within one source there is nothing to claim against: ``_admit`` has
+    already left out whatever that source could not serve.
     """
 
     skills: dict[str, str] = field(default_factory=dict)
@@ -256,21 +310,25 @@ class _Claims:
     prompts: dict[str, str] = field(default_factory=dict)
 
     def conflict(
-        self, record: SourceRecord, skills: list[Skill], prompts: list[FilePrompt]
+        self,
+        record: SourceRecord,
+        skills: list[Skill],
+        files: list[str],
+        prompts: list[FilePrompt],
     ) -> str | None:
         """Why ``record`` cannot be served beside the claims, or None."""
         for skill in skills:
             root = f"{SCHEME}{skill.address}"
-            owner = self.skills.get(root)
-            if owner is not None:
-                return _taken(uri_for(skill), owner)
+            for claimed, owner in self.skills.items():
+                if _within(root, claimed) or _within(claimed, root):
+                    return _taken(uri_for(skill), owner)
             for uri, owner in self.files.items():
-                if uri.startswith(f"{root}/"):
+                if _within(uri, root):
                     return _taken(uri, owner)
-        for rel in record.files:
+        for rel in files:
             uri = f"{SCHEME}{record.library}/{rel}"
             owner = self.files.get(uri) or next(
-                (o for r, o in self.skills.items() if uri.startswith(f"{r}/")), None
+                (o for r, o in self.skills.items() if _within(uri, r)), None
             )
             if owner is not None:
                 return _taken(uri, owner)
@@ -281,11 +339,15 @@ class _Claims:
         return None
 
     def claim(
-        self, record: SourceRecord, skills: list[Skill], prompts: list[FilePrompt]
+        self,
+        record: SourceRecord,
+        skills: list[Skill],
+        files: list[str],
+        prompts: list[FilePrompt],
     ) -> None:
         for skill in skills:
             self.skills.setdefault(f"{SCHEME}{skill.address}", record.name)
-        for rel in record.files:
+        for rel in files:
             self.files.setdefault(f"{SCHEME}{record.library}/{rel}", record.name)
         for prompt in prompts:
             self.prompts.setdefault(prompt.name, record.name)

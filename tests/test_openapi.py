@@ -39,7 +39,8 @@ def every_status(skills_dir, cache, monkeypatch):
     `deepsource` harvests and stays `ok`. `flatsource` harvests, then its
     backend is broken and it is refreshed, so it keeps serving the tree it
     already had as `stale` -- which is the only status carrying both the full
-    field set and `error`. `gone` names a directory that is not there, so it
+    field set and `error`; `deepsource` also ships a file named like an index,
+    so its entry carries `skipped`. `gone` names a directory that is not there, so it
     never had a tree and is `failed`, which carries `status` and `error` and
     nothing else. A document checked against nothing but a healthy body says
     nothing about the two shapes an operator actually goes to `/health` for.
@@ -48,6 +49,8 @@ def every_status(skills_dir, cache, monkeypatch):
         "sources": [s.model_dump(mode="json") for s in make_config(skills_dir).sources]
     }
     raw["sources"].append({"name": "gone", "url": f"file://{skills_dir / 'nope'}"})
+    # A file named like an index: `deepsource` serves on, and lists it skipped.
+    (skills_dir / "deepsource" / "_index.md").write_text("not an index\n")
     knowledge_base = KnowledgeBase(Config.model_validate(raw), cache)
 
     real = snapshot.materialise
@@ -112,7 +115,8 @@ def test_source_status_documents_every_field_report_can_produce():
     props = set(build_spec()["components"]["schemas"]["SourceStatus"]["properties"])
     assert props == {
         "status", "library", "skills", "prompts", "files", "built",
-        "fingerprint", "live", "error", "revalidated", "fetched", "cooling",
+        "fingerprint", "live", "error", "skipped", "revalidated", "fetched",
+        "cooling",
     }
 
 
@@ -181,6 +185,7 @@ async def test_a_real_health_response_matches_the_documented_fields(every_status
         "stale",
         "failed",
     }
+    assert body["sources"]["deepsource"]["skipped"]
     validate("Health", body)
 
     schemas = build_spec()["components"]["schemas"]

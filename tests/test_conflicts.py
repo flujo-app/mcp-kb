@@ -27,7 +27,7 @@ def _skill(root, rel, name, description):
     _write(root, f"{rel}/SKILL.md", frontmatter)
 
 
-def _pair(tmp_path, first, second):
+def _pair(tmp_path, first, second, files=("shared/**",)):
     """Two sources feeding library `lib`, in config order; each gets a tree."""
     roots = []
     for name, build in (("first", first), ("second", second)):
@@ -39,7 +39,7 @@ def _pair(tmp_path, first, second):
                 "name": name,
                 "library": "lib",
                 "url": f"file://{root}",
-                "include": {"files": ["shared/**"]},
+                "include": {"files": list(files)},
             }
         )
     return KnowledgeBase(Config.model_validate({"sources": roots}), tmp_path / "c")
@@ -123,3 +123,66 @@ async def test_a_second_source_serving_a_claimed_prompt_name_fails(tmp_path):
             await client.read_resource("skill://lib/shared/b.md")
     assert [p.name for p in prompts] == ["lib_same"]
     assert "first" in rendered.messages[0].content.text
+
+
+async def test_a_later_file_inside_an_earlier_sources_skill_fails_its_source(tmp_path):
+    kb = _pair(
+        tmp_path,
+        lambda r: _skill(r, "skills/x", "x", "From first."),
+        lambda r: (
+            _write(r, "x/notes.md", "second notes\n"),
+            _write(r, "shared/b.md", "second b\n"),
+        ),
+        files=("shared/**", "x/**"),
+    )
+    health = await _health(kb)
+
+    assert health["sources"]["first"]["status"] == "ok"
+    assert health["sources"]["second"] == {
+        "status": "failed",
+        "error": "conflict: skill://lib/x/notes.md is already served by"
+        " source 'first'",
+    }
+    async with Client(kb.mcp) as client:
+        with pytest.raises(Exception, match="not found"):
+            await client.read_resource("skill://lib/shared/b.md")
+
+
+async def test_a_later_skill_holding_an_earlier_sources_file_fails_its_source(tmp_path):
+    kb = _pair(
+        tmp_path,
+        lambda r: _write(r, "x/notes.md", "first notes\n"),
+        lambda r: _skill(r, "skills/x", "x", "From second."),
+        files=("x/**",),
+    )
+    health = await _health(kb)
+
+    assert health["sources"]["first"]["status"] == "ok"
+    assert health["sources"]["second"] == {
+        "status": "failed",
+        "error": "conflict: skill://lib/x/notes.md is already served by"
+        " source 'first'",
+    }
+    assert await _serves(kb, "skill://lib/x/notes.md") == "first notes\n"
+
+
+@pytest.mark.parametrize(
+    ("outer", "inner", "later"),
+    [("first", "second", "skill://lib/x/y/SKILL.md"), ("second", "first", "skill://lib/x/SKILL.md")],
+)
+async def test_a_skill_nested_in_another_sources_skill_fails_the_later_source(
+    tmp_path, outer, inner, later
+):
+    """Either way round: the nested skill would hide the outer one's files."""
+    trees = {
+        outer: lambda r: _skill(r, "skills/x", "x", f"Outer from {outer}."),
+        inner: lambda r: _skill(r, "skills/x/y", "y", f"Inner from {inner}."),
+    }
+    kb = _pair(tmp_path, trees["first"], trees["second"])
+    health = await _health(kb)
+
+    assert health["sources"]["first"]["status"] == "ok"
+    assert health["sources"]["second"] == {
+        "status": "failed",
+        "error": f"conflict: {later} is already served by source 'first'",
+    }

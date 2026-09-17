@@ -364,10 +364,10 @@ class Catalogue:
         was not given.
 
         A skill is tried first, then the indexes, then the library's own files.
-        A library file cannot lie inside a skill of its own source, and one
-        that would lie inside another source's skill fails that source, so the
-        order settles the shape of a URI rather than arbitrating between two
-        files.
+        The order never arbitrates between two things at one address, because
+        the snapshot serves no such pair: a library file inside a skill of its
+        own source, or named like an index, is skipped, and one inside another
+        source's skill fails that source.
         """
         parsed = parse(uri)
         if parsed is None:

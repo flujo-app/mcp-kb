@@ -94,6 +94,27 @@ SOURCE_STATUS = {
             "previous good harvest keeps serving) or `failed` (why nothing "
             "was ever harvested).",
         ),
+        "skipped": {
+            "type": "array",
+            "description": (
+                "Present when this source ships something the address space has "
+                "no room for. Each entry is left out while the rest of the "
+                "source serves: a library file whose address lies inside one of "
+                "the source's own skills or is named `_index.md` or `_files.md`. "
+                "A clash with another source is not "
+                "listed here: it fails the later source instead."
+            ),
+            "items": {
+                "type": "object",
+                "required": ["path", "reason"],
+                "properties": {
+                    "path": _field(
+                        "string", "The file or skill directory, relative to the source."
+                    ),
+                    "reason": _field("string", "Why it is not served."),
+                },
+            },
+        },
         "revalidated": _field(
             "integer",
             "Live sources only: files priced against the server since this "
