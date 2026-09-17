@@ -37,7 +37,7 @@ from . import harvest
 from .index import PromptRow, SkillRow, SourceRecord, now
 from .prompts import FilePrompt, load_prompts
 from .skills import LibraryFiles, Skill, SkillIndex, load_skills
-from .uris import Catalogue
+from .uris import SCHEME, Catalogue, uri_for
 
 # The record states that still name a tree worth serving. A "stale" record is
 # one of them: its harvest is the last good one, which is the whole point.
@@ -156,6 +156,11 @@ def build_snapshot(
     arguments into the index. A prompt file that vanished since the record was
     written is logged and skipped by ``load_prompts``, so it simply stops being
     served rather than taking the source down.
+
+    Sources are taken in config order, and a source that would serve an
+    address or a prompt name an earlier one already serves is failed whole
+    (see ``_Claims``): the earlier one keeps serving, and ``/health`` names the
+    conflict.
     """
     live_sources = _live_sources(config, records)
     revalidator = Revalidator(live_sources) if live_sources else None
@@ -165,6 +170,7 @@ def build_snapshot(
     resources = LibraryFiles(revalidate)
     prompts: list[FilePrompt] = []
     status: dict[str, dict] = {}
+    claims = _Claims()
 
     for source in config.sources:
         record = records.get(source.name)
@@ -174,8 +180,21 @@ def build_snapshot(
             status[source.name] = {"status": "failed", "error": record.error}
             continue
         root = Path(record.root)
-        skills += [row.to_skill() for row in record.skills]
         lib = config.library(record.library)
+        loaded = load_prompts(
+            [Path(row.path) for row in record.prompts],
+            library=record.library,
+            source=record.name,
+            tags=[*lib.tags, *source.tags],
+            live=is_live(source),
+        )
+        own = [row.to_skill() for row in record.skills]
+        conflict = claims.conflict(record, own, loaded)
+        if conflict is not None:
+            status[source.name] = {"status": "failed", "error": conflict}
+            continue
+        claims.claim(record, own, loaded)
+        skills += own
         resources.add(
             record.library,
             root,
@@ -184,13 +203,6 @@ def build_snapshot(
             # What this source's skills carry, since these files serve them.
             tags=[record.library, record.name, "skill", *lib.tags, *source.tags],
             source=record.name,
-        )
-        loaded = load_prompts(
-            [Path(row.path) for row in record.prompts],
-            library=record.library,
-            source=record.name,
-            tags=[*lib.tags, *source.tags],
-            live=is_live(source),
         )
         prompts += loaded
         status[source.name] = {
@@ -221,6 +233,66 @@ def build_snapshot(
         status=status,
         live=revalidator,
     )
+
+
+@dataclass
+class _Claims:
+    """What the sources built so far serve, so a later one cannot shadow it.
+
+    Two sources feeding one library can mint the same skill URI, the same
+    library-level file URI or the same prompt name, and a reader could reach
+    only one of each. Serving half of the later source would be worse than
+    serving none of it -- its skills cite its own files -- so a conflict fails
+    that source outright. A library file inside another source's skill counts,
+    since the skill would shadow it.
+
+    Within one source, the first of two skills at one address wins silently: a
+    tree that reaches one skill through two roots (a symlinked
+    ``.claude/skills``) is not a conflict with anybody.
+    """
+
+    skills: dict[str, str] = field(default_factory=dict)
+    files: dict[str, str] = field(default_factory=dict)
+    prompts: dict[str, str] = field(default_factory=dict)
+
+    def conflict(
+        self, record: SourceRecord, skills: list[Skill], prompts: list[FilePrompt]
+    ) -> str | None:
+        """Why ``record`` cannot be served beside the claims, or None."""
+        for skill in skills:
+            root = f"{SCHEME}{skill.address}"
+            owner = self.skills.get(root)
+            if owner is not None:
+                return _taken(uri_for(skill), owner)
+            for uri, owner in self.files.items():
+                if uri.startswith(f"{root}/"):
+                    return _taken(uri, owner)
+        for rel in record.files:
+            uri = f"{SCHEME}{record.library}/{rel}"
+            owner = self.files.get(uri) or next(
+                (o for r, o in self.skills.items() if uri.startswith(f"{r}/")), None
+            )
+            if owner is not None:
+                return _taken(uri, owner)
+        for prompt in prompts:
+            owner = self.prompts.get(prompt.name)
+            if owner is not None:
+                return _taken(f"prompt {prompt.name}", owner)
+        return None
+
+    def claim(
+        self, record: SourceRecord, skills: list[Skill], prompts: list[FilePrompt]
+    ) -> None:
+        for skill in skills:
+            self.skills.setdefault(f"{SCHEME}{skill.address}", record.name)
+        for rel in record.files:
+            self.files.setdefault(f"{SCHEME}{record.library}/{rel}", record.name)
+        for prompt in prompts:
+            self.prompts.setdefault(prompt.name, record.name)
+
+
+def _taken(what: str, owner: str) -> str:
+    return f"conflict: {what} is already served by source '{owner}'"
 
 
 def _live_sources(
