@@ -6,9 +6,9 @@ rather than only through the tools that call it.
 
 import pytest
 
-from kubed.mcp_kb.catalogue.skills import PackResources, SkillIndex, load_skills
+from kubed.mcp_kb.catalogue.skills import LibraryFiles, SkillIndex, load_skills
 from kubed.mcp_kb.mcp.scope import Scope
-from tests.conftest import build_pack_resources, load_all_skills
+from tests.conftest import build_library_files, load_all_skills
 
 
 @pytest.fixture
@@ -17,15 +17,15 @@ def index(skills_dir):
 
 
 @pytest.mark.unit
-def test_len_and_packs(index):
+def test_len_and_libraries(index):
     assert len(index) == 4
-    assert index.packs == ["deepsource", "flatsource"]
+    assert index.libraries == ["deepsource", "flatsource"]
 
 
 @pytest.mark.unit
-def test_packs_ignores_the_request_scope(index):
+def test_libraries_ignores_the_request_scope(index):
     """/health answers for the pod, not for one pinned client."""
-    assert index.packs == ["deepsource", "flatsource"]
+    assert index.libraries == ["deepsource", "flatsource"]
 
 
 @pytest.mark.unit
@@ -34,14 +34,14 @@ def test_visible_is_everything_when_unpinned(index):
 
 
 @pytest.mark.unit
-def test_visible_honours_a_pack_or_a_group(index):
+def test_visible_honours_a_library_or_a_group(index):
     assert {s.name for s in index.visible(Scope("flatsource"))} == {"alpha", "beta"}
     assert {s.name for s in index.visible(Scope("plugin-a"))} == {"gamma"}
 
 
 @pytest.mark.unit
 def test_select_cannot_widen_past_the_pin(index):
-    """The model's pack argument narrows within the pin, never past it."""
+    """The model's library argument narrows within the pin, never past it."""
     assert index.select(Scope("flatsource"), "deepsource") == []
     assert {s.name for s in index.select(Scope("flatsource"), "flatsource")} == {
         "alpha",
@@ -51,7 +51,7 @@ def test_select_cannot_widen_past_the_pin(index):
 
 @pytest.mark.unit
 def test_selectors_are_scoped_to_the_pin(index):
-    """Suggestions must not leak the other packs' names."""
+    """Suggestions must not leak the other libraries' names."""
     assert "deepsource" not in index.selectors(Scope("flatsource"))
     assert "deepsource" in index.selectors()
 
@@ -72,41 +72,41 @@ def test_qualified_name_resolves(index):
 @pytest.mark.unit
 def test_empty_index_is_safe(index):
     empty = SkillIndex([])
-    assert len(empty) == 0 and empty.packs == [] and empty.get("anything") is None
+    assert len(empty) == 0 and empty.libraries == [] and empty.get("anything") is None
 
 
 @pytest.fixture
 def resources(skills_dir):
-    return build_pack_resources(skills_dir)
+    return build_library_files(skills_dir)
 
 
 @pytest.mark.unit
-def test_pack_files_exclude_everything_inside_skills(resources):
-    """A skill's own files belong to read_skill, not the pack tool."""
+def test_library_files_exclude_everything_inside_skills(resources):
+    """A skill's own files belong to read_skill, not the library tool."""
     files = resources.files("deepsource")
     assert set(files) == {"README.md", "shared/guide.md", "shared/nested/schema.json"}
     assert not any("SKILL.md" in f for f in files)
 
 
 @pytest.mark.unit
-def test_pack_with_no_extras_is_empty(resources):
+def test_library_with_no_extras_is_empty(resources):
     assert resources.files("flatsource") == []
 
 
 @pytest.mark.unit
-def test_unknown_pack_is_empty(resources):
+def test_unknown_library_is_empty(resources):
     assert resources.files("nope") == []
 
 
 @pytest.mark.unit
-def test_read_pack_file(resources):
+def test_read_library_file(resources):
     assert resources.read("deepsource", "shared/guide.md") == "shared guidance\n"
     assert resources.read("deepsource", "shared/nested/schema.json") == "{}\n"
 
 
 @pytest.mark.unit
 def test_read_refuses_skill_files(resources):
-    """Reaching into a skill through the pack tool would bypass skill scoping."""
+    """Reaching into a skill through the library tool would bypass skill scoping."""
     assert resources.read("deepsource", "plugin-a/gamma/SKILL.md") is None
 
 
@@ -119,14 +119,14 @@ def test_read_refuses_traversal(resources):
 @pytest.mark.unit
 def test_listing_never_walks_the_disk_after_startup(skills_dir, monkeypatch):
     """The catalogue is baked into the image; walking it per request froze the
-    event loop for ~5s on every resources/list against the real packs."""
+    event loop for ~5s on every resources/list against the real libraries."""
     import os
     import pathlib
 
     from kubed.mcp_kb.catalogue.uris import Catalogue
 
     skills = load_all_skills(skills_dir)
-    resources = build_pack_resources(skills_dir)
+    resources = build_library_files(skills_dir)
     catalogue = Catalogue(SkillIndex(skills), resources)
 
     def forbidden(*_args, **_kwargs):
@@ -148,20 +148,20 @@ def test_a_dot_directory_above_the_catalogue_hides_nothing(tmp_path):
     root = tmp_path / ".cache" / "skills"
     root.mkdir(parents=True)
     _build_tree(root)
-    resources = build_pack_resources(root)
+    resources = build_library_files(root)
     assert "shared/guide.md" in resources.files("deepsource")
     assert resources.read("deepsource", "shared/guide.md") == "shared guidance\n"
 
 
 @pytest.mark.unit
 def test_a_skill_carries_its_library_source_and_kind_as_tags(tmp_path):
-    """The pack is the library; source and "skill" ride along with any extras."""
+    """Source and "skill" ride along with the library as tags, and any extras."""
     skill_dir = tmp_path / "loki"
     skill_dir.mkdir()
     (skill_dir / "SKILL.md").write_text("---\nname: loki\ndescription: d\n---\n")
     skills = load_skills(
         [skill_dir],
-        pack="grafana",
+        library="grafana",
         source="grafana-skills",
         root=tmp_path,
         tags=["upstream"],
@@ -172,7 +172,7 @@ def test_a_skill_carries_its_library_source_and_kind_as_tags(tmp_path):
 
 
 @pytest.mark.unit
-def test_two_sources_can_serve_pack_files_into_one_library(tmp_path):
+def test_two_sources_can_serve_library_files_into_one_library(tmp_path):
     """Several sources can join one library; files() concatenates their roots."""
     root_a, root_b = tmp_path / "a", tmp_path / "b"
     root_a.mkdir()
@@ -180,7 +180,7 @@ def test_two_sources_can_serve_pack_files_into_one_library(tmp_path):
     (root_a / "a.md").write_text("from a\n")
     (root_b / "b.md").write_text("from b\n")
 
-    resources = PackResources()
+    resources = LibraryFiles()
     resources.add("lib", root_a, ["a.md"], [])
     resources.add("lib", root_b, ["b.md"], [])
 
@@ -196,7 +196,7 @@ def test_read_only_serves_the_harvested_list(tmp_path):
     (tmp_path / "README.md").write_text("exists, but a narrower include skips it\n")
     (tmp_path / ".env").write_text("SECRET=1\n")
 
-    resources = PackResources()
+    resources = LibraryFiles()
     resources.add("lib", tmp_path, ["shared/guide.md"], [])
 
     assert resources.read("lib", "shared/guide.md") == "guidance\n"
@@ -212,7 +212,7 @@ def test_read_refuses_an_unregistered_file_that_exists_on_disk(tmp_path):
     the same way grafana's real `.gitkeep` placeholders do."""
     (tmp_path / ".gitkeep").write_text("")
 
-    resources = PackResources()
+    resources = LibraryFiles()
     resources.add("lib", tmp_path, [], [])
 
     assert resources.read("lib", ".gitkeep") is None
@@ -221,12 +221,12 @@ def test_read_refuses_an_unregistered_file_that_exists_on_disk(tmp_path):
 @pytest.mark.unit
 def test_add_refuses_a_file_that_resolves_inside_a_skill_dir(tmp_path):
     """The defence in depth ``add()``'s docstring promises: a caller that mis-scoped
-    its own file list must not silently publish a skill's own file as a pack file."""
+    its own file list must not silently publish a skill's own file as a library file."""
     skill_dir = tmp_path / "loki"
     skill_dir.mkdir()
     (skill_dir / "SKILL.md").write_text("---\nname: loki\ndescription: d\n---\n")
 
-    resources = PackResources()
+    resources = LibraryFiles()
     with pytest.raises(ValueError, match="skill directory"):
         resources.add("lib", tmp_path, ["loki/SKILL.md"], [skill_dir])
 
@@ -238,7 +238,7 @@ def test_load_skills_drops_an_empty_source_tag(tmp_path):
     skill_dir.mkdir()
     (skill_dir / "SKILL.md").write_text("---\nname: loki\ndescription: d\n---\n")
 
-    skills = load_skills([skill_dir], pack="grafana", source="", root=tmp_path)
+    skills = load_skills([skill_dir], library="grafana", source="", root=tmp_path)
 
     assert "" not in skills[0].tags
     assert skills[0].tags == frozenset({"grafana", "skill"})
@@ -253,7 +253,7 @@ def test_read_refuses_a_registered_path_whose_target_escapes_the_root(tmp_path):
     (tmp_path / "outside.md").write_text("secret\n")
     (root / "escape.md").symlink_to(tmp_path / "outside.md")
 
-    resources = PackResources()
+    resources = LibraryFiles()
     resources.add("lib", root, ["escape.md"], [])
 
     assert resources.read("lib", "escape.md") is None

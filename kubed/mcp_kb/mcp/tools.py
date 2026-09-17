@@ -7,15 +7,15 @@ knows how to drive MCP resources already knows how to drive these, because the
 vocabulary is the same one -- list addresses, read an address.
 
 That is the whole design rule here. A second vocabulary for the same act --
-``read_skill(skill, file)`` beside ``read_pack_file(pack, file)`` -- makes a
-model learn where a file lives before it can ask for it, and a reference inside
-a SKILL.md does not say which side of that line it falls on.
+``read_skill(skill, file)`` beside ``read_library_file(library, file)`` -- makes
+a model learn where a file lives before it can ask for it, and a reference
+inside a SKILL.md does not say which side of that line it falls on.
 
 Progressive disclosure survives the collapse, because it moved into the address
 space rather than into the tool list::
 
-    list_resources()                     -> ~12 indexes, one per pack and group
-    read_resource("skill://grafana-lgtm") -> that group's skills, as URIs
+    list_resources()                     -> ~12 indexes, one per library and folder
+    read_resource("skill://grafana-lgtm") -> that folder's skills, as URIs
     read_resource("skill://grafana/loki") -> the instructions to follow
 
 Both tools are hidden from a client that reads resources; see
@@ -59,10 +59,10 @@ def register(mcp: FastMCP, catalogue: Callable[[], Catalogue]) -> set[str]:
     def list_resources() -> list[dict]:
         """List the skill resources available, as `uri`/`name`/`description`.
 
-        Start here. The listing is indexes, not skills: one row per pack and per
-        group within a pack, plus one for any files a pack ships outside its
-        skills. Read an index URI to get the skills inside it, then read a skill
-        URI for its instructions.
+        Start here. The listing is indexes, not skills: one row per library and
+        per folder within a library, plus one for any files a library ships
+        outside its skills. Read an index URI to get the skills inside it, then
+        read a skill URI for its instructions.
 
         This returns exactly what an MCP `resources/list` would, so a `uri` from
         here can be read with `read_resource` or with your own resource reader.
@@ -76,10 +76,10 @@ def register(mcp: FastMCP, catalogue: Callable[[], Catalogue]) -> set[str]:
 
         Args:
             uri: A URI from list_resources, or one built from this grammar:
-                `skill://<pack>` or `skill://<group>` for an index,
-                `skill://<pack>/<skill>` for that skill's instructions,
-                `skill://<pack>/<skill>/_manifest` for what else it ships,
-                `skill://<pack>/<skill>/<path>` for one of those files.
+                `skill://<library>` or `skill://<folder>` for an index,
+                `skill://<library>/<skill>` for that skill's instructions,
+                `skill://<library>/<skill>/_manifest` for what else it ships,
+                `skill://<library>/<skill>/<path>` for one of those files.
 
         Reads only what was asked for. A skill's instructions may cite
         `references/FOO.md`; citing it does not fetch it, so fetch it only if

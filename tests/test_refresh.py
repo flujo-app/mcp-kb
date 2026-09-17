@@ -116,7 +116,7 @@ def test_a_cold_start_reads_the_index_and_does_not_materialise(
 @pytest.mark.unit
 def test_a_changed_config_invalidates_the_index(skills_dir, cache, monkeypatch):
     """A different config throws the whole index away, not just the stale rows."""
-    KnowledgeBase(make_config(skills_dir, packs=["flatsource"]), cache)
+    KnowledgeBase(make_config(skills_dir, libraries=["flatsource"]), cache)
 
     seen = _counting_materialise(monkeypatch)
     knowledge_base = KnowledgeBase(make_config(skills_dir), cache)
@@ -232,10 +232,10 @@ def test_an_unreadable_file_in_one_source_fails_only_that_source(
     knowledge_base = KnowledgeBase(make_config(skills_dir), cache)
     real_load_skills = snapshot.load_skills
 
-    def flaky(dirs, *, pack, source, root, tags=()):
+    def flaky(dirs, *, library, source, root, tags=()):
         if source == "flatsource":
             raise PermissionError("[Errno 13] Permission denied: SKILL.md")
-        return real_load_skills(dirs, pack=pack, source=source, root=root, tags=tags)
+        return real_load_skills(dirs, library=library, source=source, root=root, tags=tags)
 
     monkeypatch.setattr(snapshot, "load_skills", flaky)
 
@@ -260,10 +260,10 @@ def test_an_unreadable_file_with_no_prior_record_is_a_failed_source(
     """
     real_load_skills = snapshot.load_skills
 
-    def flaky(dirs, *, pack, source, root, tags=()):
+    def flaky(dirs, *, library, source, root, tags=()):
         if source == "flatsource":
             raise PermissionError("[Errno 13] Permission denied: SKILL.md")
-        return real_load_skills(dirs, pack=pack, source=source, root=root, tags=tags)
+        return real_load_skills(dirs, library=library, source=source, root=root, tags=tags)
 
     monkeypatch.setattr(snapshot, "load_skills", flaky)
     knowledge_base = KnowledgeBase(make_config(skills_dir), cache)

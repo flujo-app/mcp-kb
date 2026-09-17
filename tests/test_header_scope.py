@@ -1,7 +1,7 @@
 """The per-request knobs, exercised over real HTTP.
 
 All three only exist inside an HTTP request, so an in-memory client cannot reach
-this code at all: ``X-Skill-Pack`` (which pack), ``?resources=off`` (whether the
+this code at all: ``X-Skill-Library`` (which library), ``?resources=off`` (whether the
 mirror is advertised) and ``?skills=full`` (how much the listing enumerates).
 These tests run the ASGI app on a real port for that reason.
 """
@@ -135,18 +135,18 @@ async def test_skills_full_reaches_the_mirror_too(server_url):
     assert not any(row["uri"].endswith("/SKILL.md") for row in cheap)
 
 
-# -- the pack pin -------------------------------------------------------------
+# -- the library pin -----------------------------------------------------------
 
 
 @pytest.mark.integration
-async def test_no_header_sees_every_pack(server_url):
+async def test_no_header_sees_every_library(server_url):
     uris = await resource_uris(server_url)
     assert "skill://flatsource" in uris and "skill://deepsource" in uris
 
 
 @pytest.mark.integration
-async def test_the_pin_hides_the_other_pack_from_the_listing(server_url):
-    uris = await resource_uris(server_url, headers={"X-Skill-Pack": "flatsource"})
+async def test_the_pin_hides_the_other_library_from_the_listing(server_url):
+    uris = await resource_uris(server_url, headers={"X-Skill-Library": "flatsource"})
     assert uris == ["skill://flatsource"]
 
 
@@ -157,16 +157,16 @@ async def test_a_header_beats_the_same_setting_in_the_url(server_url):
     an admin already set, and the two are read in that order everywhere.
     """
     uris = await resource_uris(
-        f"{server_url}?library=deepsource", headers={"X-Skill-Pack": "flatsource"}
+        f"{server_url}?library=deepsource", headers={"X-Skill-Library": "flatsource"}
     )
     assert uris == ["skill://flatsource"]
 
 
 @pytest.mark.integration
-async def test_the_pin_blocks_reading_another_packs_resource(server_url):
+async def test_the_pin_blocks_reading_another_librarys_resource(server_url):
     """The hole this closes: filtering a listing leaves guessable URIs readable,
     and every URI here is guessable by design."""
-    async with _client(server_url, {"X-Skill-Pack": "flatsource"}) as client:
+    async with _client(server_url, {"X-Skill-Library": "flatsource"}) as client:
         with pytest.raises(Exception, match=r"nknown|not found|deepsource"):
             await client.read_resource("skill://deepsource/gamma")
 
@@ -177,7 +177,7 @@ async def test_the_pin_blocks_the_mirror_too(server_url):
     out = await call(
         f"{server_url}?resources=off",
         "read_resource",
-        headers={"X-Skill-Pack": "flatsource"},
+        headers={"X-Skill-Library": "flatsource"},
         uri="skill://deepsource/gamma",
     )
     assert "No resource" in out
@@ -189,23 +189,23 @@ async def test_the_pin_narrows_the_mirrors_listing(server_url):
         await call(
             f"{server_url}?resources=off",
             "list_resources",
-            headers={"X-Skill-Pack": "flatsource"},
+            headers={"X-Skill-Library": "flatsource"},
         )
     )
     assert [row["uri"] for row in rows] == ["skill://flatsource"]
 
 
 @pytest.mark.integration
-async def test_the_pin_still_allows_its_own_pack(server_url):
-    async with _client(server_url, {"X-Skill-Pack": "flatsource"}) as client:
+async def test_the_pin_still_allows_its_own_library(server_url):
+    async with _client(server_url, {"X-Skill-Library": "flatsource"}) as client:
         body = (await client.read_resource("skill://flatsource/alpha"))[0].text
     assert "First skill." in body
 
 
 @pytest.mark.integration
-async def test_a_group_pin_cannot_widen_to_the_whole_pack(server_url):
+async def test_a_group_pin_cannot_widen_to_the_whole_library(server_url):
     """Pinning to one group must not hand over its siblings."""
-    async with _client(server_url, {"X-Skill-Pack": "plugin-a"}) as client:
+    async with _client(server_url, {"X-Skill-Library": "plugin-a"}) as client:
         assert (
             "Third skill."
             in (await client.read_resource("skill://deepsource/gamma"))[0].text
@@ -215,9 +215,9 @@ async def test_a_group_pin_cannot_widen_to_the_whole_pack(server_url):
 
 
 @pytest.mark.integration
-async def test_the_listing_does_not_leak_other_pack_names(server_url):
-    """A pinned client must not learn the other packs exist from a listing."""
-    uris = await resource_uris(server_url, headers={"X-Skill-Pack": "plugin-a"})
+async def test_the_listing_does_not_leak_other_library_names(server_url):
+    """A pinned client must not learn the other libraries exist from a listing."""
+    uris = await resource_uris(server_url, headers={"X-Skill-Library": "plugin-a"})
     assert not any("plugin-b" in u or "flatsource" in u for u in uris)
 
 
@@ -231,8 +231,8 @@ async def prompt_names(url, headers=None):
 
 @pytest.mark.integration
 async def test_the_pin_scopes_prompts_too(server_url):
-    """Out of the pinned pack, a prompt is neither listed nor renderable."""
-    pinned = {"X-Skill-Pack": "flatsource"}
+    """Out of the pinned library, a prompt is neither listed nor renderable."""
+    pinned = {"X-Skill-Library": "flatsource"}
     assert await prompt_names(server_url, pinned) == ["flatsource_hello"]
     async with _client(server_url, pinned) as client:
         with pytest.raises(Exception, match="deepsource_check"):
@@ -240,9 +240,9 @@ async def test_the_pin_scopes_prompts_too(server_url):
 
 
 @pytest.mark.integration
-async def test_a_group_pin_sees_its_packs_prompts(server_url):
-    """A prompt belongs to a pack, as pack-level files do."""
-    assert await prompt_names(server_url, {"X-Skill-Pack": "plugin-a"}) == [
+async def test_a_group_pin_sees_its_librarys_prompts(server_url):
+    """A prompt belongs to a library, as library-level files do."""
+    assert await prompt_names(server_url, {"X-Skill-Library": "plugin-a"}) == [
         "deepsource_check"
     ]
 

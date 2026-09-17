@@ -85,10 +85,10 @@ def test_an_edit_upstream_is_visible_on_the_next_read_without_a_refresh(
     assert knowledge_base.generation == 0, "no refresh happened; the read did the work"
 
 
-def test_a_pack_level_file_is_revalidated_too(webdav, tmp_path):
+def test_a_library_level_file_is_revalidated_too(webdav, tmp_path):
     """A skill's instructions are not the only thing a live source serves."""
     knowledge_base = _knowledge_base(webdav, tmp_path)
-    assert knowledge_base.catalogue.read(GUIDE) == "pack-level guidance\n"
+    assert knowledge_base.catalogue.read(GUIDE) == "library-level guidance\n"
 
     webdav.write("docs/guide.md", "guidance, revised and lengthened upstream\n")
 
@@ -169,7 +169,7 @@ def test_a_snapshot_source_never_revalidates(webdav, tmp_path, monkeypatch):
     webdav.requests.clear()
 
     assert "first" in knowledge_base.catalogue.read(URI)
-    assert knowledge_base.catalogue.read(GUIDE) == "pack-level guidance\n"
+    assert knowledge_base.catalogue.read(GUIDE) == "library-level guidance\n"
     assert reached == [], "the read path never reached the network"
     assert webdav.requests == []
 
@@ -189,7 +189,7 @@ def test_a_flaky_server_degrades_to_the_cached_copy(webdav, tmp_path):
     webdav.stop()
 
     assert "first" in knowledge_base.catalogue.read(URI)
-    assert knowledge_base.catalogue.read(GUIDE) == "pack-level guidance\n"
+    assert knowledge_base.catalogue.read(GUIDE) == "library-level guidance\n"
 
 
 def test_a_failed_revalidation_says_nothing_about_the_credentials(

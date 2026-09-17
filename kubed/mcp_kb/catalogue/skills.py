@@ -8,7 +8,7 @@ of repeated in every handler.
 ``harvest.py`` decides *which* directories and files belong to the catalogue --
 that is where the include globs, the dotfile rules and the skill-root
 conventions live. This module only turns what harvest already found into
-``Skill`` records and a place to read pack-level files from; it never walks a
+``Skill`` records and a place to read library-level files from; it never walks a
 tree on its own.
 """
 
@@ -30,7 +30,7 @@ class Skill:
     """One skill on disk."""
 
     name: str
-    pack: str
+    library: str
     group: str
     description: str
     path: Path
@@ -39,11 +39,11 @@ class Skill:
 
     @property
     def qualified(self) -> str:
-        return f"{self.pack}/{self.name}"
+        return f"{self.library}/{self.name}"
 
-    def in_pack(self, selector: str) -> bool:
-        """Match a selector against either the pack or the group."""
-        return selector in (self.pack, self.group)
+    def in_library(self, selector: str) -> bool:
+        """Match a selector against either the library or the group."""
+        return selector in (self.library, self.group)
 
 
 def _frontmatter(skill_md: Path) -> dict:
@@ -59,29 +59,30 @@ def _frontmatter(skill_md: Path) -> dict:
 def load_skills(
     dirs: Sequence[Path],
     *,
-    pack: str,
+    library: str,
     source: str,
     root: Path,
     tags: Sequence[str] = (),
 ) -> list[Skill]:
     """Build ``Skill`` records for the skill directories ``harvest`` already found.
 
-    ``pack`` is the library the skills join. ``group`` is
-    ``harvest.group_of(dir, root) or pack`` -- a skill with no containing group
-    (a flat source, or one sitting directly in a skill root) is in its pack's
-    own group, which is the existing "flat pack" behaviour. ``tags`` is the
-    library's tags plus the source's, concatenated by the caller; every skill
-    additionally carries its pack, its source and the literal ``"skill"``.
+    ``library`` is the library the skills join. ``group`` is
+    ``harvest.group_of(dir, root) or library`` -- a skill with no containing
+    group (a flat source, or one sitting directly in a skill root) is in its
+    library's own group, which is the existing "flat library" behaviour.
+    ``tags`` is the library's tags plus the source's, concatenated by the
+    caller; every skill additionally carries its library, its source and the
+    literal ``"skill"``.
     """
-    base_tags = frozenset(t for t in (pack, source, "skill", *tags) if t)
+    base_tags = frozenset(t for t in (library, source, "skill", *tags) if t)
     skills: list[Skill] = []
     for skill_dir in sorted(dirs):
         meta = _frontmatter(skill_dir / harvest.MAIN_FILE)
         skills.append(
             Skill(
                 name=str(meta.get("name") or skill_dir.name),
-                pack=pack,
-                group=harvest.group_of(skill_dir, root) or pack,
+                library=library,
+                group=harvest.group_of(skill_dir, root) or library,
                 description=" ".join(str(meta.get("description", "")).split()),
                 path=skill_dir,
                 source=source,
@@ -93,35 +94,35 @@ def load_skills(
 
 @dataclass(frozen=True)
 class _Root:
-    """One source's contribution to a pack: where its files live."""
+    """One source's contribution to a library: where its files live."""
 
     base: Path
     files: tuple[str, ...]
     # The same tags this source's skills carry. Two sources can feed one
-    # library, so a tag scope has to be checked per root, not per pack.
+    # library, so a tag scope has to be checked per root, not per library.
     tags: frozenset[str] = frozenset()
 
     def admits(self, tags: frozenset[str]) -> bool:
         return not tags or not tags.isdisjoint(self.tags)
 
 
-class PackResources:
-    """Files a pack ships that live outside every skill directory.
+class LibraryFiles:
+    """Files a library ships that live outside every skill directory.
 
     The Agent Skills spec keeps a skill self-contained: references are "relative
     paths from the skill root". Some kits ignore that and factor shared material
     up to the repo root -- penpot's twelve skills point at ``shared/*`` from 190
     places. Those files are not skills and must never be listed as one, but
-    without them the pack is a maze of dead links.
+    without them the library is a maze of dead links.
 
-    So they get their own addressable space, keyed by pack. A pack can be fed by
-    several sources -- ``add`` is called once per source -- so each pack holds a
-    list of roots rather than one; ``files`` concatenates them in order and
-    ``read`` tries them in order, returning the first hit. Membership is the
-    list ``harvest.pack_files()`` produced from the source's ``include.files``
-    globs, not "anything under the root that isn't inside a skill directory" --
-    a source that only asked for ``shared/**`` must not let a client read
-    ``README.md`` or ``.env`` by guessing its path.
+    So they get their own addressable space, keyed by library. A library can be
+    fed by several sources -- ``add`` is called once per source -- so each
+    library holds a list of roots rather than one; ``files`` concatenates them
+    in order and ``read`` tries them in order, returning the first hit.
+    Membership is the list ``harvest.library_files()`` produced from the
+    source's ``include.files`` globs, not "anything under the root that isn't
+    inside a skill directory" -- a source that only asked for ``shared/**``
+    must not let a client read ``README.md`` or ``.env`` by guessing its path.
 
     Nothing here scans a directory. ``harvest.py`` already applied the include
     globs, the dotfile rule and the skill-directory exclusion to produce
@@ -136,13 +137,13 @@ class PackResources:
 
     def add(
         self,
-        pack: str,
+        library: str,
         root: Path,
         files: Sequence[str],
         skill_dirs: Sequence[Path],
         tags: Sequence[str] = (),
     ) -> None:
-        """Register one source's contribution to ``pack``.
+        """Register one source's contribution to ``library``.
 
         ``skill_dirs`` is the defence in depth the class docstring describes:
         harvest.py already excludes a skill's own files from ``files`` before
@@ -156,10 +157,10 @@ class PackResources:
             if any(target == d or d in target.parents for d in dirs):
                 raise ValueError(f"{rel!r} lies inside a skill directory")
         entry = _Root(base=base, files=tuple(files), tags=frozenset(tags))
-        self._roots.setdefault(pack, []).append(entry)
+        self._roots.setdefault(library, []).append(entry)
 
-    def files(self, pack: str, tags: frozenset[str] = frozenset()) -> list[str]:
-        """Every pack-level file, as paths relative to whichever root holds it.
+    def files(self, library: str, tags: frozenset[str] = frozenset()) -> list[str]:
+        """Every library-level file, as paths relative to whichever root holds it.
 
         ``tags`` is a request's tag scope: only roots carrying any of them count.
 
@@ -168,29 +169,29 @@ class PackResources:
         fed by two sources sharing a file.
         """
         found: list[str] = []
-        for entry in self._roots.get(pack, ()):
+        for entry in self._roots.get(library, ()):
             if entry.admits(tags):
                 found.extend(entry.files)
         return found
 
     def read(
-        self, pack: str, rel: str, tags: frozenset[str] = frozenset()
+        self, library: str, rel: str, tags: frozenset[str] = frozenset()
     ) -> str | None:
-        """Read one pack-level file, or None when it is absent or off-limits.
+        """Read one library-level file, or None when it is absent or off-limits.
 
         ``rel`` must be exactly one of the paths ``add()`` registered for this
-        pack -- the harvested list is the contract, so a file that exists on
+        library -- the harvested list is the contract, so a file that exists on
         disk but was never harvested (an unregistered sibling, a dotfile, a
         file outside every configured ``include.files`` glob) is refused even
         though nothing here walks the directory to find that out. A registered
         path is still resolved and checked against its root before being read,
         as defence in depth against a symlink pointing outside the tree; ``add``
         already refused any path inside a skill directory, so none can be
-        registered here. Tries each root added for ``pack`` in order and returns
-        the first hit.
+        registered here. Tries each root added for ``library`` in order and
+        returns the first hit.
         """
         target_rel = PurePosixPath(rel).as_posix()
-        for entry in self._roots.get(pack, ()):
+        for entry in self._roots.get(library, ()):
             if target_rel not in entry.files or not entry.admits(tags):
                 continue
             target = (entry.base / rel).resolve()
@@ -212,8 +213,8 @@ class SkillIndex:
 
     def __init__(self, skills: list[Skill]):
         self._skills = skills
-        # First writer wins on the bare name, so a duplicate across packs stays
-        # reachable through its qualified "<pack>/<name>" form.
+        # First writer wins on the bare name, so a duplicate across libraries
+        # stays reachable through its qualified "<library>/<name>" form.
         self._by_name: dict[str, Skill] = {}
         for skill in skills:
             self._by_name.setdefault(skill.name, skill)
@@ -223,26 +224,28 @@ class SkillIndex:
         return len(self._skills)
 
     @property
-    def packs(self) -> list[str]:
-        """Every pack in the catalogue, ignoring any request scope."""
-        return sorted({s.pack for s in self._skills})
+    def libraries(self) -> list[str]:
+        """Every library in the catalogue, ignoring any request scope."""
+        return sorted({s.library for s in self._skills})
 
     def visible(self, scope: Scope = EVERYTHING) -> list[Skill]:
         """The skills a client restricted to ``scope`` may see."""
         return [s for s in self._skills if _admits(scope, s)]
 
-    def select(self, scope: Scope = EVERYTHING, pack: str = "") -> list[Skill]:
-        """Visible skills narrowed further by a pack or group selector."""
-        return [s for s in self.visible(scope) if not pack or s.in_pack(pack)]
+    def select(self, scope: Scope = EVERYTHING, library: str = "") -> list[Skill]:
+        """Visible skills narrowed further by a library or group selector."""
+        return [
+            s for s in self.visible(scope) if not library or s.in_library(library)
+        ]
 
     def selectors(self, scope: Scope = EVERYTHING) -> list[str]:
-        """Valid selectors for this client -- packs and their groups.
+        """Valid selectors for this client -- libraries and their groups.
 
         Scoped on purpose: an error message that listed every selector would
-        leak the other packs' names to a scoped client.
+        leak the other libraries' names to a scoped client.
         """
         visible = self.visible(scope)
-        return sorted({s.pack for s in visible} | {s.group for s in visible})
+        return sorted({s.library for s in visible} | {s.group for s in visible})
 
     def get(self, name: str, scope: Scope = EVERYTHING) -> Skill | None:
         """Look up one skill, or None when it is absent or out of scope.
@@ -257,4 +260,4 @@ class SkillIndex:
 
 
 def _admits(scope: Scope, skill: Skill) -> bool:
-    return scope.admits(skill.pack, skill.tags, skill.group)
+    return scope.admits(skill.library, skill.tags, skill.group)

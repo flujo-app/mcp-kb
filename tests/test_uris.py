@@ -9,16 +9,16 @@ import json
 
 import pytest
 
-from kubed.mcp_kb.catalogue.skills import PackResources, SkillIndex, load_skills
+from kubed.mcp_kb.catalogue.skills import LibraryFiles, SkillIndex, load_skills
 from kubed.mcp_kb.catalogue.uris import Catalogue, parse, uri_for
 from kubed.mcp_kb.mcp.scope import Scope
-from tests.conftest import build_pack_resources, load_all_skills
+from tests.conftest import build_library_files, load_all_skills
 
 
 @pytest.fixture
 def catalogue(skills_dir):
     skills = load_all_skills(skills_dir)
-    return Catalogue(SkillIndex(skills), build_pack_resources(skills_dir))
+    return Catalogue(SkillIndex(skills), build_library_files(skills_dir))
 
 
 # -- grammar ------------------------------------------------------------------
@@ -57,7 +57,7 @@ def test_parse_does_not_decode_percent_escapes(catalogue):
 
 @pytest.mark.unit
 def test_entries_are_indexes_not_skills(catalogue):
-    """The listing is the cheap layer: packs and groups, never every skill."""
+    """The listing is the cheap layer: libraries and groups, never every skill."""
     uris = [e.uri for e in catalogue.entries()]
     assert "skill://flatsource" in uris
     assert "skill://deepsource" in uris
@@ -81,7 +81,7 @@ def test_entries_carry_the_four_resource_fields(catalogue):
 
 
 @pytest.mark.unit
-def test_a_pack_with_shared_material_advertises_it(catalogue):
+def test_a_library_with_shared_material_advertises_it(catalogue):
     uris = [e.uri for e in catalogue.entries()]
     assert "skill://deepsource/_files" in uris
     # flatsource ships only a dotfile, which is not readable material.
@@ -120,7 +120,7 @@ def test_reading_a_group_index_excludes_the_sibling_group(catalogue):
 
 @pytest.mark.unit
 def test_a_bare_skill_uri_is_its_instructions(catalogue):
-    """`skill://pack/name` and `.../SKILL.md` are the same thing said twice."""
+    """`skill://library/name` and `.../SKILL.md` are the same thing said twice."""
     short = catalogue.read("skill://flatsource/alpha")
     explicit = catalogue.read("skill://flatsource/alpha/SKILL.md")
     assert short == explicit
@@ -163,7 +163,7 @@ def test_manifest_lists_only_the_files_the_harvest_would_keep(catalogue, skills_
 
 
 @pytest.mark.unit
-def test_pack_files_index_and_one_of_its_files(catalogue):
+def test_library_files_index_and_one_of_its_files(catalogue):
     index = catalogue.read("skill://deepsource/_files")
     assert "skill://deepsource/shared/guide.md" in index
     assert catalogue.read("skill://deepsource/shared/guide.md") == "shared guidance\n"
@@ -171,22 +171,22 @@ def test_pack_files_index_and_one_of_its_files(catalogue):
 
 
 @pytest.mark.unit
-def test_skill_names_collide_across_packs_and_both_survive(skills_dir):
-    """The pack in the URI is what makes this reachable at all.
+def test_skill_names_collide_across_libraries_and_both_survive(skills_dir):
+    """The library in the URI is what makes this reachable at all.
 
     SkillsDirectoryProvider keys on the folder name and drops the loser
     entirely; qualifying the address is the fix, so it is pinned by a test.
     """
-    for pack in ("flatsource", "deepsource"):
-        _write_skill(skills_dir, pack, "twin", f"from {pack}")
+    for library in ("flatsource", "deepsource"):
+        _write_skill(skills_dir, library, "twin", f"from {library}")
     skills = load_all_skills(skills_dir)
-    cat = Catalogue(SkillIndex(skills), build_pack_resources(skills_dir))
+    cat = Catalogue(SkillIndex(skills), build_library_files(skills_dir))
     assert "from flatsource" in cat.read("skill://flatsource/twin")
     assert "from deepsource" in cat.read("skill://deepsource/twin")
 
 
-def _write_skill(root, pack, name, description):
-    path = root / pack / name
+def _write_skill(root, library, name, description):
+    path = root / library / name
     path.mkdir(parents=True, exist_ok=True)
     (path / "SKILL.md").write_text(
         f"---\nname: {name}\ndescription: {description}\n---\n\nBody.\n"
@@ -218,13 +218,13 @@ def test_traversal_cannot_walk_out_of_a_skill(catalogue):
 
 
 @pytest.mark.unit
-def test_a_skill_file_is_not_reachable_as_a_pack_file(catalogue):
+def test_a_skill_file_is_not_reachable_as_a_library_file(catalogue):
     """The two spaces must not overlap, or skill scoping could be bypassed."""
     assert catalogue.read("skill://deepsource/plugin-a/gamma/SKILL.md") is None
 
 
 @pytest.mark.unit
-def test_the_pin_hides_another_pack_entirely(catalogue):
+def test_the_pin_hides_another_library_entirely(catalogue):
     """Out of scope is indistinguishable from absent, on purpose."""
     assert catalogue.read("skill://deepsource/gamma") is not None
     assert catalogue.read("skill://deepsource/gamma", scope=Scope("flatsource")) is None
@@ -233,20 +233,20 @@ def test_the_pin_hides_another_pack_entirely(catalogue):
 
 @pytest.mark.unit
 def test_a_group_pin_cannot_read_a_sibling_group(catalogue):
-    """Pinning to one group must not widen to the whole pack."""
+    """Pinning to one group must not widen to the whole library."""
     assert catalogue.read("skill://deepsource/gamma", scope=Scope("plugin-a")) is not None
     assert catalogue.read("skill://deepsource/delta", scope=Scope("plugin-a")) is None
 
 
 @pytest.mark.unit
-def test_a_group_pin_still_reaches_its_packs_shared_material(catalogue):
-    """Shared files belong to the pack, and are what its skills cite."""
+def test_a_group_pin_still_reaches_its_librarys_shared_material(catalogue):
+    """Shared files belong to the library, and are what its skills cite."""
     body = catalogue.read("skill://deepsource/shared/guide.md", scope=Scope("plugin-a"))
     assert body == "shared guidance\n"
 
 
 @pytest.mark.unit
-def test_the_pin_blocks_shared_material_of_another_pack(catalogue):
+def test_the_pin_blocks_shared_material_of_another_library(catalogue):
     assert (
         catalogue.read("skill://deepsource/shared/guide.md", scope=Scope("flatsource"))
         is None
@@ -276,13 +276,15 @@ def test_mime_types_follow_the_content(catalogue):
 
 
 @pytest.mark.unit
-def test_an_index_row_is_tagged_with_its_pack(tmp_path):
-    """A pack index row is tagged with its own pack and "index", sorted."""
+def test_an_index_row_is_tagged_with_its_library(tmp_path):
+    """A library index row is tagged with its own library and "index", sorted."""
     skill_dir = tmp_path / "loki"
     skill_dir.mkdir()
     (skill_dir / "SKILL.md").write_text("---\nname: loki\ndescription: d\n---\n")
-    skills = load_skills([skill_dir], pack="grafana", source="grafana", root=tmp_path)
-    resources = PackResources()
+    skills = load_skills(
+        [skill_dir], library="grafana", source="grafana", root=tmp_path
+    )
+    resources = LibraryFiles()
     cat = Catalogue(SkillIndex(skills), resources)
     assert cat.entries()[0].tags == ("grafana", "index")
 

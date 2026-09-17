@@ -3,7 +3,7 @@
 import pytest
 
 from kubed.mcp_kb.catalogue import harvest
-from kubed.mcp_kb.catalogue.skills import PackResources, load_skills
+from kubed.mcp_kb.catalogue.skills import LibraryFiles, load_skills
 from kubed.mcp_kb.config import Config, Include
 from kubed.mcp_kb.mcp.prompts import load_prompts
 
@@ -14,74 +14,76 @@ from tests.webdav_server import webdav  # noqa: F401 - a fixture, used by name
 FLAT = {"alpha": "First skill.", "beta": "Second skill."}
 NESTED = {"plugin-a": {"gamma": "Third skill."}, "plugin-b": {"delta": "Fourth skill."}}
 
-# Each synthetic pack is its own source root, so the include glob is relative
-# to that pack's directory rather than to the tree root. "**/SKILL.md" finds a
-# skill at any depth under a pack -- flatsource lays its directly under itself,
-# deepsource one level deeper under a plugin -- and harvest.group_of() (via
-# SKILL_ROOTS) sorts flat from nested from there, exactly as the old rglob over
-# the whole tree did.
+# Each synthetic library is its own source root, so the include glob is
+# relative to that library's directory rather than to the tree root.
+# "**/SKILL.md" finds a skill at any depth under a library -- flatsource lays
+# its directly under itself, deepsource one level deeper under a plugin -- and
+# harvest.group_of() (via SKILL_ROOTS) sorts flat from nested from there,
+# exactly as the old rglob over the whole tree did.
 SKILLS_INCLUDE = Include(skills=["**/SKILL.md"], files=["**/*"])
-PACK_INCLUDES = {"flatsource": SKILLS_INCLUDE, "deepsource": SKILLS_INCLUDE}
+LIBRARY_INCLUDES = {"flatsource": SKILLS_INCLUDE, "deepsource": SKILLS_INCLUDE}
 PROMPT_INCLUDE = Include(prompts=["*.md"])
 
 
 def load_all_skills(root):
-    """Harvest and load every synthetic pack under ``root``, as one catalogue."""
+    """Harvest and load every synthetic library under ``root``, as one catalogue."""
     skills = []
-    for pack, include in PACK_INCLUDES.items():
-        pack_root = root / pack
-        if pack_root.is_dir():
-            dirs = harvest.skill_dirs(pack_root, include)
-            skills += load_skills(dirs, pack=pack, source=pack, root=pack_root)
+    for library, include in LIBRARY_INCLUDES.items():
+        library_root = root / library
+        if library_root.is_dir():
+            dirs = harvest.skill_dirs(library_root, include)
+            skills += load_skills(
+                dirs, library=library, source=library, root=library_root
+            )
     return skills
 
 
-def build_pack_resources(root):
-    """A ``PackResources`` fed from every synthetic pack under ``root``."""
-    resources = PackResources()
-    for pack, include in PACK_INCLUDES.items():
-        pack_root = root / pack
-        if pack_root.is_dir():
-            dirs = harvest.skill_dirs(pack_root, include)
-            files = harvest.pack_files(pack_root, include, dirs)
-            resources.add(pack, pack_root, files, dirs)
+def build_library_files(root):
+    """A ``LibraryFiles`` fed from every synthetic library under ``root``."""
+    resources = LibraryFiles()
+    for library, include in LIBRARY_INCLUDES.items():
+        library_root = root / library
+        if library_root.is_dir():
+            dirs = harvest.skill_dirs(library_root, include)
+            files = harvest.library_files(library_root, include, dirs)
+            resources.add(library, library_root, files, dirs)
     return resources
 
 
-def load_pack_prompts(root, pack):
-    """The prompts harvested from one pack's own source root under ``root``."""
-    pack_root = root / pack
-    if not pack_root.is_dir():
+def load_library_prompts(root, library):
+    """The prompts harvested from one library's own source root under ``root``."""
+    library_root = root / library
+    if not library_root.is_dir():
         return []
-    files = harvest.prompt_files(pack_root, PROMPT_INCLUDE)
-    return load_prompts(files, pack=pack, source=pack)
+    files = harvest.prompt_files(library_root, PROMPT_INCLUDE)
+    return load_prompts(files, library=library, source=library)
 
 
 def load_all_prompts(root):
-    """Every pack's prompts under ``root``, combined."""
+    """Every library's prompts under ``root``, combined."""
     prompts = []
-    for pack in PACK_INCLUDES:
-        prompts += load_pack_prompts(root, pack)
+    for library in LIBRARY_INCLUDES:
+        prompts += load_library_prompts(root, library)
     return prompts
 
 
-def make_config(skills_dir=None, prompts_dir=None, packs=None):
+def make_config(skills_dir=None, prompts_dir=None, libraries=None):
     """A ``Config`` whose ``file://`` sources mirror the fixture trees above.
 
     One source per top-level directory under ``skills_dir``; one prompt source
     per top-level directory under ``prompts_dir``, joined to the same-named
     library -- the config-level shape of ``examples/config.yaml``'s
     grafana/grafana-prompts pair, needed because the two trees are separate
-    roots and a source is exactly one root. ``packs`` narrows both to the named
-    packs: the config-file equivalent of the old ``SKILL_PACKS`` hard scope, a
-    deployment that should serve less gets a config that lists less.
+    roots and a source is exactly one root. ``libraries`` narrows both to the
+    named libraries: the config-file equivalent of the old ``SKILL_PACKS`` hard
+    scope, a deployment that should serve less gets a config that lists less.
     """
     sources = []
     for base, is_prompts in ((skills_dir, False), (prompts_dir, True)):
         if base is None:
             continue
         for name in sorted(p.name for p in base.iterdir() if p.is_dir()):
-            if packs is not None and name not in packs:
+            if libraries is not None and name not in libraries:
                 continue
             if is_prompts:
                 sources.append(
@@ -110,15 +112,15 @@ def _build_tree(root):
     for plugin, skills in NESTED.items():
         for name, desc in skills.items():
             _write(root / "deepsource" / plugin / name, name, desc)
-    # Pack-level files: outside every skill directory, so not skills themselves.
+    # Library-level files: outside every skill directory, so not skills themselves.
     (root / "deepsource" / "README.md").write_text("not a skill\n")
     shared = root / "deepsource" / "shared"
     shared.mkdir(parents=True, exist_ok=True)
     (shared / "guide.md").write_text("shared guidance\n")
     (shared / "nested").mkdir(exist_ok=True)
     (shared / "nested" / "schema.json").write_text("{}\n")
-    # A dotfile, which is the only pack-level "file" grafana actually ships.
-    # It must not earn the pack an index row pointing at nothing readable.
+    # A dotfile, which is the only library-level "file" grafana actually ships.
+    # It must not earn the library an index row pointing at nothing readable.
     (root / "flatsource" / ".gitkeep").write_text("")
     return root
 
@@ -131,7 +133,7 @@ def _write(path, name, description):
 
 
 def _build_prompts(root):
-    """One prompt per pack, plus a file that is not in a pack folder at all."""
+    """One prompt per library, plus a file that is not in a library folder at all."""
     _prompt(
         root / "flatsource" / "hello.md",
         "description: Say hello.\n"
@@ -148,7 +150,7 @@ def _build_prompts(root):
         "description: Check a service.\narguments:\n- name: service\n",
         '{app="{{ service }}"} |= "error"\n',
     )
-    (root / "loose.md").write_text("---\ndescription: not in a pack\n---\nnope\n")
+    (root / "loose.md").write_text("---\ndescription: not in a library\n---\nnope\n")
     return root
 
 
@@ -159,7 +161,7 @@ def _prompt(path, frontmatter, body):
 
 @pytest.fixture
 def prompts_dir(tmp_path_factory):
-    """A prompts root: ``<pack>/<name>.md``, for the packs ``skills_dir`` holds."""
+    """A prompts root: ``<library>/<name>.md``, for the libraries in ``skills_dir``."""
     return _build_prompts(tmp_path_factory.mktemp("prompts"))
 
 

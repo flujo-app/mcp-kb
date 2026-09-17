@@ -134,7 +134,7 @@ docker run -p 8000:8000 \
   kubed/mcp-kb:latest
 ```
 
-Two mounts and that is the deployment. `examples/config.yaml` serves four pinned GitHub packs out of the box. Then point an MCP client at `http://localhost:8000/mcp`.
+Two mounts and that is the deployment. `examples/config.yaml` serves four pinned GitHub libraries out of the box. Then point an MCP client at `http://localhost:8000/mcp`.
 
 The cache wants to be writable by uid **65534**, which the container runs as: a named Docker volume needs nothing, a Kubernetes `emptyDir` needs `fsGroup: 65534`.
 
@@ -160,7 +160,7 @@ Per request, on the MCP URL — each with a header form that beats it:
 |---|---|---|
 | `?resources=off` | `X-MCP-Resources` | Reveals the resource mirror tools |
 | `?prompts=off` | `X-MCP-Prompts` | Reveals the prompt mirror tools |
-| `?library=<name>` | `X-Skill-Library` (alias `X-Skill-Pack`) | Restricts this client to one library or group |
+| `?library=<name>` | `X-Skill-Library` | Restricts this client to one library or group |
 | `?tags=a,b` | `X-Skill-Tags` | Restricts it to anything carrying any of those tags |
 | `?skills=full` | `X-Skill-Listing` | Lists every skill, for clients that sync them to disk |
 

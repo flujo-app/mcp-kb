@@ -186,8 +186,10 @@ def prompt_files(root: Path, include: Include) -> list[Path]:
     return files(root, "prompts", include)
 
 
-def pack_files(root: Path, include: Include, skill_dirs: Sequence[Path]) -> list[str]:
-    """Pack-level files as root-relative posix paths, never one inside a skill."""
+def library_files(
+    root: Path, include: Include, skill_dirs: Sequence[Path]
+) -> list[str]:
+    """Library-level files as root-relative posix paths, never one inside a skill."""
     base = root.resolve()
     skills = tuple(skill_dirs)
     return [

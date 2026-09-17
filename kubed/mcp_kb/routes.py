@@ -74,8 +74,9 @@ def register(mcp: FastMCP, knowledge_base: KnowledgeBase) -> None:
     async def health(_request: Request) -> JSONResponse:
         """Readiness probe, and the fastest way to tell which sources loaded.
 
-        Reports the catalogue as *loaded*, ignoring any ``X-Skill-Pack`` header,
-        because an operator asking what this pod serves wants the real answer.
+        Reports the catalogue as *loaded*, ignoring any ``X-Skill-Library``
+        header, because an operator asking what this pod serves wants the real
+        answer.
         ``status`` is ``"ok"`` even when a source failed to materialise --
         readiness stays green for whatever did load, and the failure shows up in
         ``sources`` instead, keyed by source name. Each source also carries the

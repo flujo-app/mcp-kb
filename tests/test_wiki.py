@@ -129,7 +129,6 @@ def test_installing_documents_every_url_parameter_and_header():
     ]
     headers = [
         request.LIBRARY_HEADER,
-        request.PACK_HEADER,
         request.TAGS_HEADER,
         request.PROMPTS_HEADER,
         request.RESOURCES_HEADER,

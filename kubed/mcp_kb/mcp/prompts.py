@@ -3,7 +3,7 @@
 A skill is read by the model when it decides to. A prompt is picked by a person
 -- Claude Code lists them as slash commands -- who fills in a few arguments
 before the model sees anything. Different primitive, so a different module, but
-scoped by the same pack (the library) and ``X-Skill-Pack`` rules as skills:
+scoped by the same library and ``X-Skill-Library`` rules as skills:
 ``harvest.py`` finds the files per source, and this module turns them into
 prompts joined to that source's library.
 
@@ -23,9 +23,9 @@ A file is YAML frontmatter plus a body::
 Placeholders are ``{{ name }}`` rather than ``str.format``'s ``{name}`` because
 these bodies are full of LogQL, PromQL and JSON, which all use single braces.
 
-The exposed name is ``<pack>_<file stem>``. Prompt names are one flat namespace
-per server, and two packs shipping a ``debug.md`` must not collide the way two
-skills named ``testing`` otherwise would.
+The exposed name is ``<library>_<file stem>``. Prompt names are one flat
+namespace per server, and two libraries shipping a ``debug.md`` must not
+collide the way two skills named ``testing`` otherwise would.
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ class FilePrompt(Prompt):
     """
 
     path: Path
-    pack: str
+    library: str
     source: str = ""
     template: str
     live: bool = False
@@ -142,7 +142,7 @@ def _split(text: str) -> tuple[dict, str]:
 
 def load_prompt(
     path: Path,
-    pack: str,
+    library: str,
     *,
     source: str = "",
     tags: Sequence[str] = (),
@@ -150,7 +150,7 @@ def load_prompt(
 ) -> FilePrompt:
     """Parse one prompt file, raising ValueError on anything malformed.
 
-    ``pack`` is the library this prompt joins; ``source`` and ``tags`` (the
+    ``library`` is the library this prompt joins; ``source`` and ``tags`` (the
     library's tags plus the source's, concatenated by the caller) become part
     of every prompt's own tags. An undeclared placeholder is an error rather
     than an empty substitution: it is almost always a typo, and rendered blank
@@ -182,11 +182,11 @@ def load_prompt(
     return FilePrompt(
         path=path,
         live=live,
-        name=f"{pack}_{path.stem}",
+        name=f"{library}_{path.stem}",
         description=" ".join(str(meta.get("description", "")).split()) or None,
         arguments=arguments,
-        tags={t for t in (pack, source, "prompt", *tags) if t},
-        pack=pack,
+        tags={t for t in (library, source, "prompt", *tags) if t},
+        library=library,
         source=source,
         template=body,
         defaults=defaults,
@@ -196,14 +196,14 @@ def load_prompt(
 def load_prompts(
     files: Sequence[Path],
     *,
-    pack: str,
+    library: str,
     source: str,
     tags: Sequence[str] = (),
     live: bool = False,
 ) -> list[FilePrompt]:
-    """Every prompt file ``harvest`` already found for one source, joined to ``pack``.
+    """Every prompt file ``harvest`` already found for one source, joined to a library.
 
-    ``pack`` is the library the prompts join. A broken file is logged and
+    ``library`` is the library the prompts join. A broken file is logged and
     skipped rather than raised: a bad prompt must not take the skills down with
     it. ``tests/test_prompts.py`` loads every shipped prompt strictly, so this
     only ever fires for a file mounted in at runtime.
@@ -211,7 +211,9 @@ def load_prompts(
     prompts: list[FilePrompt] = []
     for path in sorted(files):
         try:
-            prompts.append(load_prompt(path, pack, source=source, tags=tags, live=live))
+            prompts.append(
+                load_prompt(path, library, source=source, tags=tags, live=live)
+            )
         except (OSError, ValueError, yaml.YAMLError) as exc:
             log.warning("skipping prompt %s: %s", path, exc)
     return prompts
@@ -246,7 +248,8 @@ class PromptProvider(Provider):
         return [
             p
             for p in prompts
-            if (not libraries or p.pack in libraries) and tags.admits(p.pack, p.tags)
+            if (not libraries or p.library in libraries)
+            and tags.admits(p.library, p.tags)
         ]
 
     async def _list_prompts(self) -> Sequence[Prompt]:
@@ -319,4 +322,4 @@ def _libraries_of(selector: str, index: SkillIndex) -> frozenset[str]:
     """
     if not selector:
         return frozenset()
-    return frozenset(s.pack for s in index.visible(Scope(selector))) | {selector}
+    return frozenset(s.library for s in index.visible(Scope(selector))) | {selector}

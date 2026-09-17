@@ -44,7 +44,7 @@ installer's, against whatever image tag it chooses.
 | `kubed/mcp_kb/routes.py` | the plain-HTTP surface: `/health`, `/reindex`, `/openapi.yaml` |
 | `kubed/mcp_kb/config.py` | the config file's model — `Config`, `Library`, `Include`, the `*Source` models, `EnvRef`, `schema()` |
 | `kubed/mcp_kb/catalogue/` | what is served, and how it is found, addressed and persisted |
-| ⤷ `harvest.py` | the `include` globs, and what counts as a skill, a prompt or a pack file |
+| ⤷ `harvest.py` | the `include` globs, and what counts as a skill, a prompt or a library file |
 | ⤷ `skills.py` | the domain — `Skill`, `SkillIndex`, and the scoping rules. Imports no FastMCP |
 | ⤷ `uris.py` | the `skill://` address space — `Catalogue`, the grammar |
 | ⤷ `index.py` | `Index`/`SourceRecord`, the on-disk `index.json` a cold start reads |
@@ -58,7 +58,7 @@ installer's, against whatever image tag it chooses.
 | ⤷ `announce.py` | `AnnounceChanges` — telling a session its listing moved |
 | `kubed/mcp_kb/spec/` | `builder.py`, the OpenAPI document for the HTTP surface |
 | `scripts/` | `generate_openapi.py`, `generate_wiki.py`, and `requirements.py` for the image build |
-| `examples/config.yaml` | the worked config the image ships — four packs as `github://` sources |
+| `examples/config.yaml` | the worked config the image ships — four libraries as `github://` sources |
 | `config.schema.json` | `Config.model_json_schema()`, committed so an editor can validate a config live |
 | `wiki/` | the GitHub wiki, as a submodule |
 
@@ -80,7 +80,7 @@ names with a prefix, and these names are the agent's API.
   both at once, which is the point.
 - **Adding an endpoint** → `routes.py`, and its response shape in `spec/`, or
   the published contract starts lying.
-- **Changing what counts as a skill, a prompt or a pack file** →
+- **Changing what counts as a skill, a prompt or a library file** →
   `catalogue/harvest.py` for the rule, `catalogue/uris.py` for where it applies.
 - **Changing who may see one** → `catalogue/skills.py` for the rule,
   `catalogue/uris.py` for where it is applied. Every `Catalogue` method takes a
@@ -137,10 +137,10 @@ refusing to run one would be a different and worse contract.
 Two ways to hard-scope, both ceilings the model cannot widen past:
 
 - **A `Scope`, per client** — `?library=` / `?tags=` or the `X-Skill-Library` /
-  `X-Skill-Tags` headers (`X-Skill-Pack` is an alias). One deployment serves
-  many narrow agents; in n8n it is a Header Auth credential on the MCP Client
-  Tool node. Prefer this — a second copy of the server is a whole extra pod for
-  something a header solves.
+  `X-Skill-Tags` headers. One deployment serves many narrow agents; in n8n it
+  is a Header Auth credential on the MCP Client Tool node. Prefer this — a
+  second copy of the server is a whole extra pod for something a header
+  solves.
 - **A config that lists less**, per deployment. Narrower blast radius, but a
   whole pod.
 

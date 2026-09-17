@@ -220,11 +220,11 @@ def mixed(tmp_path):
     return knowledge_base, PromptProvider(lambda: knowledge_base.snapshot)
 
 
-def test_a_tag_scope_cannot_read_another_sources_pack_file(mixed):
+def test_a_tag_scope_cannot_read_another_sources_library_file(mixed):
     """Two sources feed `obs`; `tokens.md` came from the `ui` one.
 
-    Admitting pack files by library alone let an `ops` scope — which does see a
-    skill in `obs` — read the `ui` source's file by guessing its URI.
+    Admitting library files by library alone let an `ops` scope — which does
+    see a skill in `obs` — read the `ui` source's file by guessing its URI.
     """
     knowledge_base, _ = mixed
     catalogue = knowledge_base.snapshot.catalogue
@@ -234,7 +234,7 @@ def test_a_tag_scope_cannot_read_another_sources_pack_file(mixed):
     assert catalogue.read("skill://obs/shared/tokens.md", ui) == "ui-only material"
 
 
-def test_a_tag_scope_does_not_list_another_sources_pack_files(mixed):
+def test_a_tag_scope_does_not_list_another_sources_library_files(mixed):
     knowledge_base, _ = mixed
     catalogue = knowledge_base.snapshot.catalogue
     ops, ui = Scope(tags=frozenset({"ops"})), Scope(tags=frozenset({"ui"}))
@@ -250,7 +250,10 @@ def test_a_group_name_shared_by_two_libraries_selects_both_libraries_prompts(mix
     knowledge_base, prompts = mixed
     core = Scope("core")
 
-    assert sorted({s.pack for s in knowledge_base.index.visible(core)}) == ["alpha", "beta"]
+    assert sorted({s.library for s in knowledge_base.index.visible(core)}) == [
+        "alpha",
+        "beta",
+    ]
     assert sorted(p.name for p in prompts.visible(core)) == ["alpha_p", "beta_p"]
 
 

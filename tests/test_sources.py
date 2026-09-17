@@ -171,7 +171,7 @@ def test_an_update_beneath_a_symlinked_directory_moves_the_fingerprint(tmp_path)
     entered it — so the fingerprint was empty before and after an update while
     harvest went on serving the file.
     """
-    root = tmp_path / "pack"
+    root = tmp_path / "library"
     first = root / "..2026_a"
     (first / "shared").mkdir(parents=True)
     (first / "shared" / "foo.md").write_text("one")

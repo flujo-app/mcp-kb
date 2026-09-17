@@ -24,7 +24,7 @@ from kubed.mcp_kb.mcp.prompts import FilePrompt
 def _skill(**overrides):
     fields = {
         "name": "alpha",
-        "pack": "flatsource",
+        "library": "flatsource",
         "group": "flatsource",
         "description": "First skill.",
         "path": Path("/skills/flatsource/alpha"),
@@ -51,7 +51,7 @@ def _source_record(**overrides):
                 FilePrompt(
                     path=Path("/skills/flatsource/debug.md"),
                     name="flatsource_debug",
-                    pack="flatsource",
+                    library="flatsource",
                     source="flatsource",
                     template="Investigate.",
                     tags={"flatsource", "prompt", "b", "a"},

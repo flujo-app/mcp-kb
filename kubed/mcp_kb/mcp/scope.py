@@ -23,9 +23,9 @@ class Scope:
     def __bool__(self) -> bool:
         return bool(self.library or self.tags)
 
-    def admits(self, pack: str, tags: Iterable[str], group: str = "") -> bool:
-        """Whether an item in ``pack`` (and ``group``) carrying ``tags`` is in scope."""
-        if self.library and self.library not in (pack, group):
+    def admits(self, library: str, tags: Iterable[str], group: str = "") -> bool:
+        """Whether ``library`` (and ``group``) carrying any of ``tags`` is in scope."""
+        if self.library and self.library not in (library, group):
             return False
         return not self.tags or not self.tags.isdisjoint(tags)
 

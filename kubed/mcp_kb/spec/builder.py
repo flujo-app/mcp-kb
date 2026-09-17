@@ -66,7 +66,7 @@ SOURCE_STATUS = {
         "library": _field("string", "The library this source's skills join."),
         "skills": _field("integer", "Skills this source contributed."),
         "prompts": _field("integer", "Prompts this source contributed."),
-        "files": _field("integer", "Pack-level files this source contributed."),
+        "files": _field("integer", "Library-level files this source contributed."),
         "built": _field(
             "string",
             "When the harvest served was built. Unchanged while `stale`: a "
@@ -217,8 +217,8 @@ def build_spec() -> dict:
                         "Readiness, and the fastest way to see which sources loaded."
                     ),
                     "description": (
-                        "Ignores X-Skill-Pack: an operator asking what this "
-                        "pod serves wants the real catalogue, not one "
+                        "Ignores X-Skill-Library: an operator asking what "
+                        "this pod serves wants the real catalogue, not one "
                         "client's scoped view of it."
                     ),
                     "tags": ["ops"],

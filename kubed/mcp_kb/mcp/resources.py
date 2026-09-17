@@ -9,9 +9,10 @@ One provider serves the whole address space rather than one provider per skill.
 FastMCP's ``SkillsDirectoryProvider`` is the obvious alternative, and it is
 wrong here for two reasons that only show up at scale:
 
-- It names a skill after its folder, so two packs shipping a ``testing/`` become
-  one, and the loser is not merely shadowed but absent from the server. With
-  four packs and ninety skills that is a matter of time, not luck.
+- It names a skill after its folder, so two libraries shipping a ``testing/``
+  become one, and the loser is not merely shadowed but absent from the
+  server. With four libraries and ninety skills that is a matter of time,
+  not luck.
 - It lists every skill and every manifest on every ``resources/list`` -- 77KB
   for this catalogue, paid by every client on every listing. That is the same
   expense this server rejects ``ResourcesAsTools`` for.
@@ -47,8 +48,8 @@ class CatalogueProvider(Provider):
 
     An out-of-scope URI resolves to None, which FastMCP reports as an unknown
     resource. That conflation is deliberate and matches ``SkillIndex``: a scoped
-    client must not be able to confirm another pack's contents from the shape of
-    an error.
+    client must not be able to confirm another library's contents from the shape
+    of an error.
 
     The catalogue arrives as a getter, not a value. A refresh builds a new one
     and swaps the server's snapshot; a provider holding the old object would

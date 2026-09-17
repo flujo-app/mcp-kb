@@ -3,7 +3,7 @@
 Assembles a FastMCP instance from the catalogue a config file describes -- the
 address space, the resources, the mirror tools, the routes -- and runs it on a
 transport. Turning a config source into a directory is ``sources``'s job;
-deciding what in it counts as a skill, a prompt or a pack-level file is
+deciding what in it counts as a skill, a prompt or a library-level file is
 ``catalogue/harvest.py``'s; building one immutable view of all of it is
 ``catalogue/snapshot.py``'s; the catalogue itself lives in
 ``catalogue/skills.py``, ``mcp/prompts.py`` and ``catalogue/uris.py``; and
@@ -45,7 +45,7 @@ from fastmcp import FastMCP
 from . import routes
 from .catalogue.index import INDEX_VERSION, Index, SourceRecord, config_hash, now
 from .catalogue.refresh import Schedule, keep_last_good, loop, moved, same_failure
-from .catalogue.skills import PackResources, SkillIndex
+from .catalogue.skills import LibraryFiles, SkillIndex
 from .catalogue.snapshot import (
     Snapshot,
     build_snapshot,
@@ -69,7 +69,7 @@ perform a specific task. Everything it serves is a `skill://` URI, and reading \
 one is the only operation there is.
 
 Work down the address space, cheapest first. Listing gives you indexes -- one \
-per pack, one per group within a pack. Reading an index URI \
+per library, one per folder within a library. Reading an index URI \
 (`skill://grafana-lgtm`) gives you the skills in it, as URIs. Reading a skill \
 URI (`skill://grafana/loki`) gives you the instructions to follow.
 
@@ -141,7 +141,7 @@ class KnowledgeBase:
         return self.snapshot.index
 
     @property
-    def resources(self) -> PackResources:
+    def resources(self) -> LibraryFiles:
         return self.snapshot.resources
 
     @property

@@ -58,7 +58,7 @@ def test_a_webdav_folder_is_copied_into_the_cache(webdav, tmp_path):
 
     assert root.parent == tmp_path / "src" / "notes"
     assert "first" in _body(root)
-    assert (root / "docs" / "guide.md").read_text() == "pack-level guidance\n"
+    assert (root / "docs" / "guide.md").read_text() == "library-level guidance\n"
     assert json.loads((root / ETAGS_FILE).read_text())[SKILL]
     assert (root / VERSION_FILE).read_text().split()[0] == root.name
 

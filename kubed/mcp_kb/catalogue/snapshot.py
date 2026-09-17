@@ -1,6 +1,6 @@
 """One immutable view of the whole catalogue, and how to build one.
 
-Everything the request path touches -- the index, the pack resources, the
+Everything the request path touches -- the index, the library files, the
 address space, the prompts -- hangs off a single frozen ``Snapshot``. A rebuild
 constructs a new one beside the old and the server swaps it in with one
 assignment, so a listing in flight is served by a consistent catalogue and no
@@ -36,7 +36,7 @@ from ..sources import SourceError, fingerprint, materialise
 from ..sources.live import Revalidator, is_live
 from . import harvest
 from .index import PromptRow, SkillRow, SourceRecord, now
-from .skills import PackResources, Skill, SkillIndex, load_skills
+from .skills import LibraryFiles, Skill, SkillIndex, load_skills
 from .uris import Catalogue
 
 # The record states that still name a tree worth serving. A "stale" record is
@@ -56,7 +56,7 @@ class Snapshot:
     generation: int
     built: str
     index: SkillIndex
-    resources: PackResources
+    resources: LibraryFiles
     catalogue: Catalogue
     prompts: tuple[FilePrompt, ...]
     status: dict[str, dict] = field(default_factory=dict)
@@ -99,12 +99,12 @@ def build_source(config: Config, source: Source, cache: Path) -> SourceRecord:
         tags = [*lib.tags, *source.tags]
         dirs = harvest.skill_dirs(root, source.include)
         skills = load_skills(
-            dirs, pack=lib.name, source=source.name, root=root, tags=tags
+            dirs, library=lib.name, source=source.name, root=root, tags=tags
         )
-        files = harvest.pack_files(root, source.include, dirs)
+        files = harvest.library_files(root, source.include, dirs)
         prompts = load_prompts(
             harvest.prompt_files(root, source.include),
-            pack=lib.name,
+            library=lib.name,
             source=source.name,
             tags=tags,
         )
@@ -162,7 +162,7 @@ def build_snapshot(
     revalidate = None if revalidator is None else revalidator.revalidate
 
     skills: list[Skill] = []
-    resources = PackResources(revalidate)
+    resources = LibraryFiles(revalidate)
     prompts: list[FilePrompt] = []
     status: dict[str, dict] = {}
 
@@ -186,7 +186,7 @@ def build_snapshot(
         )
         loaded = load_prompts(
             [Path(row.path) for row in record.prompts],
-            pack=record.library,
+            library=record.library,
             source=record.name,
             tags=[*lib.tags, *source.tags],
             live=is_live(source),

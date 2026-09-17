@@ -1,9 +1,9 @@
 """examples/config.yaml, the shape the image actually ships, against local git
-repositories standing in for the four upstream packs.
+repositories standing in for the four upstream libraries.
 
 Pins the four-source shape and guards the ``shared/**/*``/``workflows/**/*``
 fix for the trailing-``**``-is-directories-only glob bug that would otherwise
-only be caught by hand against the real 29-file penpot pack. Local rather than
+only be caught by hand against the real 29-file penpot library. Local rather than
 against github.com: the ``ref`` in the shipped config is a real upstream pin,
 which a unit test must not depend on staying reachable or unchanged.
 """
@@ -29,7 +29,7 @@ def _skill(root: Path, *parts: str) -> None:
 
 
 def _penpot(root: Path) -> None:
-    """The one pack that also references shared material outside its skills."""
+    """The one library that also references shared material outside its skills."""
     _skill(root, "skills", "s")
     (root / "shared").mkdir()
     (root / "shared" / "x.md").write_text("shared\n")
@@ -53,7 +53,7 @@ BUILDERS = {
 
 
 def _repo(tmp_path: Path, name: str) -> str:
-    """A one-commit repository laid out like the real pack, as a ``git+file://`` URL."""
+    """A one-commit repository laid out like the real library, as a ``git+file://``."""
     root = tmp_path / name
     repo = pygit2.init_repository(str(root), bare=False, initial_head="main")
     BUILDERS[name](root)
