@@ -2686,7 +2686,8 @@ fill them. So:
 
 **The plan changes accordingly** (§C1.33): task 5 loses folder selectors and
 gains their removal; task 6 becomes `?library=` (a name), `?categories=` and
-`?tags=`; task 8 is Claude plus Copilot through the dialect seam of §C1.34.
+`?tags=`; task 8 is Claude plus Copilot through the dialect seam of §C1.34,
+plus the substitutions and the input-required path of §C1.37.
 
 ### §C1.36 — Client-side placeholders as prompt arguments: mostly declined, partly kept (2026-09-17)
 
@@ -2737,6 +2738,39 @@ an `InputRequiredResult` (SEP-2322, MCP 2026-07-28) asking the client for a
 value before it renders, which FastMCP supports. That is the mechanism this
 idea wants, and it belongs to a future pass, once clients implement it: today
 Claude Code has an open issue for eliciting MCP prompt inputs at all.
+
+### §C1.37 — Locked: substitute what we know, leave the rest, ask when asking is possible (2026-09-17)
+
+**1. Every placeholder the server can resolve is always resolved**, on every
+render, whatever the dialect. Today that is the two that name this server's own
+material: `${CLAUDE_PLUGIN_ROOT}` → the plugin's address base
+(`skill://<library>/`) and `${CLAUDE_SKILL_DIR}` → that skill's own base
+(`skill://<library>/<folder>/<name>/`). Anything else that turns out to be
+answerable from the catalogue joins them by the same rule, no flag.
+
+**2. Client-side placeholders are left exactly as written, and documented as
+such.** No arguments, no description metadata, no machinery: `${selection}`,
+`${file}`, `#file:`, `@path`, `${CLAUDE_PROJECT_DIR}`, `${CLAUDE_SESSION_ID}`,
+`${input:…}` beyond a declared argument. A model reading `${selection}` knows
+what it means, which is the whole reason this is safe to leave alone, and it
+matches what Claude Code itself does with a skill it did not fetch locally
+(§C1.35 point 7). The wiki's Prompts page lists them and says plainly that no
+server can fill them.
+
+**3. `InputRequiredResult` is worth supporting for its own sake**, as Dr K put
+it: future-proof by implementing the protocol's own bells rather than inventing
+ours. It is real in FastMCP 4.0.3 — `InputRequiredPromptResult` wraps an
+`InputRequiredResult` and the `prompts/get` handler returns it to the runner,
+with `ctx.input_responses` carrying the answers on the next round — and gated
+to MCP 2026-07-28.
+
+The concrete use, which needs no new concept: **a missing required argument
+becomes a question instead of an error.** On a 2026-07-28 connection whose
+client declares elicitation, `prompts/get` without a required argument returns
+an `InputRequiredResult` asking for it, and renders on the round that answers.
+Everything older keeps #20's behaviour: -32602 naming the argument. One
+capability check, two tests (the modern path asks and then renders; the older
+path still errors), and the server is ready for the clients that arrive.
 
 ## Closing questions for Dr K
 
