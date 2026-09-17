@@ -2541,6 +2541,89 @@ decision 7's fallback serves.
    definition and the plugin's own manifest is ignored: support, or skip until
    something we pull uses it? Recommendation: skip, and say so in `/health`.
 
+### §C1.34 — Prompt frontmatter: read every dialect, publish one (2026-09-17)
+
+**Dr K: do not invent a prompt schema.** Point this server at a Claude command,
+a Copilot prompt file or a FastMCP-style prompt and the same MCP prompt should
+come out. What follows is the research and the mapping.
+
+**FastMCP has no guidance to give.** Its prompts are Python functions under
+`@mcp.prompt`, with the name from the function, the description from the
+docstring and the arguments from the signature; there is no file loader and no
+frontmatter anywhere in it. So "FastMCP style" is a decorated function, not a
+file format, and `catalogue/prompts.py` — deliberately FastMCP-free — is
+already this server's own loader.
+
+**The target is the MCP prompt itself**, which every dialect has to become:
+`name`, optional `title`, `description`, and `arguments`, each with `name`,
+`description` and `required`; argument values are strings; a missing required
+argument is -32602 (which #20 implemented).
+
+**The dialects.**
+
+| Dialect | Where | Frontmatter | Placeholders |
+|---|---|---|---|
+| mcp-kb (today) | a source's `prompts/` | `description`, `arguments: [{name, description, required, default}]` | `{{name}}` |
+| Claude command / skill | plugin `commands`, `commands/`, `.claude/commands/` | `description`, `argument-hint`, `arguments` (names, string or list), `name`, `when_to_use`, `allowed-tools`, `disallowed-tools`, `model`, `disable-model-invocation`, `user-invocable` | `$name`, `$ARGUMENTS`, `$ARGUMENTS[N]`, `$N`, `${CLAUDE_*}` |
+| VS Code / Copilot prompt file | `.github/prompts/*.prompt.md` | `description`, `name`, `argument-hint`, `agent`, `model`, `tools` | `${input:name:placeholder}`, `${selection}`, `${file}`, `#file:`, `#tool:` |
+| Codex custom prompt (deprecated in favour of skills) | `~/.codex/prompts/*.md` | `description`, `argument-hint: KEY=…` | `$1`–`$9`, `$ARGUMENTS`, `$NAME` (given as `KEY=value`), `$$` for a literal `$` |
+| Continue | markdown prompt | `name`, `description`, `invokable: true` | — |
+| Gemini CLI | `.gemini/commands/**.toml` | `prompt`, `description` (TOML, not frontmatter) | `{{args}}`, and `!{shell}` injection |
+| Cursor rules (`.mdc`) | `.cursor/rules` | `description`, `globs`, `alwaysApply` | — (instructions, not prompts: E5) |
+
+**The internal shape is the richest of them**, which is mcp-kb's own plus a
+title and the provenance: `name`, `title`, `description`, `arguments` with
+`description`/`required`/`default`, the body, and the dialect it came from.
+Everything else each dialect carries (`model`, `tools`, `agent`,
+`allowed-tools`, `invokable`, `globs`) has no meaning over MCP and is dropped,
+recorded once at DEBUG rather than silently.
+
+**Detection, strongest signal first**, because a duck check on the body alone
+would misread prose:
+
+1. **What the config says.** `dialect: claude | vscode | codex | gemini |
+   continue | mcp-kb` on a plugin or a source, `auto` by default. An explicit
+   answer always wins.
+2. **Where the file is and what it is called.** `*.prompt.md` is VS Code's;
+   `*.toml` under a `commands/` tree is Gemini's; a plugin manifest's
+   `commands` field or a `commands/` directory is Claude's; `prompts/` in one
+   of our own sources is this server's.
+3. **Which frontmatter keys are present.** `invokable` → Continue; `agent` or
+   `tools` → VS Code; `argument-hint` with an `arguments` name list → Claude;
+   `arguments` as objects → mcp-kb; `applyTo` or `globs` → not a prompt at all.
+4. **Which placeholders the body uses**, as the last resort and only to pick
+   between dialects already narrowed by the above: `{{name}}`, `${input:…}`,
+   `$ARGUMENTS`/`$N`, `{{args}}`.
+
+A file that matches nothing is skipped with its reason, as an unparseable
+prompt is today.
+
+**Normalising arguments.** Declared names win: mcp-kb's objects keep their
+`description`, `required` and `default`; Claude's and Codex's name lists become
+arguments in order; VS Code's `${input:name:placeholder}` becomes an argument
+whose description is the placeholder. Undeclared placeholders are inferred:
+`$1`–`$9` become `arg1`…`arg9`, Gemini's `{{args}}` becomes one optional
+`args`. `argument-hint` becomes the prompt's `title` hint when nothing better
+exists. Only mcp-kb's own `required: true` makes an argument required; every
+other dialect's are optional, because those clients all tolerate an unfilled
+placeholder.
+
+**Two safety rules.**
+
+- **Nothing is executed, ever.** Gemini's `!{…}` and Claude's `!` bash lines
+  are served as text. A prompt server that ran shell from a repository it
+  fetched would be a supply-chain hole.
+- **Client-side placeholders stay literal**: `${selection}`, `${file}`,
+  `#file:`, `${CLAUDE_SESSION_ID}` and friends name things only the client
+  has. Substituting them with anything would be a lie; the model reads them as
+  written.
+
+**Work.** A `catalogue/prompts/` package: one module per dialect, each a
+`detect(path, frontmatter, body)` and a `normalise(...)` into the internal
+shape, plus the table-driven test that matters — the same prompt written in
+every dialect, each producing one identical MCP prompt. This lands with PR 1's
+"prompts from commands" item (§C1.33 task 8), which it replaces and widens.
+
 ## Closing questions for Dr K
 
 *Superseded by §C1.22 — the name, here and in question 1, is `mcp-kb`. What was
