@@ -26,17 +26,18 @@ sources (git · WebDAV · folders)  ──▶  mcp-kb  ──▶  agents (resour
 
 ## 🔤 One address space
 
-Everything served is a `skill://` URI, and reading one is the only operation there is.
+Everything served is a `skill://` URI, and reading one is the only operation there is. The grammar follows the [MCP Skills extension](https://modelcontextprotocol.io/extensions/skills/overview): the library and folder are a prefix, and the last segment before the file is always the skill's name.
 
 ```
-skill://<library>                     an index: every skill in it
-skill://<library>/<skill>             that skill's instructions
-skill://<library>/<skill>/_manifest   what else it ships
-skill://<library>/<skill>/<path>      one of those files
-skill://<library>/_files              what the library ships outside its skills
+skill://<library>/_index.md                  an index: every skill in the library
+skill://<library>/<folder>/_index.md         the skills directly in one folder
+skill://<library>/<folder>/<skill>/SKILL.md  that skill's instructions
+skill://<library>/<folder>/<skill>/_manifest what else it ships
+skill://<library>/<folder>/<skill>/<path>    one of those files
+skill://<library>/_files.md                  what the library ships outside its skills
 ```
 
-**One segment is an index, two or more is content.** That is the whole grammar. Progressive disclosure lives in those addresses rather than in a tool list, so a listing is a dozen index rows whether the catalogue holds nine skills or ninety.
+A library, a folder or a skill's own directory is not a file — reading one is not found, and the error names the file to read instead. Progressive disclosure lives in the addresses rather than in a tool list, so a listing is a dozen index rows whether the catalogue holds nine skills or ninety.
 
 📖 [Skills](https://github.com/kubed-io/mcp-kb/wiki/Skills)
 
@@ -67,7 +68,8 @@ A client can be given part of the catalogue and no more, and the narrowing is a 
 
 | On the MCP URL | Header | Sees |
 |---|---|---|
-| `?library=grafana` | `X-Skill-Library` | that whole library, or one of its groups |
+| `?library=grafana` | `X-Skill-Library` | that whole library |
+| `?library=grafana/grafana-lgtm` | `X-Skill-Library` | one folder of it |
 | `?tags=ops,ui` | `X-Skill-Tags` | anything carrying **any** of the tags, across libraries |
 | `?library=grafana&tags=ops` | both | the tagged part of that one library |
 
@@ -160,7 +162,7 @@ Per request, on the MCP URL — each with a header form that beats it:
 |---|---|---|
 | `?resources=off` | `X-MCP-Resources` | Reveals the resource mirror tools |
 | `?prompts=off` | `X-MCP-Prompts` | Reveals the prompt mirror tools |
-| `?library=<name>` | `X-Skill-Library` | Restricts this client to one library or group |
+| `?library=<name>` | `X-Skill-Library` | Restricts this client to one library, or `<library>/<folder>` to one folder of it |
 | `?tags=a,b` | `X-Skill-Tags` | Restricts it to anything carrying any of those tags |
 | `?skills=full` | `X-Skill-Listing` | Lists every skill, for clients that sync them to disk |
 

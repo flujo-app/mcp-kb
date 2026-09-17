@@ -50,13 +50,13 @@ at start into a cache volume, and every agent reads them from one address space.
 
 - **`refresh: 30s | 5m | 1h` per source** schedules that check, and `POST /reindex` forces a rebuild of everything now.
 
-- **The `skill://` address space**: one segment is an index, two or more is content. `skill://<library>` and `skill://<group>` are indexes, `skill://<library>/<skill>` is the instructions, `/_manifest` is what else that skill ships and `/_files` is what its library ships outside its skills.
+- **The `skill://` address space**, on the [MCP Skills extension](https://modelcontextprotocol.io/extensions/skills/overview)'s grammar: `skill://<library>/<folder>/<skill>/SKILL.md` is the instructions, `/_manifest` is what else that skill ships, `_index.md` and `_files.md` are the indexes, and a library, a folder or a skill's own directory is not found.
 
 - **Prompts as slash commands**: a markdown file whose frontmatter declares its arguments and whose body carries `{{ placeholders }}`, exposed as `<library>_<file stem>`.
 
 - **Four mirror tools for clients without resources or prompts** — `list_resources`, `read_resource`, `list_prompts`, `get_prompt` — revealed by `?resources=off` and `?prompts=off` (or the `X-MCP-Resources` / `X-MCP-Prompts` headers) and hidden from every client that has the real feature.
 
-- **`?library=` and `?tags=`, or `X-Skill-Library` / `X-Skill-Tags`**, narrow a client to one library or to anything carrying any of the tags — a ceiling the model cannot widen past, enforced on resources, prompts and every mirror tool alike. A header beats the URL.
+- **`?library=` and `?tags=`, or `X-Skill-Library` / `X-Skill-Tags`**, narrow a client to one library (`<library>` or `<library>/<folder>`) or to anything carrying any of the tags — a ceiling the model cannot widen past, enforced on resources, prompts and every mirror tool alike. A header beats the URL.
 
 - **`?skills=full`** (or `X-Skill-Listing: full`) lists every skill rather than the indexes, for clients that sync skills to disk by scanning for `/SKILL.md`.
 
