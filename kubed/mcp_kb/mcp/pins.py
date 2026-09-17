@@ -13,9 +13,9 @@ operator's choice of what a client is given, not a boundary the model is kept
 behind, and the operator reading this error is the one who wrote the config.
 
 A scope is refused for what it *names*, never for what happens to be served at
-the moment. A library whose every source is down right now is still a library;
-it is empty, and a client pinned to it connects and sees nothing until it
-comes back, which ``/health`` explains. Only a folder or a tag combination is
+the moment. A library whose every source is down right now, or up with nothing
+in it yet, is still a library; it is empty, and a client pinned to it connects
+and sees nothing until something arrives, which ``/health`` explains. Only a folder or a tag combination is
 checked against the served catalogue, and only when that library is serving.
 """
 
@@ -91,7 +91,7 @@ def what_is_wrong(scope: Scope, config: Config, snapshot: Snapshot) -> str | Non
         return None
     if not scope.library and not _serving(snapshot, EVERYTHING):
         return None
-    if not _serving(snapshot, scope):
+    if scope.tags and not _serving(snapshot, scope):
         where = f"library {scope.library!r}" if scope.library else "any library"
         return (
             f"The scope names tags that exist, but nothing in {where} carries"

@@ -40,6 +40,8 @@ def url(tmp_path_factory):
     base = tmp_path_factory.mktemp("scoped")
     for name in ("loki", "tempo"):
         _skill(base / "observe", name)
+    # Up and serving nothing at all: a Nextcloud folder with nothing in it yet.
+    (base / "blank").mkdir()
     _skill(base / "design", "palette")
     (base / "observe" / "prompts").mkdir()
     (base / "observe" / "prompts" / "debug.md").write_text(
@@ -64,6 +66,7 @@ def url(tmp_path_factory):
                     "url": f"file://{base / 'notes'}",
                     "include": {"skills": [], "prompts": ["*.md"]},
                 },
+                {"name": "blank", "url": f"file://{base / 'blank'}"},
                 # A library whose only source is down: named, and serving nothing.
                 {"name": "down", "url": f"file://{base / 'not-there'}"},
             ],
@@ -199,7 +202,7 @@ REFUSED = [
     (
         "?library=nope",
         "The scope names library 'nope', and there is no such library."
-        " The libraries are: design, down, notes, observe.",
+        " The libraries are: blank, design, down, notes, observe.",
     ),
     ("?tags=opps", "The scope names tag 'opps', which nothing carries. The tags are:"),
     (
@@ -249,6 +252,10 @@ async def test_a_library_that_is_down_is_empty_not_refused(url):
     """It exists; it is only serving nothing right now, which /health explains."""
     assert await _seen(url, "?library=down") == ([], [], [])
     assert await _seen(url, "?library=down/any/folder") == ([], [], [])
+
+
+async def test_a_library_that_is_up_and_empty_is_empty_not_refused(url):
+    assert await _seen(url, "?library=blank") == ([], [], [])
 
 
 async def test_a_header_scope_is_refused_the_same_way(url):
