@@ -68,6 +68,21 @@ class Schedule:
         ]
 
 
+def tick_seconds(shortest_refresh: int | None) -> float:
+    """How long the loop sleeps: never longer than the shortest ``refresh:``.
+
+    ``shortest_refresh`` is ``config.min_refresh_seconds``, read once by the
+    caller -- the loop's own ``while`` condition already has it, so this takes
+    the value rather than the config, and nothing reads it a second time. A
+    fixed ``TICK_SECONDS`` tick can be late by almost a whole tick, which
+    matters once a source asks for something shorter than that; ``None`` (no
+    source scheduled) sleeps the full tick, since nothing is due to be late.
+    """
+    if shortest_refresh is None:
+        return TICK_SECONDS
+    return min(TICK_SECONDS, shortest_refresh)
+
+
 def moved(source: Source, cache: Path, record: SourceRecord) -> bool:
     """Whether ``source`` has moved on since ``record`` was built.
 
@@ -133,8 +148,8 @@ async def loop(knowledge_base: KnowledgeBase) -> None:
     nothing asked to be watched.
     """
     await _pass(knowledge_base)
-    while knowledge_base.config.min_refresh_seconds is not None:
-        await asyncio.sleep(TICK_SECONDS)
+    while (shortest := knowledge_base.config.min_refresh_seconds) is not None:
+        await asyncio.sleep(tick_seconds(shortest))
         due = knowledge_base.schedule.due(knowledge_base.config.sources)
         if due:
             await _pass(knowledge_base, only=due)

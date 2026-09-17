@@ -445,6 +445,30 @@ async def test_the_lifespan_verifies_the_index_the_server_started_from(
 
 
 @pytest.mark.unit
+def test_tick_seconds_is_bounded_by_the_shortest_configured_refresh(skills_dir):
+    """A `refresh: 1s` source ticking every `TICK_SECONDS` (5s) can be late by
+    up to a tick; the loop must sleep no longer than the shortest interval any
+    source actually configured.
+    """
+    raw = {
+        "sources": [
+            {**s.model_dump(mode="json"), "refresh": "1s"}
+            for s in make_config(skills_dir).sources
+        ]
+    }
+    config = Config.model_validate(raw)
+    assert config.min_refresh_seconds == 1
+    assert refresh.tick_seconds(config.min_refresh_seconds) == 1
+
+
+@pytest.mark.unit
+def test_tick_seconds_defaults_when_nothing_is_scheduled(skills_dir):
+    config = make_config(skills_dir)
+    assert config.min_refresh_seconds is None
+    assert refresh.tick_seconds(config.min_refresh_seconds) == refresh.TICK_SECONDS
+
+
+@pytest.mark.unit
 async def test_the_loop_keeps_rebuilding_a_source_whose_refresh_is_due(
     skills_dir, cache, monkeypatch
 ):
