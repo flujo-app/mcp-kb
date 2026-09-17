@@ -23,7 +23,7 @@ API::
     skill://<library>/_files.md                   files outside every skill
     skill://<library>/<file>                      one of those
 
-``<folder>`` is the skill's directory below its source's skill root, and may
+``<folder>`` is the skill's directory below its plugin's skill root, and may
 be empty or several segments deep; the last segment before the file is always
 the skill's name. A skill is found by the longest prefix of the path that
 names one, so a nested skill wins over the skill whose directory holds it.
@@ -83,7 +83,7 @@ class Entry:
     onto the ``TextResource`` it builds; it is not one of the four and never
     appears in ``as_dict``. An index row is tagged with its library and
     ``"index"``; a full row (one skill, in the ``full=True`` listing) carries
-    that skill's own tags.
+    its library and its plugin's labels.
     """
 
     uri: str
@@ -300,13 +300,9 @@ class Catalogue:
             index_tags = tuple(sorted({library, "index"}))
             rows: list[Entry] = []
             # The listing is the top of the same tree the indexes are: the
-            # library's index and its top-level folders, or -- under a folder
-            # pin -- that folder's index and the folders directly in it. The
-            # library's own row is dropped there, since it would list only the
-            # pinned folder, whose row this already is.
-            here = scope.folder
-            children = _children(in_library, here)
-            if in_library and not here:
+            # library's index and its top-level folders.
+            children = _children(in_library, "")
+            if in_library:
                 summary = _count(len(in_library))
                 if children:
                     summary += (
@@ -322,7 +318,6 @@ class Catalogue:
                         index_tags,
                     )
                 )
-            folders = ([here] if here and in_library else []) + list(children)
             rows += [
                 Entry(
                     index_uri(library, folder),
@@ -332,7 +327,7 @@ class Catalogue:
                     "text/markdown",
                     index_tags,
                 )
-                for folder in folders
+                for folder in children
             ]
             if self._library_files(library, scope):
                 rows.append(
@@ -355,7 +350,7 @@ class Catalogue:
                     f"{skill.address}/{MAIN_FILE}",
                     skill.description,
                     "text/markdown",
-                    tuple(sorted(skill.tags)),
+                    tuple(sorted({skill.library, *skill.tags})),
                 )
                 entries.setdefault(row.uri, row)
         return list(entries.values())
@@ -368,12 +363,12 @@ class Catalogue:
         Both halves of the library-files rule in one place: the listing offers
         a ``_files.md`` row exactly when reading one would return a body, and a
         library out of scope entirely has neither. ``LibraryFiles`` checks each
-        root's tags and source; which library and which sources this caller
-        was given is decided here.
+        root's plugin against the scope's categories and tags; whether the
+        library itself is in scope is decided here.
         """
-        if scope.library and scope.library_name != library:
+        if scope.library and scope.library != library:
             return []
-        return self._resources.files(library, scope.tags, self._index.sources(scope))
+        return self._resources.files(library, scope)
 
     def _in_library(self, library: str, scope: Scope) -> list[Skill]:
         return [s for s in self._index.visible(scope) if s.library == library]
@@ -406,8 +401,8 @@ class Catalogue:
         A skill is tried first, then the indexes, then the library's own files.
         The order never arbitrates between two things at one address, because
         the snapshot serves no such pair: a library file inside a skill of its
-        own source, or named like an index, is skipped, and one inside another
-        source's skill fails that source.
+        own plugin, or named like an index, is skipped, and one inside another
+        plugin's skill fails that plugin.
         """
         parsed = parse(uri)
         if parsed is None:
@@ -429,10 +424,9 @@ class Catalogue:
             body = self._index_body(library, folder, scope)
             if body is not None:
                 return body
-        if scope.library and scope.library_name != library:
+        if scope.library and scope.library != library:
             return None
-        sources = self._index.sources(scope)
-        return self._resources.read(library, path, scope.tags, sources)
+        return self._resources.read(library, path, scope)
 
     def hint(self, uri: str, scope: Scope = EVERYTHING) -> str | None:
         """What to read instead of an address that serves nothing, or None.

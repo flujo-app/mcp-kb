@@ -59,6 +59,7 @@ __all__ = [
     "Parsed",
     "load_prompt",
     "load_prompts",
+    "stem",
 ]
 
 
@@ -68,7 +69,11 @@ class FilePrompt:
 
     ``path`` is where it was read from. It is carried on the prompt rather than
     only known to the harvester so a rebuild can record it in the index and
-    re-parse exactly the files a source yielded last time.
+    re-parse exactly the files a plugin yielded last time.
+
+    ``plugin``, ``category`` and ``tags`` are the plugin's: what a scope matches
+    a prompt on, since a prompt has no library of its own beyond the one that
+    named it.
 
     ``live`` says the file is revalidated against its server as it is rendered,
     so the *body* is re-read from disk instead of taken from ``template``. The
@@ -83,7 +88,6 @@ class FilePrompt:
     path: Path
     name: str
     library: str
-    source: str = ""
     plugin: str = ""
     template: str = ""
     description: str | None = None
@@ -100,7 +104,7 @@ class FilePrompt:
 
         A file that has become unreadable or lost its frontmatter falls back to
         the body last harvested -- the same rule the rest of live mode follows,
-        that a source in trouble degrades to the copy already known good.
+        that a server in trouble degrades to the copy already known good.
         """
         if not self.live:
             return self.template
@@ -191,7 +195,7 @@ def _split(text: str) -> tuple[dict, str]:
     return meta, text[start:]
 
 
-def _stem(path: Path) -> str:
+def stem(path: Path) -> str:
     """The file's name without its extension, ``.prompt.md`` counting as one.
 
     ``investigate.prompt.md`` is Copilot's spelling of ``investigate``: the
@@ -207,7 +211,6 @@ def load_prompt(
     path: Path,
     library: str,
     *,
-    source: str = "",
     plugin: str = "",
     tags: Sequence[str] = (),
     category: str | None = None,
@@ -216,10 +219,10 @@ def load_prompt(
 ) -> FilePrompt:
     """Parse one prompt file, raising ValueError on anything malformed.
 
-    ``library`` is the library this prompt joins; ``source`` and ``tags`` (the
-    library's tags plus the source's, concatenated by the caller) become part
-    of every prompt's own tags. ``dialect`` is what the config says the file is
-    written in, and ``"auto"`` -- the usual answer -- leaves it to ``detect``.
+    ``library`` is the library this prompt joins; ``plugin``, ``tags`` and
+    ``category`` are the plugin's, carried as given -- nothing is added to
+    them. ``dialect`` is what the config says the file is written in, and
+    ``"auto"`` -- the usual answer -- leaves it to ``detect``.
     """
     meta, body = _split(path.read_text(encoding="utf-8"))
 
@@ -240,13 +243,12 @@ def load_prompt(
     return FilePrompt(
         path=path,
         live=live,
-        name=f"{library}_{_stem(path)}",
+        name=f"{library}_{stem(path)}",
         description=parsed.description,
         title=parsed.title,
         arguments=parsed.arguments,
-        tags={t for t in (library, source, "prompt", *tags) if t},
+        tags=set(tags),
         library=library,
-        source=source,
         plugin=plugin,
         category=category,
         template=body,
@@ -259,7 +261,6 @@ def load_prompts(
     files: Sequence[Path],
     *,
     library: str,
-    source: str = "",
     plugin: str = "",
     tags: Sequence[str] = (),
     category: str | None = None,
@@ -267,7 +268,7 @@ def load_prompts(
     dialect: str = detect.AUTO,
     skipped: list[tuple[Path, str]] | None = None,
 ) -> list[FilePrompt]:
-    """Every prompt file ``harvest`` already found for one source, joined to a library.
+    """Every prompt file ``harvest`` already found for one plugin, joined to a library.
 
     ``library`` is the library the prompts join. A broken file is skipped
     rather than raised: a bad prompt must not take the skills down with it.
@@ -282,7 +283,6 @@ def load_prompts(
                 load_prompt(
                     path,
                     library,
-                    source=source,
                     plugin=plugin,
                     tags=tags,
                     category=category,

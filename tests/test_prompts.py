@@ -11,9 +11,10 @@ from kubed.mcp_kb import KnowledgeBase
 from kubed.mcp_kb.catalogue import harvest
 from kubed.mcp_kb.catalogue.prompts import FilePrompt, load_prompt, load_prompts
 from kubed.mcp_kb.catalogue.skills import SkillIndex
-from kubed.mcp_kb.config import Include
+from kubed.mcp_kb.config import Config
 from kubed.mcp_kb.mcp.prompts import PromptProvider
 from kubed.mcp_kb.mcp.scope import Scope
+from kubed.mcp_kb.plugins import Globs
 from tests.conftest import load_all_prompts, load_library_prompts, make_config
 
 pytestmark = pytest.mark.unit
@@ -47,7 +48,7 @@ def test_an_undeclared_placeholder_is_skipped_loudly(tmp_path, caplog):
         "---\ndescription: typo\narguments:\n- name: name\n---\nHi {{ nmae }}\n"
     )
     with caplog.at_level(logging.WARNING):
-        assert load_prompts([typo], library="flatsource", source="flatsource") == []
+        assert load_prompts([typo], library="flatsource", plugin="flatsource") == []
     assert "nmae" in caplog.text
 
 
@@ -60,19 +61,24 @@ def test_a_required_argument_cannot_have_a_default(tmp_path):
         load_prompt(path, "flatsource")
 
 
-def test_a_default_empty_source_leaves_no_empty_tag(tmp_path):
-    """``source=""`` (the default) must not put an empty-string tag in the set."""
+def test_a_prompt_carries_its_plugins_labels_and_nothing_implicit(tmp_path):
+    """No library name, plugin name or "prompt" smuggled in as a tag."""
     path = tmp_path / "hello.md"
     path.write_text("---\ndescription: hi\n---\nHi.\n")
-    prompt = load_prompt(path, "flatsource")
-    assert "" not in prompt.tags
-    assert prompt.tags == {"flatsource", "prompt"}
+    bare = load_prompt(path, "flatsource")
+    assert bare.tags == set()
+    labelled = load_prompt(
+        path, "flatsource", plugin="p", tags=["ops", "lgtm"], category="obs"
+    )
+    assert labelled.tags == {"ops", "lgtm"}
+    assert labelled.category == "obs"
+    assert labelled.plugin == "p"
 
 
 def test_a_missing_directory_is_no_prompts(tmp_path):
     """Harvest yields no files for a missing source; loading an empty list loads none."""
-    files = harvest.prompt_files(tmp_path / "nope", Include())
-    assert load_prompts(files, library="flatsource", source="flatsource") == []
+    files = harvest.prompt_files(tmp_path / "nope", Globs())
+    assert load_prompts(files, library="flatsource", plugin="flatsource") == []
 
 
 # -- splitting frontmatter from the body ---------------------------------------
@@ -158,6 +164,66 @@ async def test_logql_braces_survive_rendering(skills_dir, prompts_dir):
     assert text(result) == '{app="api"} |= "error"\n'
 
 
+async def test_a_claude_command_and_a_copilot_prompt_serve_as_one_kind_of_prompt(
+    tmp_path,
+):
+    """The dialect seam, end to end over a real client: a Claude Code command
+    under ``commands/`` and a VS Code ``.prompt.md`` list beside this server's
+    own dialect and render with their own placeholders filled. A Copilot
+    ``${input:…}`` name is also an MCP argument name, so it has to survive the
+    client's argument schema on the way round.
+    """
+    root = tmp_path / "plugin"
+    (root / "commands").mkdir(parents=True)
+    (root / "commands" / "deploy.md").write_text(
+        "---\ndescription: Deploy an app.\narguments: [app, env]\n---\n"
+        "Deploy $app to $env.\n"
+    )
+    (root / ".github" / "prompts").mkdir(parents=True)
+    (root / ".github" / "prompts" / "review.prompt.md").write_text(
+        "---\ndescription: Review a file.\n---\n"
+        "Review ${input:target:Which file?} for ${input:concern}.\n"
+    )
+    config = Config.model_validate(
+        {
+            "plugins": [{"name": "kit", "source": f"file://{root}"}],
+            "libraries": [{"name": "kit", "plugins": ["kit"]}],
+        }
+    )
+    server = KnowledgeBase(config, tmp_path / "cache")
+    async with Client(server.mcp) as client:
+        listed = {p.name: p for p in await client.list_prompts()}
+        deployed = await client.get_prompt("kit_deploy", {"app": "api", "env": "prod"})
+        reviewed = await client.get_prompt(
+            "kit_review", {"target": "main.py", "concern": "races"}
+        )
+    assert [a.name for a in listed["kit_deploy"].arguments] == ["app", "env"]
+    assert listed["kit_review"].arguments[0].description == "Which file?"
+    assert [a.name for a in listed["kit_review"].arguments] == ["target", "concern"]
+    assert text(deployed) == "Deploy api to prod.\n"
+    assert text(reviewed) == "Review main.py for races.\n"
+    assert {p.dialect for p in server.prompts} == {"claude", "copilot"}
+
+
+async def test_a_prompts_title_is_published(tmp_path):
+    """FastMCP's ``Prompt`` has a title, and a file that declares one gets it."""
+    root = tmp_path / "plugin"
+    (root / "prompts").mkdir(parents=True)
+    (root / "prompts" / "hello.md").write_text(
+        "---\ntitle: Say Hello\ndescription: Greets.\n---\nHi.\n"
+    )
+    config = Config.model_validate(
+        {
+            "plugins": [{"name": "kit", "source": f"file://{root}"}],
+            "libraries": [{"name": "kit", "plugins": ["kit"]}],
+        }
+    )
+    server = KnowledgeBase(config, tmp_path / "cache")
+    async with Client(server.mcp) as client:
+        listed = {p.name: p for p in await client.list_prompts()}
+    assert listed["kit_hello"].title == "Say Hello"
+
+
 async def test_skill_libraries_scopes_prompts(skills_dir, prompts_dir):
     """A prompt from an unconfigured library is neither listed nor renderable."""
     config = make_config(skills_dir, prompts_dir, libraries=["flatsource"])
@@ -182,7 +248,7 @@ def test_visible_reads_the_snapshot_exactly_once():
         path=pathlib.Path("/x/hello.md"),
         name="flatsource_hello",
         library="flatsource",
-        source="flatsource",
+        plugin="flatsource",
         template="hi",
     )
     snapshot = SimpleNamespace(prompts=(prompt,), index=SkillIndex([]))
