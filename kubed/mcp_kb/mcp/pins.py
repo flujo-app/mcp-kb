@@ -29,6 +29,7 @@ from fastmcp.server.middleware import Middleware
 from mcp.shared.exceptions import MCPError
 from mcp_types import INVALID_PARAMS
 
+from ..catalogue.uris import _children, _in
 from .prompts import PromptProvider
 from .request import requested_scope
 from .scope import EVERYTHING, Scope
@@ -76,15 +77,26 @@ def what_is_wrong(scope: Scope, config: Config, snapshot: Snapshot) -> str | Non
             s.folder == scope.folder or s.folder.startswith(f"{scope.folder}/")
             for s in in_library
         ):
-            folders = sorted({s.folder.split("/")[0] for s in in_library} - {""})
+            # What is in the deepest folder of the path that does exist, so a
+            # typo at the third level is answered at the third level.
+            parent = scope.folder
+            while parent and not any(_in(s, parent) for s in in_library):
+                parent = parent.rpartition("/")[0]
+            folders = ", ".join(_children(in_library, parent))
+            if not parent:
+                there = " It has no folders."
+                if folders:
+                    there = f" Its folders are: {folders}."
+            else:
+                where = f"{scope.library_name}/{parent}"
+                there = (
+                    f" The folders in {where} are: {folders}."
+                    if folders
+                    else f" {where} has no folders in it."
+                )
             return (
                 f"The scope names folder {scope.folder!r} of library"
-                f" {scope.library_name!r}, which has no such folder."
-                + (
-                    f" Its folders are: {', '.join(folders)}."
-                    if folders
-                    else " It has no folders."
-                )
+                f" {scope.library_name!r}, which has no such folder.{there}"
             )
 
     if scope.library and not _up(snapshot, scope.library_name):

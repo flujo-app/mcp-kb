@@ -606,6 +606,15 @@ async def test_a_library_scope_reaches_every_source_of_the_library(url):
     assert await _read(url, "skill://grafana/shared/style.md", library="grafana")
 
 
+async def test_a_typo_deep_in_a_folder_path_names_the_folders_at_that_depth(url):
+    """Not the top-level folders: the ones where the path stopped matching."""
+    with pytest.raises(Exception) as caught:
+        await _rows(url, library="grafana/grafana-plugins/nope")
+    assert str(caught.value).endswith(
+        "The folders in grafana/grafana-plugins are: grafana-plugins/app."
+    )
+
+
 async def test_a_bare_folder_name_is_refused_as_no_such_library(url):
     """A folder name is not a library, and is not looked for in every library."""
     with pytest.raises(Exception, match=r"no such library\. The libraries are:"):
