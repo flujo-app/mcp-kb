@@ -2269,6 +2269,58 @@ libraries:
 6. Ask penpot upstream to publish `archive` entries in the index it already
    claims, or self-contained skills? Decision 7 no longer depends on it.
 
+### §C1.30 — Second pass with Dr K: a library *is* a marketplace (2026-09-17)
+
+**Accepted by Dr K: the plugin-root fallback** (§C1.29 decision 7), over any
+regex or find-and-replace step. A link that misses inside its skill is tried
+once against its plugin's root; nothing is rewritten, and a file the skill has
+always wins.
+
+**Superseded: separate `marketplaces:` and `sources:` lists** (§C1.29's sketch).
+Dr K's reading: a marketplace and a library are one to one — a marketplace is
+a library defined somewhere else — so the config has one concept for both, and
+*plugin* replaces *source* as the thing a library holds, matching every client.
+
+- **A marketplace is a library, and each of its entries is a plugin.** Grafana's
+  marketplace is the `grafana` library with seven plugins; penpot's is a
+  library with one.
+- **`source` means the same word at both levels.** On a library it is where a
+  `marketplace.json` lives; on a plugin it is the plugin root. A plugin's
+  `source` takes any backend this server has (`file://`, `git+https://`,
+  `github://`, `webdav+http(s)://`), and `skills`, `prompts` and `files` are
+  paths relative to it.
+- **A ref rides on the URL**, `github://owner/repo@<sha>`, pip-style. A source
+  needing options (`auth`, `cache`, `refresh`) takes the long form
+  `{url: …, refresh: …}`.
+- **A marketplace library can be narrowed and extended in place.** Its
+  `plugins` list picks entries by name (a string) and adds local plugins
+  beside them (an object); left out, every entry comes along.
+- **One plugin in two libraries is `name@library`**, the same form clients use
+  for `plugin@marketplace`. YAML anchors were considered and dropped: they
+  cannot reach a plugin that came from a marketplace, and two ways to share
+  one is one too many.
+- **Plugin fields are Claude's marketplace entry fields**: `name`,
+  `description`, `category`, `keywords`, `tags`, `source`; plus this server's
+  `skills`, `prompts` (Claude's `commands`), `files`, and later `agents`
+  (E5) and `mcpServers` (E6).
+- **`category` becomes a scope**, `?category=design`, beside `?library=` and
+  `?tags=`; `keywords` count as tags.
+
+The working sketch is `stuff/config.yaml` (scratch, never cited from committed
+docs once the schema lands).
+
+**Open, from this pass.**
+
+1. `?library=grafana/grafana-lgtm` today names a *folder*. Under plugins it would
+   name a *plugin* — the same string for Grafana, whose plugins are its folders,
+   but not in general. Does the second segment of a scope become the plugin, or
+   stay the folder?
+2. A marketplace entry whose skills sit outside its `source` (Grafana's seven
+   all have `source: "./"` and a `skills` list) — the plugin root is the whole
+   repository, so the fallback of decision 7 reaches all of it. Accept, or
+   bound the fallback to the entry's listed paths?
+3. `prompts` or `commands` for the field — this server's word, or Claude's?
+
 ## Closing questions for Dr K
 
 *Superseded by §C1.22 — the name, here and in question 1, is `mcp-kb`. What was
