@@ -705,3 +705,21 @@ def test_github_shorthand_against_the_real_thing(tmp_path):
 
     assert older != root
     assert fingerprint(old, tmp_path, older)["commit"] == old.ref
+
+
+@pytest.mark.unit
+def test_the_docs_qualify_git_file_as_not_shallow():
+    """README and CHANGELOG once called every git scheme "cloned bare and
+    shallow"; git+file:// is cloned whole, because libgit2's local transport
+    refuses a shallow fetch (see the module docstring above). Each doc's
+    git-schemes line must say so rather than repeat the blanket claim.
+    """
+    repo = Path(__file__).parent.parent
+    for name in ("README.md", "CHANGELOG.md"):
+        text = repo.joinpath(name).read_text(encoding="utf-8")
+        line = next(
+            line
+            for line in text.splitlines()
+            if "git+file://" in line and "cloned" in line
+        )
+        assert "whole" in line, f"{name}: {line!r} does not qualify git+file://"

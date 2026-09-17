@@ -38,7 +38,7 @@ at start into a cache volume, and every agent reads them from one address space.
 
 - **`file://` sources**: a directory on this machine, served in place — including a Kubernetes ConfigMap mount, which is symlinks all the way down.
 
-- **Git sources**: `github://org/repo`, `git+https://`, `git+http://` and `git+file://`, cloned bare and shallow and exported at a branch, tag or commit, with `subdirectory` and HTTP Basic `auth` for a private remote.
+- **Git sources**: `github://org/repo`, `git+https://`, `git+http://` and `git+file://`, cloned bare — shallow over the network, whole for `git+file://` — and exported at a branch, tag or commit, with `subdirectory` and HTTP Basic `auth` for a private remote.
 
 - **WebDAV sources**: `webdav+https://` and `webdav+http://` point at the folder itself — a Nextcloud share, with an app password as `{env:}` — and it is copied into the cache and never downloaded again while its ETags agree.
 

@@ -94,7 +94,7 @@ sources:
 | Scheme | Backend |
 |---|---|
 | `file:///path` | a directory on this machine, served in place — ConfigMap mounts included |
-| `github://org/repo`, `git+https://`, `git+http://`, `git+file://` | a git remote, cloned bare and shallow and exported at a commit |
+| `github://org/repo`, `git+https://`, `git+http://`, `git+file://` | a git remote, cloned bare — shallow over the network, whole for `git+file://` (libgit2's local transport refuses a shallow fetch) — and exported at a commit |
 | `webdav+https://`, `webdav+http://` | a WebDAV folder — Nextcloud above all — copied into the cache |
 
 Pin a `ref` and the image serves the same bytes in a year; track a branch and give it a `refresh:` and something goes and looks. `cache: live` on a WebDAV source revalidates a file by ETag as it is read, so **a file edited in Nextcloud is served on the next read**. A credential is always an `{env: NAME}` reference — a URL carrying its own `user:token@` is refused.
