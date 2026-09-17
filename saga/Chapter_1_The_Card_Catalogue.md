@@ -2398,6 +2398,42 @@ and in Dr K's proposal.
   but beside `tags=foo,bar` meaning AND it puts two meanings of one comma in
   one URL.
 
+### §C1.32 — A library is a query (2026-09-17)
+
+**Dr K: a library carries no tags or category of its own; it *is* the query.**
+Checked against the marketplaces: every one — Grafana, penpot, n8n,
+superpowers, and Anthropic's official catalog — has only `name`, `owner`,
+`description` and `version` at the top, with `category` and `tags` on each
+plugin. In the official catalog `category` is the field that carries meaning
+(294 of 308 plugins have one); `tags` appear on 3 and `keywords` on 1.
+
+This settles §C1.31's issue 1 (one `tags` key meaning both *label* and
+*select*): a library never labels, so the selector gets an unambiguous name of
+its own, `pluginSelector`, after Kubernetes' `selector`/`matchLabels`.
+
+A library is now:
+
+- `name` and an optional `description`;
+- `source` — a marketplace, whose plugins all join;
+- `plugins` — plugins by name;
+- `pluginSelector` — `categories` (any of) AND `tags` (comma = all, list = any),
+  over every plugin known, marketplace ones included;
+
+and its plugins are the union of the three. The same `categories` and `tags`
+narrow a request (`?categories=…&tags=…`), so a library is a saved query and a
+URL narrows it further.
+
+Consequences, recorded rather than decided:
+
+- Library-level tags added to every plugin (§C1.19, and `libraries[].tags` in
+  today's config) go away. Tagging is what a plugin does; `?tags=observability`
+  reaches Grafana only if its plugins say so, and `?library=grafana` is how a
+  client asks for Grafana.
+- A plugin from a marketplace cannot be re-tagged here. If that is needed,
+  the answer is a library, not an override.
+- The ref moves to `?ref=` beside go-getter's `//` (§C1.31 issue 2), in the
+  sketch.
+
 ## Closing questions for Dr K
 
 *Superseded by §C1.22 — the name, here and in question 1, is `mcp-kb`. What was
