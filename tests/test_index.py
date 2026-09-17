@@ -128,6 +128,20 @@ def test_a_wrong_shaped_sources_field_reads_as_none(tmp_path):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    "row", [{"reason": "no path"}, {"path": 1, "reason": "x"}, "prompts/bad.md"]
+)
+def test_a_malformed_skipped_row_reads_as_none(tmp_path, row):
+    """A half-formed row would be indexed into at boot; the index is rebuilt instead."""
+    path = tmp_path / "index.json"
+    _index().write(path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["sources"]["flatsource"]["skipped"] = [row]
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    assert Index.read(path) is None
+
+
+@pytest.mark.unit
 def test_the_write_is_atomic(tmp_path, monkeypatch):
     path = tmp_path / "index.json"
     calls = []
