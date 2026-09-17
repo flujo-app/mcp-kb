@@ -60,7 +60,7 @@ at start into a cache volume, and every agent reads them from one address space.
 
 - **`?skills=full`** (or `X-Skill-Listing: full`) lists every skill rather than the indexes, for clients that sync skills to disk by scanning for `/SKILL.md`.
 
-- **`GET /health`** reports the generation, the libraries, the skill and prompt counts and each source's own status — `ok`, `stale` or `failed` — and answers 200 whenever the process is serving, so one unreachable remote never takes a working catalogue down.
+- **`GET /health`** reports the generation, the libraries, the skill and prompt counts and each source's own status — `ok`, `stale` or `failed`, with anything it ships but cannot serve listed under `skipped` — and answers 200 whenever the process is serving, so one unreachable remote never takes a working catalogue down.
 
 - **`GET /openapi.yaml`** publishes the HTTP surface as OpenAPI 3.1, generated from the code that serves it.
 

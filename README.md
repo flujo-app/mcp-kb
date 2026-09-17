@@ -35,6 +35,7 @@ skill://<library>/<folder>/<skill>/SKILL.md  that skill's instructions
 skill://<library>/<folder>/<skill>/_manifest what else it ships
 skill://<library>/<folder>/<skill>/<path>    one of those files
 skill://<library>/_files.md                  what the library ships outside its skills
+skill://<library>/<path>                     one of those files
 ```
 
 A library, a folder or a skill's own directory is not a file — reading one is not found, and the error names the file to read instead. Progressive disclosure lives in the addresses rather than in a tool list, so a listing is a dozen index rows whether the catalogue holds nine skills or ninety.

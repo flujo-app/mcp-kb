@@ -53,8 +53,8 @@ installer's, against whatever image tag it chooses.
 | ⤷ `refresh.py` | when a source is due to be looked at again, bounded to the shortest configured interval, and what a failure does to the last good one |
 | `kubed/mcp_kb/sources/` | where bytes come from — `file.py`, `git.py`, `webdav.py`, the shared per-version `export.py`, `errors.py`, and `live.py`, because revalidation is a source concern |
 | `kubed/mcp_kb/mcp/` | what an agent sees |
-| ⤷ `resources.py` | the resources, which are the interface |
-| ⤷ `tools.py`, `prompts.py` | the two mirror pairs, and the middleware that hides them |
+| ⤷ `resources.py` | the resources, which are the interface, and the middleware — `NameTheFileToRead`, `HideMirrorTools` |
+| ⤷ `tools.py`, `prompts.py` | the two mirror pairs |
 | ⤷ `request.py`, `scope.py` | what the current request says about itself, and the `Scope` it becomes |
 | ⤷ `announce.py` | `AnnounceChanges` — telling a session its listing moved |
 | `kubed/mcp_kb/spec/` | `builder.py`, the OpenAPI document for the HTTP surface |

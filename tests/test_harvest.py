@@ -216,7 +216,7 @@ def test_a_skills_glob_may_name_the_directory(tmp_path):
 def test_a_composite_folder_registers_every_skill_beneath_it(tmp_path):
     """Naming a folder of folders registers the set, not nothing.
 
-    This is how a grouped library reads: `skills/grafana-lgtm` is not itself a
+    This is how a library with folders reads: `skills/grafana-lgtm` is not itself a
     skill, it holds them, and pointing at it should mean all of them.
     """
     root = tmp_path / "src"
