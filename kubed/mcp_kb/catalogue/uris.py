@@ -18,8 +18,8 @@ API::
     skill://<library>/<folder>/<name>/SKILL.md    a skill's instructions
     skill://<library>/<folder>/<name>/_manifest   what else that skill ships
     skill://<library>/<folder>/<name>/<file>      one of those files
-    skill://<library>/_index.md                   every skill in the library
-    skill://<library>/<folder>/_index.md          the skills directly in a folder
+    skill://<library>/_index.md                   the folders and skills in a library
+    skill://<library>/<folder>/_index.md          the folders and skills in a folder
     skill://<library>/_files.md                   files outside every skill
     skill://<library>/<file>                      one of those
 
@@ -28,9 +28,15 @@ be empty or several segments deep; the last segment before the file is always
 the skill's name. A skill is found by the longest prefix of the path that
 names one, so a nested skill wins over the skill whose directory holds it.
 
+An index lists what is *directly* under it: each folder as its own
+``_index.md``, with how many skills are below it, and each skill in no deeper
+folder as its ``SKILL.md``. A library of fifty skills in seven folders is then
+seven lines, and the reader chooses which one to open, rather than paying for
+every skill's description to find the folder it wanted.
+
 Every other address is a directory -- a library, a folder, a skill's root --
-and serves nothing, as on any other skill server. ``directory`` says which file
-to read instead, for the error a caller sees.
+and serves nothing, as on any other skill server. ``hint`` says which file to
+read instead, for the error a caller sees.
 
 Nothing here imports FastMCP. Absent content is ``None``, never an exception, so
 a caller in the resource half can raise and a caller in the tool half can
@@ -187,6 +193,30 @@ def _manifest_files(skill: Skill) -> list[Path]:
     ]
 
 
+def _in(skill: Skill, folder: str) -> bool:
+    """Whether ``skill`` sits in ``folder`` or anywhere below it; ``""`` is all."""
+    return not folder or skill.folder == folder or skill.folder.startswith(f"{folder}/")
+
+
+def _under(skills: list[Skill], folder: str) -> int:
+    return sum(1 for s in skills if _in(s, folder))
+
+
+def _children(skills: list[Skill], folder: str) -> dict[str, int]:
+    """The folders directly in ``folder``, each with how many skills are below it.
+
+    One definition for the indexes and the listing both, so a folder the listing
+    offers is always one an index names, and the other way round.
+    """
+    prefix = f"{folder}/" if folder else ""
+    found: dict[str, int] = {}
+    for skill in skills:
+        if skill.folder != folder and _in(skill, folder):
+            child = prefix + skill.folder[len(prefix) :].split("/")[0]
+            found[child] = found.get(child, 0) + 1
+    return dict(sorted(found.items()))
+
+
 def mime_for(path: str) -> str:
     """The media type of a path, defaulting to markdown rather than octets.
 
@@ -268,12 +298,21 @@ class Catalogue:
         for library in sorted(libraries):
             in_library = [s for s in visible if s.library == library]
             index_tags = tuple(sorted({library, "index"}))
-            folders = sorted({s.folder for s in in_library} - {""})
-            summary = _count(len(in_library))
-            if folders:
-                summary += f" in {_count(len(folders), 'folder')}: {', '.join(folders)}"
             rows: list[Entry] = []
-            if in_library:
+            # The listing is the top of the same tree the indexes are: the
+            # library's index and its top-level folders, or -- under a folder
+            # pin -- that folder's index and the folders directly in it. The
+            # library's own row is dropped there, since it would list only the
+            # pinned folder, whose row this already is.
+            here = scope.folder
+            children = _children(in_library, here)
+            if in_library and not here:
+                summary = _count(len(in_library))
+                if children:
+                    summary += (
+                        f" in {_count(len(children), 'folder')}:"
+                        f" {', '.join(children)}"
+                    )
                 rows.append(
                     Entry(
                         index_uri(library),
@@ -283,11 +322,12 @@ class Catalogue:
                         index_tags,
                     )
                 )
+            folders = ([here] if here and in_library else []) + list(children)
             rows += [
                 Entry(
                     index_uri(library, folder),
                     f"{library}/{folder}/{INDEX}",
-                    f"{_count(sum(1 for s in in_library if s.folder == folder))}"
+                    f"{_count(_under(in_library, folder))}"
                     f" in the {folder} folder of the {library} library.",
                     "text/markdown",
                     index_tags,
@@ -394,11 +434,18 @@ class Catalogue:
         sources = self._index.sources(scope)
         return self._resources.read(library, path, scope.tags, sources)
 
-    def directory(self, uri: str, scope: Scope = EVERYTHING) -> str | None:
-        """What to read instead of a directory address, or None if it is not one.
+    def hint(self, uri: str, scope: Scope = EVERYTHING) -> str | None:
+        """What to read instead of an address that serves nothing, or None.
 
-        Answered from what ``scope`` can see, so a hint never confirms a
-        directory the caller could not list.
+        Two kinds of miss get one. A directory -- a library, a folder, a skill's
+        root -- names the file to read in its place. And a path under a skill
+        that is really one of the library's own files: skills that factor
+        material up out of themselves cite it from the repository root
+        (``shared/tokens.md``), which resolved against the skill's directory
+        is an address with nothing at it.
+
+        Answered from what ``scope`` can see, so a hint never confirms an
+        address the caller could not list.
         """
         parsed = parse(uri)
         if parsed is None:
@@ -424,17 +471,18 @@ class Catalogue:
                 f" read {uri_for(skill)} for its instructions, or"
                 f" {uri_for(skill, MANIFEST)} for the files it ships."
             )
+        if found is not None:
+            skill, rest = found
+            if rest in files:
+                return (
+                    f"The {skill.name} skill ships no {rest}, but its library"
+                    f" does: read {SCHEME}{library}/{rest}."
+                )
         folder = path.strip("/")
-        if any(s.folder == folder for s in skills):
-            target = index_uri(library, folder)
+        if any(s.folder == folder or s.folder.startswith(f"{folder}/") for s in skills):
             return (
                 "It is a folder, not a file:"
-                f" read {target} for its skills."
-            )
-        if any(s.folder.startswith(f"{folder}/") for s in skills):
-            return (
-                "It is a folder, not a file:"
-                f" read {index_uri(library)} for the skills under it."
+                f" read {index_uri(library, folder)} for what is in it."
             )
         if any(f.startswith(f"{folder}/") for f in files):
             return f"It is a folder, not a file: {files_hint}"
@@ -443,31 +491,56 @@ class Catalogue:
     def _index_body(
         self, library: str, folder: str | None, scope: Scope
     ) -> str | None:
-        """One index: every skill in a library, or directly in one of its folders.
+        """One index: what sits directly in a library, or in one folder of it.
+
+        A folder below this one is one line, its own ``_index.md`` with a count
+        of the skills anywhere under it; a skill in no deeper folder is its
+        ``SKILL.md`` and description; and a library index ends with its
+        ``_files.md`` when it has library files. So an index is as long as the
+        level it describes is wide, not as long as the catalogue is deep.
 
         Lines are ``<uri>: <description>`` rather than ``<name>: ...`` so that
         reading an index teaches the grammar for the next call. A name would
         have to be translated back into an address anyway, and it is not even
         unique.
         """
-        selected = [
-            s
-            for s in self._in_library(library, scope)
-            if folder is None or s.folder == folder
-        ]
-        if not selected:
+        here = folder or ""
+        under = [s for s in self._in_library(library, scope) if _in(s, here)]
+        if not under:
             return None
-        title = library if folder is None else f"{library}/{folder}"
+
+        below = _children(under, here)
         lines = [
-            f"{uri_for(skill)}: {skill.description}"
-            for skill in sorted(selected, key=lambda s: s.address)
+            f"{index_uri(library, child)}: {_count(count)}"
+            for child, count in sorted(below.items())
         ]
+        direct = sorted(
+            (s for s in under if s.folder == here), key=lambda s: s.address
+        )
+        lines += [f"{uri_for(skill)}: {skill.description}" for skill in direct]
+        files = [] if here else self._library_files(library, scope)
+        if files:
+            lines.append(
+                f"{SCHEME}{library}/{LIBRARY_FILES}:"
+                f" {_count(len(files), 'library-level file')}"
+            )
+
+        advice = []
+        if below:
+            advice.append(f"Read a folder's {INDEX} for what is in it.")
+        if direct:
+            advice.append(
+                f"Read a skill's {MAIN_FILE} for its instructions, or {MANIFEST}"
+                " in its place to see what else it ships, then read one of those"
+                " paths under the same skill."
+            )
+        title = f"{library}/{here}" if here else library
         return (
-            f"# {title} — {_count(len(selected))}\n\n"
+            f"# {title} — {_count(len(under))}\n\n"
             + "\n".join(lines)
-            + "\n\nRead any URI above for that skill's instructions. Read"
-            f" {MANIFEST} in place of {MAIN_FILE} to see what else it ships, then"
-            " read one of those paths under the same skill.\n"
+            + "\n\n"
+            + " ".join(advice)
+            + "\n"
         )
 
     def _skill_file(self, skill: Skill, file: str) -> str | None:

@@ -27,9 +27,11 @@ Both tools are hidden from a client that reads resources; see
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from ..catalogue.uris import Catalogue
 from .request import full_listing, requested_scope
@@ -64,7 +66,7 @@ def register(mcp: FastMCP, catalogue: Callable[[], Catalogue]) -> set[str]:
 
         Start here. The listing is indexes, not skills: a
         `skill://<library>/_index.md` per library, a
-        `skill://<library>/<folder>/_index.md` per folder of skills, and a
+        `skill://<library>/<folder>/_index.md` per top-level folder, and a
         `skill://<library>/_files.md` for a library that ships files outside
         its skills. Read an index for the URIs inside it, then read a skill's
         `SKILL.md` URI for its instructions.
@@ -105,12 +107,13 @@ def register(mcp: FastMCP, catalogue: Callable[[], Catalogue]) -> set[str]:
         body = current.read(uri, scope)
         if body is not None:
             return body
-        hint = current.directory(uri, scope)
-        if hint is not None:
-            return f"No resource at '{uri}'. {hint}"
-        return (
-            f"No resource at '{uri}'. Call list_resources() for the indexes,"
-            " then read one to see the URIs inside it."
+        hint = current.hint(uri, scope) or (
+            "Call list_resources() for the indexes, then read one to see the URIs"
+            " inside it."
         )
+        # An error result, so a caller that branches on isError can tell a miss
+        # from a file; the hint rides in its message. The caller's mistake, not
+        # the server's, so it logs at DEBUG and never as a traceback.
+        raise ToolError(f"No resource at '{uri}'. {hint}", log_level=logging.DEBUG)
 
     return MIRROR_TOOLS

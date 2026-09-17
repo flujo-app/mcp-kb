@@ -155,8 +155,11 @@ async def _raw(url, uri, library=None):
 
 
 async def _tool(url, uri, library=None):
+    """The mirror's answer, as text, whether it is a body or an error result."""
     async with _client(url, library=library) as client:
-        result = await client.call_tool("read_resource", {"uri": uri})
+        result = await client.call_tool(
+            "read_resource", {"uri": uri}, raise_on_error=False
+        )
     return result.content[0].text
 
 
@@ -273,7 +276,7 @@ DIRECTORIES = [
     ("skill://grafana", "skill://grafana/_index.md"),
     ("skill://grafana/", "skill://grafana/_index.md"),
     ("skill://grafana/grafana-lgtm", "skill://grafana/grafana-lgtm/_index.md"),
-    ("skill://grafana/grafana-plugins", "skill://grafana/_index.md"),
+    ("skill://grafana/grafana-plugins", "skill://grafana/grafana-plugins/_index.md"),
     ("skill://grafana/shared", "skill://grafana/_files.md"),
     ("skill://handbook", "skill://handbook/_files.md"),
     (LOKI, f"{LOKI}/SKILL.md"),
@@ -285,9 +288,39 @@ async def test_a_directory_is_not_found_and_names_the_file_to_read(url, uri, ins
     error = await _read_error(url, uri)
     assert "not found" in error
     assert instead in error
-    mirrored = await _tool(url, uri)
-    assert mirrored.startswith(f"No resource at '{uri}'.")
-    assert instead in mirrored
+    async with _client(url) as client:
+        mirrored = await client.call_tool(
+            "read_resource", {"uri": uri}, raise_on_error=False
+        )
+    assert mirrored.is_error
+    assert mirrored.content[0].text.startswith(f"No resource at '{uri}'.")
+    assert instead in mirrored.content[0].text
+
+
+LIBRARY_FILE_CITED_FROM_A_SKILL = "skill://grafana/grafana-lgtm/loki/shared/style.md"
+
+
+async def test_a_library_file_cited_from_inside_a_skill_names_its_address(url):
+    """Skills cite shared material from the repository root; resolved against
+    the skill it misses, and the error says where the file actually is."""
+    for error in (
+        await _read_error(url, LIBRARY_FILE_CITED_FROM_A_SKILL),
+        await _tool(url, LIBRARY_FILE_CITED_FROM_A_SKILL),
+    ):
+        assert "skill://grafana/shared/style.md" in error
+
+
+async def test_the_library_file_hint_respects_the_scope(url):
+    """Pinned to a folder whose sources do not ship the file, no hint."""
+    cited = "skill://grafana/grafana-ops/runbook/extra/notes.md"
+    assert "skill://grafana/extra/notes.md" in await _read_error(url, cited)
+    pinned = await _read_error(url, cited, library="grafana/grafana-ops")
+    assert "skill://grafana/extra/notes.md" in pinned
+    # loki is in this pin; the grafana-extra source that ships the file is not.
+    from_loki = "skill://grafana/grafana-lgtm/loki/extra/notes.md"
+    assert "skill://grafana/extra/notes.md" in await _read_error(url, from_loki)
+    hidden = await _read_error(url, from_loki, library=LGTM)
+    assert "skill://grafana/extra/notes.md" not in hidden
 
 
 async def test_a_skill_root_names_its_manifest_too(url):
@@ -366,7 +399,7 @@ async def test_the_listing_is_exactly_the_index_rows(url):
             "skill://grafana/_index.md",
             "grafana/_index.md",
             "The grafana library — 8 skills in 4 folders:"
-            " grafana-k6, grafana-lgtm, grafana-ops, grafana-plugins/app.",
+            " grafana-k6, grafana-lgtm, grafana-ops, grafana-plugins.",
             md,
         ),
         (
@@ -388,9 +421,9 @@ async def test_the_listing_is_exactly_the_index_rows(url):
             md,
         ),
         (
-            "skill://grafana/grafana-plugins/app/_index.md",
-            "grafana/grafana-plugins/app/_index.md",
-            "1 skill in the grafana-plugins/app folder of the grafana library.",
+            "skill://grafana/grafana-plugins/_index.md",
+            "grafana/grafana-plugins/_index.md",
+            "1 skill in the grafana-plugins folder of the grafana library.",
             md,
         ),
         (
@@ -427,36 +460,62 @@ async def test_every_listed_row_reads(url):
         assert await _read(url, uri)
 
 
-async def test_the_library_index_lists_every_skill_in_it(url):
+SKILL_ADVICE = (
+    "Read a skill's SKILL.md for its instructions, or _manifest in its place to"
+    " see what else it ships, then read one of those paths under the same skill."
+)
+
+
+async def test_the_library_index_lists_its_folders_skills_and_files(url):
+    """One line per folder, not per skill: the reader picks where to go deeper."""
     assert await _read(url, "skill://grafana/_index.md") == (
         "# grafana — 8 skills\n\n"
-        "skill://grafana/grafana-k6/k6/SKILL.md: Load test.\n"
-        "skill://grafana/grafana-k6/testing/SKILL.md: Test with k6.\n"
-        "skill://grafana/grafana-lgtm/loki/SKILL.md: Query logs.\n"
-        "skill://grafana/grafana-lgtm/tempo/SKILL.md: Query traces.\n"
-        "skill://grafana/grafana-lgtm/testing/SKILL.md: Test the stack.\n"
-        "skill://grafana/grafana-ops/runbook/SKILL.md: Run the book.\n"
-        "skill://grafana/grafana-plugins/app/sdk/SKILL.md: Build a plugin.\n"
+        "skill://grafana/grafana-k6/_index.md: 2 skills\n"
+        "skill://grafana/grafana-lgtm/_index.md: 3 skills\n"
+        "skill://grafana/grafana-ops/_index.md: 1 skill\n"
+        "skill://grafana/grafana-plugins/_index.md: 1 skill\n"
         "skill://grafana/overview/SKILL.md: Start here.\n"
-        "\nRead any URI above for that skill's instructions. Read _manifest in"
-        " place of SKILL.md to see what else it ships, then read one of those"
-        " paths under the same skill.\n"
+        "skill://grafana/_files.md: 2 library-level files\n"
+        "\nRead a folder's _index.md for what is in it. " + SKILL_ADVICE + "\n"
     )
 
 
-async def test_a_folder_index_lists_only_the_skills_directly_in_it(url):
+async def test_a_folder_index_lists_the_skills_directly_in_it(url):
     assert await _read(url, "skill://grafana/grafana-lgtm/_index.md") == (
         "# grafana/grafana-lgtm — 3 skills\n\n"
         "skill://grafana/grafana-lgtm/loki/SKILL.md: Query logs.\n"
         "skill://grafana/grafana-lgtm/tempo/SKILL.md: Query traces.\n"
         "skill://grafana/grafana-lgtm/testing/SKILL.md: Test the stack.\n"
-        "\nRead any URI above for that skill's instructions. Read _manifest in"
-        " place of SKILL.md to see what else it ships, then read one of those"
-        " paths under the same skill.\n"
+        "\n" + SKILL_ADVICE + "\n"
     )
-    assert "sdk" in await _read(url, "skill://grafana/grafana-plugins/app/_index.md")
-    intermediate = "skill://grafana/grafana-plugins/_index.md"
-    assert "No resource" in await _tool(url, intermediate)
+
+
+async def test_a_folder_holding_only_folders_has_an_index_of_them(url):
+    assert await _read(url, "skill://grafana/grafana-plugins/_index.md") == (
+        "# grafana/grafana-plugins — 1 skill\n\n"
+        "skill://grafana/grafana-plugins/app/_index.md: 1 skill\n"
+        "\nRead a folder's _index.md for what is in it.\n"
+    )
+    assert "sdk/SKILL.md" in await _read(
+        url, "skill://grafana/grafana-plugins/app/_index.md"
+    )
+
+
+async def test_every_uri_an_index_names_reads(url):
+    """Walked from the library indexes down, through both surfaces."""
+    seen, queue = set(), [row[0] for row in await _rows(url)]
+    while queue:
+        uri = queue.pop()
+        if uri in seen:
+            continue
+        seen.add(uri)
+        body = await _read(url, uri)
+        assert body
+        if uri.endswith(("/_index.md", "/_files.md")):
+            queue += re.findall(r"^(skill://\S+?):? ", body + " ", re.M)
+            queue += re.findall(r"^(skill://\S+)$", body, re.M)
+    assert "skill://grafana/grafana-plugins/app/sdk/SKILL.md" in seen
+    assert "skill://grafana/shared/style.md" in seen
 
 
 async def test_the_files_index_lists_the_library_level_files(url):
@@ -492,14 +551,35 @@ LGTM = "grafana/grafana-lgtm"
 
 
 async def test_a_folder_scope_lists_its_folder_and_its_sources_files(url):
+    """Not the library index: under this pin it would list this one folder."""
     assert [row[0] for row in await _rows(url, library=LGTM)] == [
-        "skill://grafana/_index.md",
         "skill://grafana/grafana-lgtm/_index.md",
         "skill://grafana/_files.md",
     ]
     files = await _read(url, "skill://grafana/_files.md", library=LGTM)
     assert "skill://grafana/shared/style.md" in files
     assert "extra/notes.md" not in files
+
+
+async def test_a_scope_on_a_folder_of_folders_lists_it_and_the_folders_in_it(url):
+    """The listing is the top of the index tree wherever the pin puts that top."""
+    rows = await _rows(url, library="grafana/grafana-plugins")
+    assert [row[0] for row in rows] == [
+        "skill://grafana/grafana-plugins/_index.md",
+        "skill://grafana/grafana-plugins/app/_index.md",
+        "skill://grafana/_files.md",
+    ]
+    assert rows[1][2] == "1 skill in the grafana-plugins/app folder of the grafana library."
+
+
+async def test_every_listed_folder_is_one_an_index_names(url):
+    """Unscoped, the listing's folders are the library index's folders exactly."""
+    listed = {r[0] for r in await _rows(url)} - {"skill://grafana/_index.md"}
+    index = await _read(url, "skill://grafana/_index.md")
+    named = set(re.findall(r"^(skill://\S+/_index\.md):", index, re.M))
+    assert {u for u in listed if u.startswith("skill://grafana/")} - {
+        "skill://grafana/_files.md"
+    } == named
 
 
 async def test_a_folder_scope_cannot_read_another_sources_library_file(url):
@@ -526,8 +606,19 @@ async def test_a_library_scope_reaches_every_source_of_the_library(url):
     assert await _read(url, "skill://grafana/shared/style.md", library="grafana")
 
 
-async def test_a_bare_folder_name_selects_nothing(url):
-    assert await _rows(url, library="grafana-lgtm") == []
+async def test_a_typo_deep_in_a_folder_path_names_the_folders_at_that_depth(url):
+    """Not the top-level folders: the ones where the path stopped matching."""
+    with pytest.raises(Exception) as caught:
+        await _rows(url, library="grafana/grafana-plugins/nope")
+    assert str(caught.value).endswith(
+        "The folders in grafana/grafana-plugins are: grafana-plugins/app."
+    )
+
+
+async def test_a_bare_folder_name_is_refused_as_no_such_library(url):
+    """A folder name is not a library, and is not looked for in every library."""
+    with pytest.raises(Exception, match=r"no such library\. The libraries are:"):
+        await _rows(url, library="grafana-lgtm")
 
 
 async def test_a_library_file_named_manifest_is_not_labelled_json(tmp_path):
@@ -597,12 +688,14 @@ async def test_a_skill_nested_inside_a_skill_is_served_as_the_spec_says(tmp_path
 
     async with Client(kb.mcp) as client:
         index = (await client.read_resource("skill://lib/_index.md"))[0].text
+        folder = (await client.read_resource("skill://lib/x/_index.md"))[0].text
         inner = (await client.read_resource("skill://lib/x/y/SKILL.md"))[0].text
         shared = (await client.read_resource("skill://lib/x/y/refs/a.md"))[0].text
         manifest = (await client.read_resource("skill://lib/x/_manifest"))[0].text
 
     assert "skill://lib/x/SKILL.md: outer" in index
-    assert "skill://lib/x/y/SKILL.md: inner" in index
+    assert "skill://lib/x/_index.md: 1 skill" in index
+    assert "skill://lib/x/y/SKILL.md: inner" in folder
     assert "inner body" in inner
     assert shared == "shared bytes\n"
     assert {"y/SKILL.md", "y/refs/a.md"} <= {f["path"] for f in json.loads(manifest)["files"]}

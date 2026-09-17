@@ -93,7 +93,7 @@ class FilePrompt:
             return self.template
 
     def render(self, arguments: dict[str, object] | None = None) -> str:
-        """Fill in the placeholders, raising ``ValueError`` on a missing one.
+        """Fill in the placeholders, raising ``MissingArguments`` on a missing one.
 
         Plain and synchronous: the FastMCP-facing wrapper is what turns this
         into the async ``render`` a ``Prompt`` subclass must provide, and what
@@ -111,9 +111,21 @@ class FilePrompt:
             arg.name for arg in self.arguments if arg.required and arg.name not in given
         ]
         if missing:
-            raise ValueError(f"Missing required arguments: {', '.join(missing)}")
+            raise MissingArguments(self.name, missing)
         values = {**self.defaults, **given}
         return PLACEHOLDER.sub(lambda m: values.get(m.group(1), ""), self.body())
+
+
+class MissingArguments(ValueError):
+    """A render was asked for without a required argument: the caller's mistake."""
+
+    def __init__(self, prompt: str, names: list[str]):
+        self.prompt = prompt
+        self.names = names
+        super().__init__(
+            f"Prompt {prompt!r} needs the argument"
+            f"{'s' if len(names) > 1 else ''} {', '.join(names)}."
+        )
 
 
 def _split(text: str) -> tuple[dict, str]:
@@ -199,13 +211,15 @@ def load_prompts(
     source: str,
     tags: Sequence[str] = (),
     live: bool = False,
+    skipped: list[tuple[Path, str]] | None = None,
 ) -> list[FilePrompt]:
     """Every prompt file ``harvest`` already found for one source, joined to a library.
 
-    ``library`` is the library the prompts join. A broken file is logged and
-    skipped rather than raised: a bad prompt must not take the skills down with
-    it. ``tests/test_prompts.py`` loads every shipped prompt strictly, so this
-    only ever fires for a file mounted in at runtime.
+    ``library`` is the library the prompts join. A broken file is skipped
+    rather than raised: a bad prompt must not take the skills down with it.
+    Given ``skipped``, each one is added to it as ``(path, reason)`` for the
+    caller to report once, in ``/health`` and the log; without it, it is logged
+    here.
     """
     prompts: list[FilePrompt] = []
     for path in sorted(files):
@@ -214,5 +228,8 @@ def load_prompts(
                 load_prompt(path, library, source=source, tags=tags, live=live)
             )
         except (OSError, ValueError, yaml.YAMLError) as exc:
-            log.warning("skipping prompt %s: %s", path, exc)
+            if skipped is None:
+                log.warning("skipping prompt %s: %s", path, exc)
+            else:
+                skipped.append((path, str(exc)))
     return prompts

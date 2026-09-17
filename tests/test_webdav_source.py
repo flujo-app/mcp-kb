@@ -19,7 +19,7 @@ import pytest
 
 from kubed.mcp_kb import KnowledgeBase
 from kubed.mcp_kb.config import Config, WebdavSource
-from kubed.mcp_kb.sources import SourceError, fingerprint, materialise
+from kubed.mcp_kb.sources import AccessRefused, SourceError, fingerprint, materialise
 from kubed.mcp_kb.sources import export as exports
 from kubed.mcp_kb.sources.webdav import ETAGS_FILE, VERSION_FILE, client, fetch_file
 from tests.webdav_server import PASSWORD, USERNAME
@@ -195,7 +195,8 @@ def test_the_wrong_credentials_are_a_source_error_naming_the_status_not_the_pass
         materialise(_source(webdav), tmp_path)
 
     message = str(raised.value)
-    assert "401" in message
+    assert isinstance(raised.value, AccessRefused)
+    assert "HTTP 401: the credentials were refused" in message
     assert message.startswith("notes:")
     assert PASSWORD not in message
     assert "not-the-password" not in message
@@ -507,3 +508,78 @@ def _local(tmp_path: Path) -> Path:
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text("---\nname: y\ndescription: Local.\n---\n\nbody\n")
     return root
+
+
+def test_a_folder_that_does_not_exist_is_named_as_that(webdav, tmp_path):
+    """Not a copy failure with an empty path in it: the folder is not there."""
+    source = _source(webdav).model_copy(update={"url": f"{webdav.url}/Agents"})
+
+    with pytest.raises(SourceError) as raised:
+        materialise(source, tmp_path)
+
+    assert str(raised.value) == "notes: the folder /Agents does not exist"
+    assert not isinstance(raised.value, AccessRefused)
+
+
+def _served_config(webdav, tmp_path):
+    return Config.model_validate(
+        {
+            "sources": [
+                {
+                    "name": "notes",
+                    "url": webdav.url,
+                    "auth": {"username": USERNAME, "password": {"env": ENV}},
+                },
+                {
+                    "name": "local",
+                    "url": f"file://{_local(tmp_path)}",
+                    "include": {"skills": ["skills/*/SKILL.md"]},
+                },
+            ]
+        }
+    )
+
+
+def test_refused_credentials_on_the_first_build_stop_the_server(
+    webdav, tmp_path, monkeypatch
+):
+    """The failure a wait does not fix: exit, and be restarted until it is fixed."""
+    monkeypatch.setenv(ENV, "not-the-password")
+
+    with pytest.raises(AccessRefused, match=r"notes: .*HTTP 401"):
+        KnowledgeBase(_served_config(webdav, tmp_path), tmp_path / "cache")
+
+
+def test_main_exits_naming_the_source_whose_credentials_were_refused(
+    webdav, tmp_path, monkeypatch, capsys
+):
+    from kubed.mcp_kb.main import main
+
+    monkeypatch.setenv(ENV, "not-the-password")
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        json.dumps(_served_config(webdav, tmp_path).model_dump(mode="json"))
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        main(["serve", "--config", str(config), "--cache-dir", str(tmp_path / "c")])
+
+    assert raised.value.code == 3
+    err = capsys.readouterr().err
+    assert "mcp-kb: notes: " in err and "HTTP 401: the credentials were refused" in err
+    assert "not-the-password" not in err
+
+
+def test_refused_credentials_on_a_refresh_leave_the_source_stale(
+    webdav, tmp_path, monkeypatch
+):
+    """Already serving: keep serving, say why it stopped moving, do not exit."""
+    knowledge_base = KnowledgeBase(_served_config(webdav, tmp_path), tmp_path / "cache")
+    monkeypatch.setenv(ENV, "not-the-password")
+
+    knowledge_base.refresh(force=True)
+
+    notes = knowledge_base.status["notes"]
+    assert notes["status"] == "stale"
+    assert "HTTP 401: the credentials were refused" in notes["error"]
+    assert "first" in knowledge_base.catalogue.read("skill://notes/x/SKILL.md")

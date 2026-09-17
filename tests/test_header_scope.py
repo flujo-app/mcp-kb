@@ -62,7 +62,8 @@ async def resource_uris(url, headers=None):
 
 async def call(url, tool, headers=None, **args):
     async with _client(url, headers) as client:
-        return (await client.call_tool(tool, args)).content[0].text
+        result = await client.call_tool(tool, args, raise_on_error=False)
+        return result.content[0].text
 
 
 # -- the mirror toggle --------------------------------------------------------

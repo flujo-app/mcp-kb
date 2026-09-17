@@ -104,7 +104,8 @@ SOURCE_STATUS = {
                 "a skill whose frontmatter `name` breaks the Agent Skills naming "
                 "rule or differs from its directory, or that a skill before it "
                 "already serves at that address; a prompt whose name a prompt "
-                "before it already has. A clash with another source is not "
+                "before it already has, or whose file does not parse or cannot "
+                "be read. A clash with another source is not "
                 "listed here: it fails the later source instead."
             ),
             "items": {

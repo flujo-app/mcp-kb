@@ -57,6 +57,7 @@ installer's, against whatever image tag it chooses.
 | ⤷ `tools.py`, `prompts.py` | the two mirror pairs |
 | ⤷ `request.py`, `scope.py` | what the current request says about itself, and the `Scope` it becomes |
 | ⤷ `announce.py` | `AnnounceChanges` — telling a session its listing moved |
+| ⤷ `pins.py` | `RefuseEmptyScope` — a scope that names nothing fails every request, saying what there is |
 | `kubed/mcp_kb/spec/` | `builder.py`, the OpenAPI document for the HTTP surface |
 | `scripts/` | `generate_openapi.py`, `generate_wiki.py`, and `requirements.py` for the image build |
 | `examples/config.yaml` | the worked config the image ships — four libraries as `github://` sources |

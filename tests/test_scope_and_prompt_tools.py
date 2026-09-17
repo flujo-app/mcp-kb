@@ -10,6 +10,7 @@ has skills and a prompt, ``design`` (tagged ``ui``) has skills only, and
 """
 
 import json
+import logging
 import threading
 
 import pytest
@@ -39,6 +40,8 @@ def url(tmp_path_factory):
     base = tmp_path_factory.mktemp("scoped")
     for name in ("loki", "tempo"):
         _skill(base / "observe", name)
+    # Up and serving nothing at all: a Nextcloud folder with nothing in it yet.
+    (base / "blank").mkdir()
     _skill(base / "design", "palette")
     (base / "observe" / "prompts").mkdir()
     (base / "observe" / "prompts" / "debug.md").write_text(
@@ -63,6 +66,9 @@ def url(tmp_path_factory):
                     "url": f"file://{base / 'notes'}",
                     "include": {"skills": [], "prompts": ["*.md"]},
                 },
+                {"name": "blank", "url": f"file://{base / 'blank'}"},
+                # A library whose only source is down: named, and serving nothing.
+                {"name": "down", "url": f"file://{base / 'not-there'}"},
             ],
         }
     )
@@ -134,6 +140,30 @@ async def test_get_prompt_returns_rendered_role_tagged_messages(url):
     ]
 
 
+@pytest.mark.parametrize(
+    ("name", "arguments", "says"),
+    [
+        ("observe_nope", {}, "Unknown prompt: 'observe_nope'. Call list_prompts()"),
+        ("observe_debug", {}, "Prompt 'observe_debug' needs the argument app."),
+    ],
+)
+async def test_a_prompt_tool_mistake_is_an_error_result_that_says_what_to_do(
+    url, name, arguments, says, caplog
+):
+    """The caller's mistake: an error result, and nothing in the log above DEBUG."""
+    with caplog.at_level(logging.DEBUG, logger="fastmcp"):
+        async with _client(url, "?prompts=off") as client:
+            result = await client.call_tool(
+                "get_prompt",
+                {"name": name, "arguments": arguments},
+                raise_on_error=False,
+            )
+    assert result.is_error
+    assert result.content[0].text.startswith(says)
+    server = [r for r in caplog.records if r.name.startswith("fastmcp.server")]
+    assert [r.getMessage() for r in server if r.levelno > logging.DEBUG] == []
+
+
 # -- library and tags -----------------------------------------------------------
 
 
@@ -161,9 +191,76 @@ async def test_several_tags_mean_any_of_them(url):
 
 
 async def test_tags_narrow_within_a_library(url):
-    _, resources, prompts = await _seen(url, "?library=observe&tags=ui")
-    assert resources == []
-    assert prompts == []
+    _, resources, prompts = await _seen(url, "?library=observe&tags=ops")
+    assert resources == ["observe/_index.md"]
+    assert prompts == ["observe_debug"]
+
+
+# -- a scope that names nothing --------------------------------------------------
+
+REFUSED = [
+    (
+        "?library=nope",
+        "The scope names library 'nope', and there is no such library."
+        " The libraries are: blank, design, down, notes, observe.",
+    ),
+    ("?tags=opps", "The scope names tag 'opps', which nothing carries. The tags are:"),
+    (
+        "?library=observe/loki",
+        "The scope names 'observe/loki', which is a skill, not a folder.",
+    ),
+    (
+        "?library=observe/nope",
+        "The scope names folder 'nope' of library 'observe', which has no such"
+        " folder. It has no folders.",
+    ),
+    (
+        "?library=observe&tags=ui,design",
+        "The scope names tags that exist, but nothing in library 'observe'"
+        " carries any of them: design, ui.",
+    ),
+    (
+        # notes serves a prompt and no skills: up, with no folders to name.
+        "?library=notes/standup",
+        "The scope names folder 'standup' of library 'notes', which has no such"
+        " folder. It has no folders.",
+    ),
+    (
+        # loki is a skill, but not one these tags admit: not confirmed as one.
+        "?library=observe/loki&tags=ui",
+        "The scope names folder 'loki' of library 'observe', which has no such"
+        " folder.",
+    ),
+]
+
+
+@pytest.mark.parametrize(("query", "says"), REFUSED)
+async def test_a_scope_that_names_nothing_is_refused_saying_what_there_is(
+    url, query, says
+):
+    """A typo in a client's config is an error at connect, not an empty server."""
+    from mcp.shared.exceptions import MCPError
+    from mcp_types import INVALID_PARAMS
+
+    with pytest.raises(MCPError) as caught:
+        await _seen(url, query)
+    assert caught.value.error.code == INVALID_PARAMS
+    assert caught.value.error.message.startswith(says)
+
+
+async def test_a_library_that_is_down_is_empty_not_refused(url):
+    """It exists; it is only serving nothing right now, which /health explains."""
+    assert await _seen(url, "?library=down") == ([], [], [])
+    assert await _seen(url, "?library=down/any/folder") == ([], [], [])
+
+
+async def test_a_library_that_is_up_and_empty_is_empty_not_refused(url):
+    assert await _seen(url, "?library=blank") == ([], [], [])
+
+
+async def test_a_header_scope_is_refused_the_same_way(url):
+    with pytest.raises(Exception, match="no such library"):
+        await _seen(url, headers={"X-Skill-Library": "nope"})
 
 
 async def test_a_header_beats_the_url_parameter(url):

@@ -51,12 +51,14 @@ from .catalogue.snapshot import (
     Snapshot,
     build_snapshot,
     build_source,
+    log_changes,
     record_from_index,
 )
 from .catalogue.uris import Catalogue
 from .config import Config
 from .mcp import prompts, resources, tools
 from .mcp.announce import AnnounceChanges
+from .mcp.pins import RefuseEmptyScope, what_is_wrong
 from .mcp.request import client_reads_resources, client_uses_prompts
 
 log = logging.getLogger(__name__)
@@ -69,15 +71,16 @@ perform a specific task. Everything it serves is a `skill://` URI, and reading \
 one is the only operation there is.
 
 Work down the address space, cheapest first. Listing gives you indexes -- one \
-per library (`skill://grafana/_index.md`), one per folder of skills within a \
+per library (`skill://grafana/_index.md`), one per top-level folder of a \
 library (`skill://grafana/grafana-lgtm/_index.md`). Reading an index gives you \
-the skills in it, as URIs. Reading a skill's URI \
-(`skill://grafana/grafana-lgtm/loki/SKILL.md`) gives you the instructions to \
-follow.
+what is directly in it, as URIs: its folders' indexes, and its skills. \
+Reading a skill's URI (`skill://grafana/grafana-lgtm/loki/SKILL.md`) gives you \
+the instructions to follow.
 
 A skill may ship supporting files. Read `_manifest` in place of `SKILL.md` to \
 list them, then read one by its path under the same skill. A library may also \
-ship files outside its skills, listed at `skill://<library>/_files.md`. Do not \
+ship files outside its skills, listed at `skill://<library>/_files.md`; a path \
+a skill cites that is not inside the skill is usually one of those. Do not \
 read files you have no use for -- a skill citing one is not a reason to fetch \
 it. Only files are read: a library, a folder or a skill's own directory serves \
 nothing.
@@ -110,6 +113,7 @@ class KnowledgeBase:
 
         self._records = self._cold_start()
         self.snapshot: Snapshot = build_snapshot(config, self._records, generation=0)
+        log_changes({}, self.snapshot.status)
         self._write_index()
 
         ttl = config.min_refresh_seconds
@@ -131,6 +135,9 @@ class KnowledgeBase:
         prompt_tools = prompts.register(self.mcp, lambda: self.snapshot)
         mirrors = dict.fromkeys(resource_tools, client_reads_resources)
         mirrors.update(dict.fromkeys(prompt_tools, client_uses_prompts))
+        self.mcp.add_middleware(
+            RefuseEmptyScope(lambda scope: what_is_wrong(scope, config, self.snapshot))
+        )
         self.mcp.add_middleware(resources.HideMirrorTools(mirrors))
         self.mcp.add_middleware(AnnounceChanges(self))
         routes.register(self.mcp, self)
@@ -166,6 +173,16 @@ class KnowledgeBase:
     def _cold_start(self) -> dict[str, SourceRecord]:
         """Every source's record, reusing the on-disk index wherever it holds.
 
+        A source built here whose server refuses its credentials stops the
+        process: ``AccessRefused`` escapes, and ``main`` exits naming it. A
+        refusal is the one failure a wait does not fix -- a wrong password, an
+        account not yet let in -- and a pod that exits is restarted, visibly,
+        until it is fixed, where one that serves on looks healthy with a
+        library missing. Every other failure stays a failed source, so an
+        unreachable remote at boot never takes the libraries that did load down
+        with it; and a refusal on a later refresh, of a source already serving,
+        makes it stale and is logged.
+
         No fingerprint is taken here. Checking one means walking every source
         tree, which is the cost this whole file exists to move off the boot
         path; the verification pass the lifespan runs immediately afterwards
@@ -188,7 +205,7 @@ class KnowledgeBase:
                 else None
             )
             records[source.name] = from_index or build_source(
-                self.config, source, self.cache
+                self.config, source, self.cache, refusal_is_fatal=True
             )
         return records
 
@@ -258,6 +275,7 @@ class KnowledgeBase:
                 self.config, records, generation=self.snapshot.generation + 1
             )
             self._records = records
+            log_changes(self.snapshot.status, snapshot.status)
             self.snapshot = snapshot
             # Best-effort and therefore last: a raise here must not leave
             # _records advanced while snapshot still holds the old generation.
@@ -285,8 +303,21 @@ class KnowledgeBase:
     def run(
         self, transport: str = "http", host: str = "0.0.0.0", port: int = 8000
     ) -> None:
-        """Serve on ``transport``, blocking until the process is stopped."""
+        """Serve on ``transport``, blocking until the process is stopped.
+
+        FastMCP's banner is a box of box-drawing characters, which reads well in
+        a terminal and as noise in a log collector; its own "Starting MCP
+        server" line says the same. uvicorn is given no log config of its own,
+        so its lines go through the handler ``main.configure_logging``
+        installed and read like the rest.
+        """
         if transport == "stdio":
-            self.mcp.run(transport="stdio")
+            self.mcp.run(transport="stdio", show_banner=False)
         else:
-            self.mcp.run(transport="http", host=host, port=port)
+            self.mcp.run(
+                transport="http",
+                host=host,
+                port=port,
+                show_banner=False,
+                uvicorn_config={"log_config": None},
+            )

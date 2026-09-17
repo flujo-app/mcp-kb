@@ -1859,6 +1859,132 @@ is rewritten anyway:**
 `mcp+http` epic, which has not started. This pull request only ensures nothing in
 the new grammar would prevent it: a proxied URI need not begin with a library.
 
+### §C1.25 — First contact: the deployed server, tested for real (2026-09-17)
+
+`apps/mcp-kb` went up on the image built from #19's merge (`31f3067`) and was
+driven three ways: Claude Code's own resource reader, raw JSON-RPC from inside
+the pod (so no client normalised anything), and the tools-only surface
+(`?resources=off&prompts=off`). Nothing here is fixed; this is the list for the
+next pull request.
+
+**What held.** The listing is 12 rows and ~2.9 KB. Every address kind reads, in
+both surfaces: library, folder and `_files.md` indexes, `SKILL.md`, `_manifest`
+(JSON), supporting files, library files. `..` resolves server-side, including
+the upstream links that exist today (`../../grafana-k6/k6/SKILL.md` from
+`synthetic-monitoring-checks`, `../checklists/typescript.md` from inside
+`k6-docs/references/workflows/`). `..` past the library is clamped; `%2E%2E`,
+`?query`, `#fragment`, dot-files and a wrong-case library are not found. The
+directory hints are word-perfect over raw JSON-RPC and through `read_resource`.
+Scoping: a library pin, a folder pin, tags, tags intersected with a library,
+header over URL and `?skills=full` (102 rows) all behave as §C1.23 says. Every
+list and read answers in 12–35 ms, far below anything that would hide the
+server's prompts from a slash-command menu.
+
+**Findings, most consequential first:**
+
+1. **Penpot's skills cite library files by a root-relative path, and nothing
+   resolves it.** `penpot-router/SKILL.md` lists `shared/penpot-mcp-tool-reference.md`;
+   across the kit's skills there are ~220 such `shared/…` citations and no
+   `../shared`. Resolved against the skill root, as SEP-2640 says, that is
+   `skill://penpot/penpot-router/shared/penpot-mcp-tool-reference.md`, which is a
+   bare not found. The file is at `skill://penpot/shared/penpot-mcp-tool-reference.md`.
+   The `_files.md` row's description ("its skills reference them") is the only
+   clue. A not-found under a skill whose tail names one of the library's files
+   could say so, the same way directory reads already get a hint.
+2. **In tools mode, a missing resource is a success.** `read_resource` on
+   `skill://nope/x` or on a directory returns the hint as ordinary content with
+   `isError: false`, while `get_prompt` on an unknown name returns `isError: true`.
+   A caller that branches on the error flag (n8n's `onError`, for one) cannot
+   tell "here is the file" from "there is no file". The hint text should stay;
+   the flag is what should change, and the two tools should agree.
+3. **A source failure is never logged.** `drive` failed at boot and again on
+   `/reindex`; the pod log has no line for either. `/health` is the only place
+   it shows. The loop logs `rebuilt …` on success and a traceback when a whole
+   pass throws, but a source ending `failed` or `stale` is neither.
+4. **A missing WebDAV folder reads as a copy bug.** With the `mcp-kb` account
+   working (PROPFIND on its root is 207) and no `Agents` folder (404), `drive`
+   reports `drive: copy failed: FileNotFoundError: ['']`. It should say the
+   folder does not exist, and name it.
+5. **First install races the LDAP account.** The pod harvested at 03:10:07; the
+   `mcp-kb` ServiceAccount went Ready at 03:10:48. `drive` failed with HTTP 401
+   and, being due only on its `refresh: 5m`, stayed failed for five minutes. It
+   is a one-time ordering cost, but the cluster README's install steps should
+   say to `/reindex` (or wait) once the account is Ready.
+6. **Client mistakes log as server errors.** `get_prompt` without a required
+   argument, or with an unknown name, prints a full Rich traceback at ERROR. The
+   missing-argument case also answers `prompts/get` with -32603 (internal error)
+   where -32602 (invalid params) is the truth. Both are FastMCP's defaults; the
+   log noise is ours to silence.
+7. **A pin that matches nothing is silent.** `?library=nope`, or a skill's path
+   given as a library (`?library=grafana/grafana-lgtm/loki`), serves an empty
+   catalogue with no word anywhere. A typo in a client's URL looks exactly like
+   a server with nothing in it. The server instructions, or the empty listing's
+   `list_resources` answer, could say the pin matched no library or folder.
+8. **Under a folder pin, two listing rows read the same skills.**
+   `?library=grafana/grafana-lgtm` lists `skill://grafana/_index.md` and
+   `skill://grafana/grafana-lgtm/_index.md`, and both return the same six
+   skills. One row is noise for the reader it exists to save.
+9. **The unscoped `grafana` library index is ~40 KB on the wire:** all 50 skills
+   with their long upstream descriptions, where its own listing row advertises
+   "50 skills in 7 folders". Reading down means reading the folder index; a model
+   that opens the library index first pays ~10k tokens for it. A library that has
+   folders could list its folder indexes rather than every skill.
+
+**Not ours, noted so nobody chases it.** Claude Code's resource reader throws
+away the server's not-found message and prints its own "may have been deleted or
+the URI is stale", so the directory hints never reach a Claude Code session;
+they do reach every tools-mode client. The fix is upstream, in the host.
+
+### §C1.26 — The plan for the next pull request: errors that say what happened
+
+Dr K's rulings on §C1.25, 2026-09-17, and what each becomes. One pull request,
+branch `error-surface`.
+
+1. **A skill citing a library file from the source root gets a hint.** When a
+   read under a skill misses and the rest of the path is one of the library's
+   files, the not-found names that file's URI. The file is not also served at
+   the skill-relative address: one file, one URI. Because Claude Code discards
+   the server's error text, the server instructions also say that a path a skill
+   cites which is not inside the skill is looked for in `_files.md`.
+2. **`read_resource` reports a miss as an error.** `isError: true`, the hint as
+   the message, the same as `get_prompt` on an unknown name.
+3. **Logs say what the catalogue did.** Every source status change — to `ok`,
+   `failed` or `stale`, conflicts included — is one line naming the source and
+   its reason, at boot and on every refresh. A `LOG_LEVEL` environment variable
+   (`--log-level`) sets the level for the whole process, FastMCP and uvicorn
+   included, `INFO` by default.
+4. **A WebDAV failure says what failed.** A folder that does not exist is
+   reported as that, naming its path; 401 and 403 say the credentials were
+   refused or access denied; no exception repr reaches `/health`.
+5. **Refused credentials on a cold build stop the process.** A source whose
+   server answers 401 or 403 while it is first built exits the process with the
+   source named and the status, and Kubernetes restarts it until the account
+   works — "fail till it doesn't". Only authentication, only the cold build: an
+   unreachable GitHub at boot still leaves the other libraries serving (§C1.12
+   stands), and a refused refresh of a source already serving makes it `stale`
+   and logs an error rather than taking the catalogue down.
+6. **A client's mistake with a prompt is its error, not the server's.** A missing
+   required argument is -32602 naming the arguments; an unknown prompt through
+   `get_prompt` says to call `list_prompts`. Neither logs a traceback: both log
+   at DEBUG.
+7. **A scope that names nothing is refused.** A `library` that no library in the
+   config has, a folder that no served skill of that library sits under, or a
+   tag nothing carries, fails the request with -32602 naming what is there — the
+   client cannot connect and says why, instead of looking like an empty server.
+   Scoping is chosen by whoever configures the client, not a security boundary
+   against the model, so naming the libraries leaks nothing. A library whose
+   sources are all down is not refused: it exists, it is only empty right now.
+8. **A folder pin lists the folder, not its library.** Under
+   `?library=grafana/grafana-lgtm` the library index row is dropped; it would
+   read the same skills as the folder's own.
+9. **Indexes list what is directly under them.** A library index lists its
+   top-level folders, as their `_index.md` URIs with a skill count, and the
+   skills that sit in no folder, as their `SKILL.md` URIs; a folder index does
+   the same one level down, so an intermediate folder with no skills of its own
+   has an index too. A library with library files lists its `_files.md`. The
+   grafana library index goes from ~40 KB to a handful of lines, and the model
+   decides where to go deeper. `?skills=full` stays the flat view.
+
 ## Closing questions for Dr K
 
 *Superseded by §C1.22 — the name, here and in question 1, is `mcp-kb`. What was

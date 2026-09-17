@@ -20,14 +20,20 @@ import logging
 from pathlib import Path
 
 from ..config import Config, FileSource, GitSource, Source, WebdavSource
-from .errors import SourceError
+from .errors import AccessRefused, SourceError
 from .file import fingerprint_file, materialise_file
 from .git import fingerprint_git, materialise_git
 from .webdav import fingerprint_webdav, materialise_webdav
 
 log = logging.getLogger(__name__)
 
-__all__ = ["SourceError", "fingerprint", "materialise", "materialise_all"]
+__all__ = [
+    "AccessRefused",
+    "SourceError",
+    "fingerprint",
+    "materialise",
+    "materialise_all",
+]
 
 
 def materialise(source: Source, cache: Path) -> Path:

@@ -32,13 +32,13 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 
 from ..config import Config, Source, WebdavSource
-from ..sources import SourceError, fingerprint, materialise
+from ..sources import AccessRefused, SourceError, fingerprint, materialise
 from ..sources.live import Revalidator, is_live
 from . import harvest
 from .index import PromptRow, SkillRow, SourceRecord, now
 from .prompts import FilePrompt, load_prompts
 from .skills import LibraryFiles, Skill, SkillIndex, load_skills, naming_problem
-from .uris import INDEX, LIBRARY_FILES, SCHEME, Catalogue, uri_for
+from .uris import INDEX, LIBRARY_FILES, SCHEME, Catalogue, _count, uri_for
 
 log = logging.getLogger(__name__)
 
@@ -83,7 +83,9 @@ class Snapshot:
         return {} if self.live is None else self.live.stats(name)
 
 
-def build_source(config: Config, source: Source, cache: Path) -> SourceRecord:
+def build_source(
+    config: Config, source: Source, cache: Path, *, refusal_is_fatal: bool = False
+) -> SourceRecord:
     """Harvest one source from scratch: the blocking, filesystem-touching part.
 
     The fingerprint is taken *before* the tree is read, so a file written
@@ -98,6 +100,10 @@ def build_source(config: Config, source: Source, cache: Path) -> SourceRecord:
     source*, not the caller. ``OSError`` is caught alongside ``SourceError`` for
     that reason -- a ``PermissionError`` or a deleted file is exactly as much
     "a failed source is a record, not an exception" as a bad URL is.
+
+    With ``refusal_is_fatal``, a source whose server refuses its credentials is
+    the one exception, and ``AccessRefused`` escapes. The cold start asks for
+    that: see ``KnowledgeBase._cold_start``.
     """
     lib = config.library(source.library_name)
     try:
@@ -109,12 +115,18 @@ def build_source(config: Config, source: Source, cache: Path) -> SourceRecord:
             dirs, library=lib.name, source=source.name, root=root, tags=tags
         )
         files = harvest.library_files(root, source.include, dirs)
+        unloadable: list[tuple[Path, str]] = []
         prompts = load_prompts(
             harvest.prompt_files(root, source.include),
             library=lib.name,
             source=source.name,
             tags=tags,
+            skipped=unloadable,
         )
+    except AccessRefused as exc:
+        if refusal_is_fatal:
+            raise
+        return _failed(source.name, lib.name, str(exc))
     except (SourceError, OSError) as exc:
         return _failed(source.name, lib.name, str(exc))
 
@@ -130,6 +142,10 @@ def build_source(config: Config, source: Source, cache: Path) -> SourceRecord:
         prompts=tuple(PromptRow.of(p.path, p) for p in prompts),
         files=tuple(files),
         skill_dirs=tuple(str(d) for d in dirs),
+        skipped=tuple(
+            {"path": _relative(path, root), "reason": _unrooted(reason, root)}
+            for path, reason in unloadable
+        ),
     )
 
 
@@ -190,16 +206,26 @@ def build_snapshot(
             continue
         root = Path(record.root)
         lib = config.library(record.library)
+        vanished: list[tuple[Path, str]] = []
         loaded = load_prompts(
             [Path(row.path) for row in record.prompts],
             library=record.library,
             source=record.name,
             tags=[*lib.tags, *source.tags],
             live=is_live(source),
+            skipped=vanished,
         )
         own, files, loaded, skipped = _admit(
             record, [row.to_skill() for row in record.skills], loaded
         )
+        skipped = [
+            *record.skipped,
+            *(
+                {"path": _relative(p, root), "reason": _unrooted(r, root)}
+                for p, r in vanished
+            ),
+            *skipped,
+        ]
         conflict = claims.conflict(record, own, files, loaded)
         if conflict is not None:
             status[source.name] = {"status": "failed", "error": conflict}
@@ -247,6 +273,50 @@ def build_snapshot(
     )
 
 
+def log_changes(before: dict[str, dict], after: dict[str, dict]) -> None:
+    """One log line for each thing a new snapshot changed about a source.
+
+    ``/health`` is where the state of every source can be read, and nothing reads
+    it unprompted; the log is where a change of that state is *noticed*. So a
+    source that comes up, fails, goes stale or recovers says so once, with its
+    reason, when it happens -- at boot, where ``before`` is empty, and on every
+    rebuild after -- and says nothing while it stays as it was.
+
+    The same goes for what a source skips: a path is logged when it is first
+    left out, not again on every rebuild that leaves it out still.
+    """
+    for name, now_ in after.items():
+        was = before.get(name, {})
+        state, error = now_.get("status"), now_.get("error")
+        if (state, error) != (was.get("status"), was.get("error")):
+            if state == "failed":
+                log.error("source %s failed: %s", name, error)
+            elif state == "stale":
+                log.warning(
+                    "source %s is stale, still serving its last harvest: %s",
+                    name,
+                    error,
+                )
+            else:
+                counts = [
+                    _count(now_.get(key, 0), noun)
+                    for key, noun in (
+                        ("skills", "skill"),
+                        ("prompts", "prompt"),
+                        ("files", "file"),
+                    )
+                ]
+                log.info(
+                    "source %s is serving %s, %s and %s", name, *counts
+                )
+        known = {row["path"] for row in was.get("skipped", ())}
+        for row in now_.get("skipped", ()):
+            if row["path"] not in known:
+                log.warning(
+                    "source %s skips %s: %s", name, row["path"], row["reason"]
+                )
+
+
 def _admit(
     record: SourceRecord, skills: list[Skill], prompts: list[FilePrompt]
 ) -> tuple[list[Skill], list[str], list[FilePrompt], list[dict[str, str]]]:
@@ -276,7 +346,8 @@ def _admit(
     skipped: list[dict[str, str]] = []
 
     def skip(path: str, reason: str) -> None:
-        log.warning("source %s: skipping %s: %s", record.name, path, reason)
+        # Not logged here: a snapshot is rebuilt on every refresh, and this
+        # would repeat the same line each time. ``log_changes`` says it once.
         skipped.append({"path": path, "reason": reason})
 
     root = Path(record.root or "")
@@ -322,6 +393,17 @@ def _admit(
             continue
         names[prompt.name] = prompt
     return list(served.values()), files, list(names.values()), skipped
+
+
+def _unrooted(text: str, root: Path) -> str:
+    """``text`` with the source's root taken out of any path it quotes.
+
+    A parse or read error names the file it failed on, absolutely; in ``/health``
+    that would be the cache path ``_relative`` keeps out of every other row.
+    """
+    for base in (root.resolve(), root):
+        text = text.replace(f"{base}/", "")
+    return text
 
 
 def _relative(path: Path, root: Path) -> str:

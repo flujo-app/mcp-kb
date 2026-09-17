@@ -26,7 +26,7 @@ import pytest
 
 from kubed.mcp_kb import KnowledgeBase
 from kubed.mcp_kb.config import Config, GitSource
-from kubed.mcp_kb.sources import SourceError, fingerprint, materialise
+from kubed.mcp_kb.sources import AccessRefused, SourceError, fingerprint, materialise
 from kubed.mcp_kb.sources import export as exports
 from kubed.mcp_kb.sources.git import COMMIT_FILE, resolve
 
@@ -638,9 +638,10 @@ def test_a_wrong_credential_fails_without_naming_the_secret(
 ):
     monkeypatch.setenv("GIT_TOKEN", "wrong-" + PASSWORD)
 
-    with pytest.raises(SourceError) as raised:
+    with pytest.raises(AccessRefused) as raised:
         materialise(_private(private), tmp_path)
 
+    assert "the credentials were refused" in str(raised.value)
     assert "wrong-" not in str(raised.value)
 
 
