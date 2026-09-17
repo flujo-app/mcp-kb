@@ -32,7 +32,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 
 from ..config import Config, Source, WebdavSource
-from ..sources import SourceError, fingerprint, materialise
+from ..sources import AccessRefused, SourceError, fingerprint, materialise
 from ..sources.live import Revalidator, is_live
 from . import harvest
 from .index import PromptRow, SkillRow, SourceRecord, now
@@ -83,7 +83,9 @@ class Snapshot:
         return {} if self.live is None else self.live.stats(name)
 
 
-def build_source(config: Config, source: Source, cache: Path) -> SourceRecord:
+def build_source(
+    config: Config, source: Source, cache: Path, *, refusal_is_fatal: bool = False
+) -> SourceRecord:
     """Harvest one source from scratch: the blocking, filesystem-touching part.
 
     The fingerprint is taken *before* the tree is read, so a file written
@@ -98,6 +100,10 @@ def build_source(config: Config, source: Source, cache: Path) -> SourceRecord:
     source*, not the caller. ``OSError`` is caught alongside ``SourceError`` for
     that reason -- a ``PermissionError`` or a deleted file is exactly as much
     "a failed source is a record, not an exception" as a bad URL is.
+
+    With ``refusal_is_fatal``, a source whose server refuses its credentials is
+    the one exception, and ``AccessRefused`` escapes. The cold start asks for
+    that: see ``KnowledgeBase._cold_start``.
     """
     lib = config.library(source.library_name)
     try:
@@ -115,6 +121,10 @@ def build_source(config: Config, source: Source, cache: Path) -> SourceRecord:
             source=source.name,
             tags=tags,
         )
+    except AccessRefused as exc:
+        if refusal_is_fatal:
+            raise
+        return _failed(source.name, lib.name, str(exc))
     except (SourceError, OSError) as exc:
         return _failed(source.name, lib.name, str(exc))
 

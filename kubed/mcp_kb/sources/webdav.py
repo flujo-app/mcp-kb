@@ -41,13 +41,13 @@ import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from webdav4.client import Client, ClientError, HTTPError
 from webdav4.fsspec import WebdavFileSystem
 
 from ..config import ConfigError, WebdavSource
-from .errors import SourceError
+from .errors import AccessRefused, SourceError
 from .export import WORK_PREFIX, Exports, workspace
 
 if TYPE_CHECKING:
@@ -226,6 +226,15 @@ def _etags(source: WebdavSource, fs: WebdavFileSystem) -> dict[str, str]:
     two equal folders produce two equal dicts and one digest.
     """
     with _reporting(source, "listing"):
+        try:
+            fs.info("")
+        except FileNotFoundError:
+            # Asked first because a listing of a folder that is not there is
+            # not an error to webdav4: it is an empty folder, and the copy
+            # that follows fails on it with nothing an operator can act on.
+            raise SourceError(
+                f"{source.name}: the folder {_folder(source)} does not exist"
+            ) from None
         found = fs.find("", detail=True)
     return {
         path: _etag(info)
@@ -288,13 +297,27 @@ def _inside(source: WebdavSource, root: Path, rel: str) -> Path:
 
 @contextlib.contextmanager
 def _reporting(source: WebdavSource, doing: str) -> Iterator[None]:
-    """Turn whatever the transport raises into a SourceError naming this source."""
+    """Turn whatever the transport raises into a SourceError naming this source.
+
+    A 401 or a 403 is ``AccessRefused``: the server is there and said no to
+    this account, which no amount of retrying changes.
+    """
     try:
         yield
     except SourceError:
         raise
     except Exception as exc:
-        raise SourceError(f"{source.name}: {doing} failed: {_failure(exc)}") from exc
+        message = f"{source.name}: {doing} failed: {_failure(exc)}"
+        if isinstance(exc, HTTPError) and exc.status_code in REFUSED:
+            raise AccessRefused(message) from exc
+        raise SourceError(message) from exc
+
+
+# What each refusal means for the account, which is what an operator acts on.
+REFUSED = {
+    401: "the credentials were refused",
+    403: "the account may not read this folder",
+}
 
 
 def _failure(exc: Exception) -> str:
@@ -305,7 +328,17 @@ def _failure(exc: Exception) -> str:
     publishing what was tried.
     """
     if isinstance(exc, HTTPError):
-        return f"HTTP {exc.status_code}"
+        meaning = REFUSED.get(exc.status_code)
+        return f"HTTP {exc.status_code}" + (f": {meaning}" if meaning else "")
     if isinstance(exc, ClientError):
         return str(exc)
     return f"{type(exc).__name__}: {exc}"
+
+
+def _folder(source: WebdavSource) -> str:
+    """The folder's path on its server: the URL without its scheme and host.
+
+    The host is left out with the rest of the URL for the same reason the URL
+    always is, and the path is what names the folder to create.
+    """
+    return urlsplit(source.base_url).path or "/"

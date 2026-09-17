@@ -20,6 +20,7 @@ from pathlib import Path
 
 from .config import ConfigError, load_config, schema
 from .server import KnowledgeBase
+from .sources import AccessRefused
 
 DEFAULT_CONFIG = Path("/etc/mcp-kb/config.yaml")
 DEFAULT_CACHE_DIR = Path("/var/cache/mcp-kb")
@@ -126,7 +127,12 @@ def main(argv: list[str] | None = None) -> None:
         # A bad config must fail loudly at boot, not silently serve nothing.
         print(f"mcp-kb: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
-    server = KnowledgeBase(config, args.cache_dir)
+    try:
+        server = KnowledgeBase(config, args.cache_dir)
+    except AccessRefused as exc:
+        # Exit rather than serve without it: see KnowledgeBase._cold_start.
+        print(f"mcp-kb: {exc}", file=sys.stderr)
+        raise SystemExit(3) from exc
     server.run(transport=args.transport, host=args.host, port=args.port)
 
 

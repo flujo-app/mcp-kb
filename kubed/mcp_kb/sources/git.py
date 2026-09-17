@@ -47,7 +47,7 @@ import pygit2
 from fsspec.implementations.git import GitFileSystem
 
 from ..config import ConfigError, GitSource
-from .errors import SourceError
+from .errors import AccessRefused, SourceError
 from .export import Exports
 
 # Written at the root of an export: the commit it holds, then how many files it
@@ -137,9 +137,25 @@ def _repository(source: GitSource, cache: Path) -> tuple[pygit2.Repository, bool
         ).free()
     except pygit2.GitError as exc:
         shutil.rmtree(tmp, ignore_errors=True)
-        raise SourceError(f"{source.name}: clone failed: {exc}") from exc
+        raise _failed(source, "clone failed", exc) from exc
     tmp.rename(bare)
     return pygit2.Repository(str(bare)), True
+
+
+# How libgit2 words a remote refusing the credentials it was given ("too many
+# redirects or authentication replays": it offered them and was asked again)
+# or asking for some it was not ("authentication required"). libgit2 raises one
+# GitError class for every failure, so its message is all there is to go on.
+REFUSED_BY_LIBGIT2 = ("authentication replays", "authentication required")
+
+
+def _failed(source: GitSource, doing: str, exc: pygit2.GitError) -> SourceError:
+    """The error for a failed git operation, ``AccessRefused`` when it was one."""
+    if any(phrase in str(exc) for phrase in REFUSED_BY_LIBGIT2):
+        return AccessRefused(
+            f"{source.name}: {doing}: the credentials were refused ({exc})"
+        )
+    return SourceError(f"{source.name}: {doing}: {exc}")
 
 
 def _depth(url: str) -> int:
@@ -231,7 +247,7 @@ def _fetch(source: GitSource, remote: pygit2.Remote, refspecs: list[str]) -> Non
     try:
         remote.fetch(refspecs, depth=depth, callbacks=_callbacks(source))
     except pygit2.GitError as exc:
-        raise SourceError(f"{source.name}: fetch failed: {exc}") from exc
+        raise _failed(source, "fetch failed", exc) from exc
 
 
 def _tip(source: GitSource, cache: Path) -> str:
@@ -253,7 +269,7 @@ def _tip(source: GitSource, cache: Path) -> str:
             for head in remote.list_heads(callbacks=_callbacks(source))
         }
     except pygit2.GitError as exc:
-        raise SourceError(f"{source.name}: cannot reach {source.url}: {exc}") from exc
+        raise _failed(source, f"cannot reach {source.url}", exc) from exc
     for name in wanted:
         if name in heads:
             return heads[name]

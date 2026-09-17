@@ -169,6 +169,16 @@ class KnowledgeBase:
     def _cold_start(self) -> dict[str, SourceRecord]:
         """Every source's record, reusing the on-disk index wherever it holds.
 
+        A source built here whose server refuses its credentials stops the
+        process: ``AccessRefused`` escapes, and ``main`` exits naming it. A
+        refusal is the one failure a wait does not fix -- a wrong password, an
+        account not yet let in -- and a pod that exits is restarted, visibly,
+        until it is fixed, where one that serves on looks healthy with a
+        library missing. Every other failure stays a failed source, so an
+        unreachable remote at boot never takes the libraries that did load down
+        with it; and a refusal on a later refresh, of a source already serving,
+        makes it stale and is logged.
+
         No fingerprint is taken here. Checking one means walking every source
         tree, which is the cost this whole file exists to move off the boot
         path; the verification pass the lifespan runs immediately afterwards
@@ -191,7 +201,7 @@ class KnowledgeBase:
                 else None
             )
             records[source.name] = from_index or build_source(
-                self.config, source, self.cache
+                self.config, source, self.cache, refusal_is_fatal=True
             )
         return records
 
