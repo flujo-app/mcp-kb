@@ -1985,6 +1985,290 @@ branch `error-surface`.
    grafana library index goes from ~40 KB to a handful of lines, and the model
    decides where to go deeper. `?skills=full` stays the flat view.
 
+## Part VI — Plugins and marketplaces
+
+### §C1.27 — Where we are, and what the penpot links taught us (2026-09-17)
+
+**Where things stand.** #20 merged as `f2ecbf1` and is deployed. The `drive`
+source reads the Nextcloud `ai` Team folder (`ai/skills` served, `ai/agents`
+waiting for agent support) as the `mcp-kb` account, which reaches it through
+the `Services` team. The live server checks out. Two findings are waiting on a
+pull request: `httpx` logs a line per WebDAV request at INFO (hold it at
+WARNING below `LOG_LEVEL=DEBUG`), and the cluster README still says a 401
+waits for the next refresh (the pod now exits).
+
+**The penpot question.** Read as written, a penpot skill's references do not
+resolve. `penpot-router/SKILL.md` cites `shared/penpot-mcp-tool-reference.md`
+(frontmatter `requires:` and prose); resolved against the skill, as the Agent
+Skills spec says, that is `skill://penpot/penpot-router/shared/…`, which does
+not exist. #20's hint names `skill://penpot/shared/…`, and Claude Code throws
+the hint away. So today a Claude Code model has to guess.
+
+**What the kit itself says.**
+
+- `skills.json` is penpot's own aggregate manifest (namespace, version, and per
+  skill an id, path, mode and audiences). Only penpot's `validate-kit.mjs` and
+  `update-lock.mjs` read it. It resembles the agentskills `skills.json`
+  proposal (discussion #210), which is not in the spec.
+- `skills.lock` says it outright: *"doctrine = shared/ + policies/ (vendored into
+  native bundles)"*. Penpot's installer (`scripts/install/install-behavior.mjs`)
+  copies `shared/` and `policies/` into every skill, and `workflows/` into
+  `penpot-router`, for a native Claude Code or Codex install.
+- `.well-known/agent-skills/index.json` names the Discovery v0.2.0 schema but
+  carries `path`/`version` rather than the required `type`/`url`/`digest`. It
+  publishes no archives.
+- Penpot's `main` (0.4.0, `efbefc9`) has since added `.claude-plugin/`
+  `marketplace.json` and `plugin.json`: one plugin, `source: "./"` — the whole
+  repository — with `commands` pointing at its `prompts/*.md`. We pin
+  `c63d8e3` (0.3.0), which predates both.
+
+**What installing it does, tested for real.** `claude plugin marketplace add
+penpot/penpot-ai-kit` then `claude plugin install penpot-ai-kit@penpot-ai-kit`
+(local scope, in a scratch project, removed afterwards):
+
+- The plugin cache is the repository copied as it stands. No build runs.
+  `skills/penpot-router/` holds `SKILL.md` and `references/` only.
+- The session lists 13 skills as `penpot-ai-kit:<skill>`, and the seven
+  `commands` as slash commands, `/penpot-ai-kit:design-brief` and the rest.
+- Asked to open the first `requires:` file, the model tried
+  `…/skills/penpot-router/shared/penpot-mcp-tool-reference.md` ("File does not
+  exist"), then the plugin root, `…/0.4.0/shared/…`, which worked.
+
+Nothing resolves the reference. It works in Claude Code because the model has a
+filesystem and walks up to the plugin root. That is the whole of the "support".
+
+**Ruled by Dr K, 2026-09-17: no installer emulation.** mcp-kb does not copy
+penpot's `shared/` into skills or otherwise reproduce one publisher's build
+step. A rule that exists for one repository's layout is an edge-case war; the
+server follows published formats instead.
+
+### §C1.28 — The research: skills, plugins, marketplaces and the tools that install them
+
+**Skills.** The [Agent Skills spec](https://agentskills.io/specification): a
+skill is a directory, and a file reference uses *"relative paths from the skill
+root"*. Penpot's skills break that in their repository form and only follow it
+once installed.
+
+**The Discovery RFC** ([cloudflare/agent-skills-discovery-rfc](https://github.com/cloudflare/agent-skills-discovery-rfc),
+draft v0.2.0) is a convention, not a registry: a domain publishes
+`/.well-known/agent-skills/index.json`, one entry per skill with `type`
+(`skill-md` or `archive`), `url` and a `sha256` digest. An `archive` entry is
+the one standard form of a finished, self-contained skill. There is no central
+list; a client has to know the domain.
+
+**Plugins.** Two formats matter, and they share the idea of a plugin root.
+
+| | Claude Code plugin | Agent Plugins 1.0 |
+|---|---|---|
+| Who | Anthropic | Vercel, OpenAI, GitHub, Microsoft, Amazon, Cursor; Google joining (published 2026-08-06) |
+| Manifest | `.claude-plugin/plugin.json` | `plugin.json` at the root, with its `$schema` |
+| Components | `skills/`, `commands/`, `agents/`, `hooks/`, `.mcp.json`, … — the manifest may add paths | only `skills/` and `mcp.json`; anything else under a reverse-domain folder (`com.github.copilot/commands/`) |
+| Plugin root | `${CLAUDE_PLUGIN_ROOT}`, substituted *anywhere* in skill and agent content | `${PLUGIN_ROOT}`, substituted only in MCP `args`/`env`/`cwd` |
+| Containment | copied plugin; `../` outside it is not copied | every package path must resolve inside the plugin root |
+| Marketplace | `.claude-plugin/marketplace.json` | none — installation and distribution are left to clients |
+
+Agent Plugins has no portable commands (prompts): they are client extensions
+until clients converge. VS Code detects Agent Plugins, Copilot
+(`.github/plugin/plugin.json`), Claude (`.claude-plugin/plugin.json`) and legacy
+OpenPlugin (`.plugin/plugin.json`). Codex reads `plugin.json` and an optional
+`.codex-plugin/plugin.json`.
+
+**Marketplaces are the de facto catalog, and they are open.** A marketplace is a
+git repository with a `marketplace.json`: a `name`, an `owner`, and `plugins[]`,
+each with a `name`, a `source`, and any `plugin.json` field plus `category`,
+`tags` and `strict`. Claude Code reads it from `.claude-plugin/`; Copilot CLI
+from `.github/plugin/` or `.claude-plugin/`; Codex from `.agents/plugins/` or
+`.claude-plugin/` (Codex's own catalog shape differs: `source.path`,
+`interface.displayName`). Entry `source` types in Claude Code: a relative path,
+`github` (`repo`, `ref`, `sha`), `url` (git), `git-subdir` (`url`, `path`,
+`ref`, `sha`), `npm`, `archive` (zip + sha256) and `command` (a directory built
+by a local command, re-run each session). `strict: false` makes the marketplace
+entry the plugin's whole definition. Anthropic's own
+`anthropics/claude-plugins-official` lists 308 plugins, Grafana's among them
+(`git-subdir` into `grafana/ai-marketplace`, pinned by `sha`); penpot is not in
+it and publishes its own. Nothing in any marketplace is built: every source is
+a folder in git, copied as it stands.
+
+**Installers and the files they read or write.**
+
+| Tool | Installs | Dependency file |
+|---|---|---|
+| `npx skills` (Vercel; skills.sh directory) | skill folders from git; `.well-known` indexes; archive URLs; Claude plugin manifests | `skills-lock.json`, written by the tool |
+| `gh skill install` (GitHub CLI, preview) | skill folders; pins a tag or SHA; provenance in frontmatter | none |
+| APM (`microsoft/apm`) | skills, plugins, prompts, MCP servers from any git host or subpath; transitive | `apm.yml` manifest + `apm.lock.yaml` with hashes |
+| Claude Code / Copilot CLI / VS Code / Codex | plugins from marketplaces | client settings (below) |
+
+No dependency file for skills is standardised. APM's pair is the most complete;
+agentskills' `skills.json` + lockfile is a proposal.
+
+**Every repository this catalogue pulls is already a marketplace.** All four
+ship `.claude-plugin/marketplace.json`:
+
+| Repository | Marketplace | Plugins |
+|---|---|---|
+| `grafana/skills` | `grafana-skills` (Grafana Labs) | seven, all `source: "./"` with an explicit `skills` list and keywords: `grafana-core`, `grafana-cloud`, `grafana-lgtm`, `grafana-plugins`, `grafana-app-sdk`, `grafana-k6`, `grafana-datasources` |
+| `n8n-io/skills` | `n8n-io` (n8n) | one, `n8n-skills`, category `automation` |
+| `obra/superpowers` | `superpowers-dev` | one, `superpowers` |
+| `penpot/penpot-ai-kit` (main) | `penpot-ai-kit` | one, with seven `commands` |
+
+Grafana's seven plugins are exactly the seven *folders* this server has been
+inferring from its directory layout, each already carrying the keywords a tag
+scope wants (`loki`, `tempo`, `promql`, `k6`, …). The skill that
+`include.skills` had to leave out by hand, the root `template`, is in no
+plugin's list. n8n, superpowers and grafana also ship `.agents/plugins/` or
+`.codex-plugin/` and more; penpot ships Claude's only.
+
+**How clients configure plugins — the UX to mirror.** Each names a marketplace,
+optionally pinned, then turns plugins on as `plugin@marketplace`:
+
+```jsonc
+// Claude Code, .claude/settings.json
+"extraKnownMarketplaces": {"company-tools": {"source": {"source": "github", "repo": "your-org/plugin-marketplace"}}},
+"enabledPlugins": {"code-formatter@company-tools": true}
+```
+
+```jsonc
+// VS Code settings.json
+"chat.plugins.marketplaces": ["anthropics/claude-code"],
+"chat.pluginLocations": {"/path/to/my-plugin": true}
+```
+
+```toml
+# Codex config.toml
+[marketplaces.company]
+source = "https://github.com/your-org/plugins.git"
+ref = "v1.2.0"
+```
+
+### §C1.29 — Decisions and the proposed config (recommended; open for Dr K)
+
+1. **A plugin is what a source is.** A source is fetched once and becomes a
+   *plugin root*. Its components are found from whichever manifest it has — Agent
+   Plugins `plugin.json` (with the `$schema`), `.claude-plugin/plugin.json`,
+   `.github/plugin/plugin.json` — or, with none, from today's conventions and
+   `include`. `skills/` becomes skills; Claude `commands` and `commands/` become
+   prompts; `agents/` waits for E5; `.mcp.json`/`mcp.json` waits for E6. A plain
+   repository of skills is a plugin with no manifest, so nothing that works
+   today stops working.
+2. **A marketplace is something to fetch, and its entries are sources.** A
+   marketplace is pinned once, by its `ref`, and `plugin@marketplace` names one
+   of its entries, whose own `source` (relative, `github`, `url`, `git-subdir`)
+   is followed and whose `sha`, when given, is honoured. `npm` and `archive`
+   entries are later work; a `command` entry is never followed — running a
+   publisher's build on the server is exactly the installer emulation §C1.27
+   rules out.
+3. **Metadata comes with the plugin.** An entry's and a manifest's `keywords`,
+   `tags` and `category` join the tags of everything that plugin serves, so
+   `?tags=design` reaches penpot without anyone writing it down; `description`
+   and `version` appear in `/health`.
+4. **Libraries compose plugins; nothing is extended.** A library lists the plugins
+   it serves, by name. A plugin may be listed by two libraries. To add your own
+   prompts to Grafana's plugin, a library lists both — the marketplace plugin and
+   your prompts source — rather than inheriting from or overriding the entry. The
+   library's `description` and `tags` are its own; the plugins' tags are added
+   underneath. Shorthand: a library can take every plugin of one marketplace.
+5. **A ref belongs to what is fetched.** A marketplace or a direct source carries
+   its `ref`; a library never does. Two libraries sharing a plugin share one
+   fetch and one commit.
+6. **The address stays library-first.** `skill://<library>/<folder>/<name>/…` is
+   unchanged; the plugin is provenance (in `/health`, in tags), not a URI
+   segment. For every catalogue pulled today that changes no URI: Grafana's
+   plugins *are* its folders, and the other three put skills directly under
+   `skills/`. Two plugins of one library minting one address stay a conflict
+   that fails the later one, as today.
+7. **A relative reference that misses in its skill is tried against its plugin
+   root.** This is not a penpot rule. It is the base both plugin formats define
+   (`${CLAUDE_PLUGIN_ROOT}`, `${PLUGIN_ROOT}`), inside the containment boundary
+   Agent Plugins sets, and it is what the Claude Code model did by itself in the
+   live test. It is tried only on a miss, one hop, inside the same plugin and
+   the same scope, and it never shadows a file the skill has. So
+   `skill://penpot/penpot-router/shared/penpot-mcp-tool-reference.md` reads the
+   file the kit ships, as written — and penpot's `include.files` stops being
+   needed to make the links work.
+8. **Dr K's URI transform idea, weighed.** A per-source find-and-replace step:
+   - *Rewriting content* is rejected. It changes upstream bytes, so manifests
+     and hashes describe something no longer served; penpot's references are
+     frontmatter and code spans rather than links, so no parser can tell a
+     reference from prose; and a pattern broad enough to catch them all will
+     catch something it should not. If content substitution is ever needed, the
+     safe model is Agent Plugins §9.2: exact literal tokens, one pass, never
+     re-scanned — not regular expressions.
+   - *Rewriting addresses* is sound in a narrow form: a rule consulted only when
+     a read misses, mapping one literal prefix to another (no regex), one hop,
+     inside the same library and scope, logged, and listed in `/health`. It can
+     never replace a file that exists, which is the over-replacement worry
+     answered. Decision 7 is exactly this rule, built in for every plugin, so
+     explicit rules are deferred until a case appears that the plugin root does
+     not cover.
+9. **Prompt dialects join E5.** Claude commands carry `description` and
+   `argument-hint` frontmatter and positional `$ARGUMENTS`; mcp-kb's prompts
+   declare named `arguments` and `{{name}}`. Reading commands as prompts needs
+   that dialect, which E5 already plans. Until then a plugin's commands are not
+   served.
+
+**The shape it points to** (a sketch to argue with, not a schema):
+
+```yaml
+marketplaces:                                 # catalogs, each pinned once
+- name: grafana
+  url: github://grafana/skills                # reads .claude-plugin/marketplace.json
+  ref: 51d33e71e191b409bbd25fc7be2684c610d18166
+- name: penpot
+  url: github://penpot/penpot-ai-kit
+  ref: efbefc935ee43804502976aa5ec9659a8bb7e207
+- name: official
+  url: github://anthropics/claude-plugins-official
+  ref: <sha>
+
+sources:                                      # plugins, however they arrive
+- name: grafana-lgtm
+  from: grafana-lgtm@grafana                  # one marketplace entry
+- name: grafana-assistant
+  from: grafana-assistant@official            # git-subdir into grafana/ai-marketplace
+- name: penpot-ai-kit
+  from: penpot-ai-kit@penpot
+- name: team-notes                            # no manifest: conventions and include
+  url: git+https://git.example.com/team/notes.git
+  ref: main
+  refresh: 1h
+- name: homelab-prompts
+  url: file:///srv/prompts/grafana
+- name: drive
+  url: webdav+http://nextcloud.cloud.svc.cluster.local:8080/remote.php/dav/files/mcp-kb/ai
+  cache: live
+
+libraries:
+- name: grafana
+  description: Grafana, Loki and the LGTM stack, with this homelab's prompts.
+  tags: [observability]
+  marketplace: grafana                        # every plugin the catalog lists …
+  sources: [grafana-assistant, homelab-prompts]   # … plus these, composed in
+- name: lgtm-only
+  sources: [grafana-lgtm]                     # the same plugin, in a second library
+- name: penpot
+  sources: [penpot-ai-kit]
+```
+
+**Open questions for Dr K.**
+
+1. `sources:` or `plugins:` as the key, now that every source is a plugin? The
+   clients all say *plugin*; *source* is what this config has said so far.
+2. Should a library also be able to select plugins by tag or keyword
+   (`select: {tags: [grafana]}`) rather than by name? Deterministic only while
+   the marketplace is pinned, and it makes a library's contents change when a
+   catalog does.
+3. Is the plugin root readable in full by the fallback (every non-hidden file,
+   `scripts/` and `evals/` included), or only what `include.files` names?
+4. A whole marketplace as one library: is that wanted, or is naming plugins one
+   by one the safer default for a catalog of 308?
+5. Which to align the manifest reading with first: Claude's
+   `.claude-plugin/plugin.json` (penpot, Grafana, the official marketplace today)
+   or Agent Plugins' `plugin.json` (the cross-vendor standard, no commands)? The
+   recommendation is both, Claude's first, because every plugin we pull today
+   ships Claude's.
+6. Ask penpot upstream to publish `archive` entries in the index it already
+   claims, or self-contained skills? Decision 7 no longer depends on it.
+
 ## Closing questions for Dr K
 
 *Superseded by §C1.22 — the name, here and in question 1, is `mcp-kb`. What was
