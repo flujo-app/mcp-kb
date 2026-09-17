@@ -510,6 +510,10 @@ class Catalogue:
         parsed = parse(uri)
         if parsed is None or not parsed[1]:
             return "text/markdown"
-        if parsed[1].endswith(f"/{MANIFEST}"):
-            return "application/json"
-        return mime_for(parsed[1])
+        library, path = parsed
+        if path.endswith(f"/{MANIFEST}"):
+            # Only a skill's manifest is JSON; a library file may share the name.
+            found = self._skill_at(library, path[: -len(MANIFEST) - 1], EVERYTHING)
+            if found is not None and found[1] == "":
+                return "application/json"
+        return mime_for(path)

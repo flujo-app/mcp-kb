@@ -307,7 +307,7 @@ def _admit(
             skip(rel, f"{name} is the name of an index the server generates")
             continue
         address = f"{record.library}/{rel}"
-        inside = next((r for r in roots if _within(address, r)), None)
+        inside = next((r for r in roots if _overlap(address, r)), None)
         if inside is not None:
             skip(rel, f"its address lies inside the skill at {SCHEME}{inside}")
             continue
@@ -341,6 +341,16 @@ def _within(address: str, root: str) -> bool:
     return address == root or address.startswith(f"{root}/")
 
 
+def _overlap(a: str, b: str) -> bool:
+    """Whether either address is the other or lies under it.
+
+    Both directions matter: a file inside a skill shadows the skill's file, and a
+    skill under a file's address turns that address into a directory that must
+    serve nothing.
+    """
+    return _within(a, b) or _within(b, a)
+
+
 @dataclass
 class _Claims:
     """What the sources built so far serve, so a later one cannot shadow it.
@@ -351,7 +361,7 @@ class _Claims:
     serving none of it -- its skills cite its own files -- so a conflict fails
     that source outright. Overlap counts, not only equality: a library file
     inside another source's skill, or a skill inside another source's skill,
-    is shadowed by the skill whose address is longer.
+    overlaps it, in either direction.
 
     Within one source there is nothing to claim against: ``_admit`` has
     already left out whatever that source could not serve.
@@ -375,12 +385,12 @@ class _Claims:
                 if _within(root, claimed) or _within(claimed, root):
                     return _taken(uri_for(skill), owner)
             for uri, owner in self.files.items():
-                if _within(uri, root):
+                if _overlap(uri, root):
                     return _taken(uri, owner)
         for rel in files:
             uri = f"{SCHEME}{record.library}/{rel}"
             owner = self.files.get(uri) or next(
-                (o for r, o in self.skills.items() if _within(uri, r)), None
+                (o for r, o in self.skills.items() if _overlap(uri, r)), None
             )
             if owner is not None:
                 return _taken(uri, owner)

@@ -13,6 +13,7 @@ routes and is the one built once, at registration -- see ``spec/builder.py``.
 from __future__ import annotations
 
 import logging
+import traceback
 from typing import TYPE_CHECKING
 
 import yaml
@@ -20,6 +21,7 @@ from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from .config import redact
 from .spec import build_spec
 
 if TYPE_CHECKING:
@@ -110,8 +112,12 @@ def register(mcp: FastMCP, knowledge_base: KnowledgeBase) -> None:
         """
         try:
             rebuilt = await knowledge_base.refresh_async(force=True)
-        except Exception:
-            log.exception("reindex failed")
+        except Exception as exc:  # noqa: BLE001 - recovery must always answer
+            # The traceback is how a failure gets fixed, so it is logged whole —
+            # but through the redactor, because credentials never reach a log.
+            trace = "".join(traceback.format_exception(exc))
+            secrets = knowledge_base.config.secrets()
+            log.error("reindex failed\n%s", redact(trace, secrets))
             return JSONResponse(
                 {"status": "error", "error": REINDEX_FAILURE_MESSAGE}, status_code=500
             )

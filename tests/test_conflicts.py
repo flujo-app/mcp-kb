@@ -186,3 +186,28 @@ async def test_a_skill_nested_in_another_sources_skill_fails_the_later_source(
         "status": "failed",
         "error": f"conflict: {later} is already served by source 'first'",
     }
+
+
+@pytest.mark.parametrize("file_first", [True, False])
+async def test_a_file_at_a_skill_folders_address_fails_the_later_source(
+    tmp_path, file_first
+):
+    """A library file `guides` and a skill under `guides/` claim overlapping
+    addresses: `skill://lib/guides` would serve the file where the skill's folder
+    is a directory that serves nothing. One source cannot hold both — a name is a
+    file or a directory — so only two sources can, and the later one fails.
+    """
+
+    def with_file(r):
+        _write(r, "guides", "a file named like a folder")
+
+    def with_skill(r):
+        _skill(r, "skills/guides/y", "y", "Under guides.")
+
+    first, second = (with_file, with_skill) if file_first else (with_skill, with_file)
+    kb = _pair(tmp_path, first, second, files=("guides",))
+    health = await _health(kb)
+
+    assert health["sources"]["first"]["status"] == "ok"
+    assert health["sources"]["second"]["status"] == "failed"
+    assert "skill://lib/guides" in health["sources"]["second"]["error"]

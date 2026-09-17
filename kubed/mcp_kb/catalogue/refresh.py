@@ -17,11 +17,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import traceback
 from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..config import Source
+from ..config import Source, redact
 from ..sources import SourceError, fingerprint
 from .index import SourceRecord
 from .snapshot import SERVABLE, stale
@@ -165,8 +166,10 @@ async def _pass(knowledge_base: KnowledgeBase, **kwargs) -> None:
     """
     try:
         rebuilt = await knowledge_base.refresh_async(**kwargs)
-    except Exception:
-        log.exception("refresh pass failed")
+    except Exception as exc:  # noqa: BLE001 - the loop must outlive any failure
+        trace = "".join(traceback.format_exception(exc))
+        secrets = knowledge_base.config.secrets()
+        log.error("refresh pass failed\n%s", redact(trace, secrets))
     else:
         if rebuilt:
             log.info(

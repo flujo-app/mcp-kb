@@ -48,6 +48,14 @@ NAME = r"^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$"
 USERINFO = re.compile(r"(?<=://)[^/\s'\"]+@")
 
 
+def redact(text: str, secrets: list[str]) -> str:
+    """``text`` with URL userinfo and every value in ``secrets`` masked."""
+    text = USERINFO.sub("***@", text)
+    for secret in sorted(set(secrets), key=len, reverse=True):
+        text = text.replace(secret, "***")
+    return text
+
+
 class ConfigError(ValueError):
     """The config file is unreadable or invalid."""
 
@@ -291,6 +299,26 @@ Source = Annotated[
 
 class Config(Strict):
     """The whole config file: the libraries declared and the sources that join them."""
+
+    def secrets(self) -> list[str]:
+        """Every credential value the config resolves, for redacting logs.
+
+        A reference whose variable is unset contributes nothing: there is no
+        value it could leak.
+        """
+        found: list[str] = []
+        for source in self.sources:
+            auth = getattr(source, "auth", None)
+            if auth is None:
+                continue
+            for ref in (auth.username, auth.password):
+                if not isinstance(ref, EnvRef):
+                    continue
+                try:
+                    found.append(ref.resolve().get_secret_value())
+                except ConfigError:
+                    continue
+        return [value for value in found if value]
 
     libraries: list[Library] = Field(default_factory=list)
     sources: list[Source] = Field(default_factory=list)

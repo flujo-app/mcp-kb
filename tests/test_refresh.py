@@ -640,14 +640,26 @@ async def test_reindex_failure_body_never_carries_the_exception_text(
     skills_dir, cache, monkeypatch, caplog
 ):
     """`/reindex` is unauthenticated, so `str(exc)` in its body can hand any
-    caller an internal path or a remote URL. The response is a fixed message;
-    the real exception, with its traceback, goes to the log instead.
+    caller an internal path or a remote URL. The response is a fixed message.
+
+    The log keeps the traceback, because that is how a failure gets fixed, but
+    never a credential: every configured `{env:}` secret and any URL userinfo are
+    redacted before the line is written.
     """
-    knowledge_base = KnowledgeBase(make_config(skills_dir), cache)
-    secret = "/var/secrets/deploy-key or https://user:token@example.com/repo.git"
+    monkeypatch.setenv("KB_TEST_TOKEN", "s3cr3t-deploy-token")
+    config = make_config(skills_dir).model_dump(mode="json", exclude_none=True)
+    config["sources"].append(
+        {
+            "name": "private",
+            "url": "git+file:///nonexistent/repo.git",
+            "auth": {"username": "deploy", "password": {"env": "KB_TEST_TOKEN"}},
+        }
+    )
+    knowledge_base = KnowledgeBase(Config.model_validate(config), cache)
+    leak = "https://deploy:s3cr3t-deploy-token@example.com/repo.git"
 
     async def boom(**kwargs):
-        raise RuntimeError(f"cloning {secret} failed")
+        raise RuntimeError(f"cloning {leak} with s3cr3t-deploy-token failed")
 
     monkeypatch.setattr(knowledge_base, "refresh_async", boom)
     transport = httpx.ASGITransport(app=knowledge_base.mcp.http_app())
@@ -660,9 +672,11 @@ async def test_reindex_failure_body_never_carries_the_exception_text(
     assert response.status_code == 500
     body = response.json()
     assert body["status"] == "error"
-    assert secret not in response.text
-    assert secret in caplog.text
+    assert "s3cr3t" not in response.text
+    assert "s3cr3t-deploy-token" not in caplog.text
+    assert "RuntimeError" in caplog.text
     assert "Traceback" in caplog.text
+    assert "***@example.com" in caplog.text
 
 
 @pytest.mark.unit
@@ -728,3 +742,31 @@ async def test_a_sessionless_connection_is_told_nothing_and_still_works(
         assert len(await client.list_resources()) > 0
 
     assert _changed(seen) == []
+
+
+@pytest.mark.unit
+async def test_a_failed_background_pass_logs_no_credential(
+    skills_dir, cache, monkeypatch, caplog
+):
+    """The loop's failure log redacts the same way `/reindex`'s does."""
+    monkeypatch.setenv("KB_TEST_TOKEN", "s3cr3t-loop-token")
+    config = make_config(skills_dir).model_dump(mode="json", exclude_none=True)
+    config["sources"].append(
+        {
+            "name": "private",
+            "url": "git+file:///nonexistent/repo.git",
+            "auth": {"username": "deploy", "password": {"env": "KB_TEST_TOKEN"}},
+        }
+    )
+    knowledge_base = KnowledgeBase(Config.model_validate(config), cache)
+
+    async def boom(**kwargs):
+        raise RuntimeError("pulling https://deploy:s3cr3t-loop-token@example.com")
+
+    monkeypatch.setattr(knowledge_base, "refresh_async", boom)
+    with caplog.at_level(logging.ERROR):
+        await refresh._pass(knowledge_base)
+
+    assert "refresh pass failed" in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "s3cr3t-loop-token" not in caplog.text

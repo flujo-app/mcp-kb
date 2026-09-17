@@ -528,3 +528,39 @@ async def test_a_library_scope_reaches_every_source_of_the_library(url):
 
 async def test_a_bare_folder_name_selects_nothing(url):
     assert await _rows(url, library="grafana-lgtm") == []
+
+
+async def test_a_library_file_named_manifest_is_not_labelled_json(tmp_path):
+    """Only a skill's `_manifest` is JSON; a library file of that name is not."""
+    from fastmcp import Client
+
+    from kubed.mcp_kb import KnowledgeBase
+    from kubed.mcp_kb.config import Config
+
+    root = tmp_path / "src"
+    (root / "skills" / "a").mkdir(parents=True)
+    (root / "skills" / "a" / "SKILL.md").write_text(
+        "---\nname: a\ndescription: a\n---\nbody\n"
+    )
+    (root / "notes").mkdir()
+    (root / "notes" / "_manifest").write_text("plain words\n")
+    config = Config.model_validate(
+        {
+            "sources": [
+                {
+                    "name": "lib",
+                    "url": f"file://{root}",
+                    "include": {"files": ["notes/**/*"]},
+                }
+            ]
+        }
+    )
+    kb = KnowledgeBase(config, tmp_path / "cache")
+
+    async with Client(kb.mcp) as client:
+        library_file = (await client.read_resource("skill://lib/notes/_manifest"))[0]
+        manifest = (await client.read_resource("skill://lib/a/_manifest"))[0]
+
+    assert library_file.text == "plain words\n"
+    assert library_file.mime_type == "text/markdown"
+    assert manifest.mime_type == "application/json"
