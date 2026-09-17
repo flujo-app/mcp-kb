@@ -3,7 +3,7 @@
 The tree is shaped like the grafana library upstream: skills two levels down
 under folders (``skills/<folder>/<skill>/SKILL.md``), a skill directly in the
 skill root, a skill nested deeper still, two skills sharing a name in different
-folders, a library-level file, and a prompt. A second source feeds the same
+folders, a library-level file, and a prompt. A second plugin feeds the same
 library, and a second library reuses a folder and a skill name, which are the
 shapes scope and the listing have to keep apart.
 
@@ -77,25 +77,33 @@ def _build(base):
 
     return Config.model_validate(
         {
-            "sources": [
+            "plugins": [
                 {
                     "name": "grafana",
-                    "url": f"file://{grafana}",
-                    "include": {"files": ["shared/**"]},
+                    "source": f"file://{grafana}",
+                    "tags": ["core"],
+                    "files": ["shared/**"],
                 },
                 {
                     "name": "grafana-extra",
-                    "library": "grafana",
-                    "url": f"file://{extra}",
-                    "include": {"files": ["extra/**"]},
+                    "source": f"file://{extra}",
+                    "tags": ["extra"],
+                    "files": ["extra/**"],
                 },
-                {"name": "other", "url": f"file://{other}"},
+                {"name": "other", "source": f"file://{other}"},
                 {
                     "name": "handbook",
-                    "url": f"file://{handbook}",
-                    "include": {"skills": [], "prompts": [], "files": ["guide/**"]},
+                    "source": f"file://{handbook}",
+                    "skills": [],
+                    "prompts": [],
+                    "files": ["guide/**"],
                 },
-            ]
+            ],
+            "libraries": [
+                {"name": "grafana", "plugins": ["grafana", "grafana-extra"]},
+                {"name": "other", "plugins": ["other"]},
+                {"name": "handbook", "plugins": ["handbook"]},
+            ],
         }
     )
 
@@ -120,24 +128,28 @@ def url(tmp_path_factory):
     thread.join(timeout=5)
 
 
-def _client(url, query="", library=None):
-    headers = {"X-Skill-Library": library} if library else {}
+def _client(url, query="", library=None, tags=None):
+    headers = {}
+    if library:
+        headers["X-Skill-Library"] = library
+    if tags:
+        headers["X-Skill-Tags"] = tags
     return Client(StreamableHttpTransport(url + query, headers=headers))
 
 
-async def _read(url, uri, library=None):
-    async with _client(url, library=library) as client:
+async def _read(url, uri, library=None, tags=None):
+    async with _client(url, library=library, tags=tags) as client:
         return (await client.read_resource(uri))[0].text
 
 
-async def _read_error(url, uri, library=None):
-    async with _client(url, library=library) as client:
+async def _read_error(url, uri, library=None, tags=None):
+    async with _client(url, library=library, tags=tags) as client:
         with pytest.raises(Exception) as caught:
             await client.read_resource(uri)
     return str(caught.value)
 
 
-async def _raw(url, uri, library=None):
+async def _raw(url, uri, library=None, tags=None):
     """``resources/read`` with ``uri`` sent exactly as given.
 
     ``Client.read_resource`` passes the URI through pydantic's ``AnyUrl``,
@@ -146,7 +158,7 @@ async def _raw(url, uri, library=None):
     underneath takes a plain ``str`` and sends it as written, over the same
     HTTP connection.
     """
-    async with _client(url, library=library) as client:
+    async with _client(url, library=library, tags=tags) as client:
         try:
             result = await client.session.read_resource(uri)
         except Exception as exc:  # noqa: BLE001 - the error text is the result
@@ -154,17 +166,17 @@ async def _raw(url, uri, library=None):
     return result.contents[0].text
 
 
-async def _tool(url, uri, library=None):
+async def _tool(url, uri, library=None, tags=None):
     """The mirror's answer, as text, whether it is a body or an error result."""
-    async with _client(url, library=library) as client:
+    async with _client(url, library=library, tags=tags) as client:
         result = await client.call_tool(
             "read_resource", {"uri": uri}, raise_on_error=False
         )
     return result.content[0].text
 
 
-async def _rows(url, query="", library=None):
-    async with _client(url, query, library) as client:
+async def _rows(url, query="", library=None, tags=None):
+    async with _client(url, query, library, tags) as client:
         return [
             (str(r.uri), r.name, r.description, r.mime_type)
             for r in await client.list_resources()
@@ -211,7 +223,7 @@ async def test_two_skills_with_one_name_in_different_folders_are_both_served(url
     assert "Another loki." in other
 
 
-async def test_a_library_level_file_keeps_its_path_from_the_source_root(url):
+async def test_a_library_level_file_keeps_its_path_from_the_plugin_root(url):
     assert await _read(url, "skill://grafana/shared/style.md") == "house style\n"
     assert await _read(url, "skill://grafana/extra/notes.md") == "ops notes\n"
 
@@ -249,13 +261,11 @@ async def test_a_dot_segment_read_out_of_scope_reads_as_a_missing_one(url):
     sneak = "skill://grafana/grafana-k6/../grafana-lgtm/loki/SKILL.md"
     missing = "skill://grafana/grafana-k6/nope/SKILL.md"
     assert "Query logs." in await _raw(url, sneak)
-    pinned = "grafana/grafana-k6"
-    hidden = await _raw(url, sneak, library=pinned)
-    assert hidden == (await _raw(url, missing, library=pinned)).replace(missing, sneak)
-    hidden = await _tool(url, sneak, library=pinned)
-    assert hidden == (await _tool(url, missing, library=pinned)).replace(
-        missing, sneak
-    )
+    # `extra` admits grafana-extra alone, which has no loki.
+    hidden = await _raw(url, sneak, tags="extra")
+    assert hidden == (await _raw(url, missing, tags="extra")).replace(missing, sneak)
+    hidden = await _tool(url, sneak, tags="extra")
+    assert hidden == (await _tool(url, missing, tags="extra")).replace(missing, sneak)
 
 
 async def test_a_hidden_file_reached_through_dot_segments_is_still_refused(url):
@@ -311,15 +321,15 @@ async def test_a_library_file_cited_from_inside_a_skill_names_its_address(url):
 
 
 async def test_the_library_file_hint_respects_the_scope(url):
-    """Pinned to a folder whose sources do not ship the file, no hint."""
+    """Scoped to plugins that do not ship the file, no hint."""
     cited = "skill://grafana/grafana-ops/runbook/extra/notes.md"
     assert "skill://grafana/extra/notes.md" in await _read_error(url, cited)
-    pinned = await _read_error(url, cited, library="grafana/grafana-ops")
+    pinned = await _read_error(url, cited, tags="extra")
     assert "skill://grafana/extra/notes.md" in pinned
-    # loki is in this pin; the grafana-extra source that ships the file is not.
+    # loki is in this scope; the grafana-extra plugin that ships the file is not.
     from_loki = "skill://grafana/grafana-lgtm/loki/extra/notes.md"
     assert "skill://grafana/extra/notes.md" in await _read_error(url, from_loki)
-    hidden = await _read_error(url, from_loki, library=LGTM)
+    hidden = await _read_error(url, from_loki, tags="core")
     assert "skill://grafana/extra/notes.md" not in hidden
 
 
@@ -335,22 +345,22 @@ async def test_a_missing_address_names_no_file(url):
 
 
 OUT_OF_SCOPE = [
-    # (a directory unscoped, a missing address beside it, a pin that hides it)
-    ("skill://grafana/grafana-lgtm", "skill://grafana/nope", "grafana/grafana-k6"),
+    # (a directory unscoped, a missing address beside it, a scope that hides it)
+    ("skill://grafana/grafana-lgtm", "skill://grafana/nope", {"tags": "extra"}),
     (
         "skill://grafana/grafana-lgtm/loki",
         "skill://grafana/grafana-lgtm/nope",
-        "grafana/grafana-k6",
+        {"tags": "extra"},
     ),
-    ("skill://grafana/extra", "skill://grafana/nope", "grafana/grafana-lgtm"),
-    ("skill://grafana", "skill://nope", "other"),
-    ("skill://handbook", "skill://nope", "other"),
+    ("skill://grafana/extra", "skill://grafana/nope", {"tags": "core"}),
+    ("skill://grafana", "skill://nope", {"library": "other"}),
+    ("skill://handbook", "skill://nope", {"library": "other"}),
 ]
 
 
-@pytest.mark.parametrize(("uri", "missing", "library"), OUT_OF_SCOPE)
+@pytest.mark.parametrize(("uri", "missing", "scope"), OUT_OF_SCOPE)
 async def test_an_out_of_scope_directory_reads_as_a_missing_one(
-    url, uri, missing, library
+    url, uri, missing, scope
 ):
     """The hint must not confirm a directory the caller was not given.
 
@@ -361,12 +371,12 @@ async def test_an_out_of_scope_directory_reads_as_a_missing_one(
     unpinned = await _read_error(url, uri)
     assert unpinned != (await _read_error(url, missing)).replace(missing, uri)
 
-    hidden = await _read_error(url, uri, library=library)
-    absent = await _read_error(url, missing, library=library)
+    hidden = await _read_error(url, uri, **scope)
+    absent = await _read_error(url, missing, **scope)
     assert hidden == absent.replace(missing, uri)
 
-    hidden = await _tool(url, uri, library=library)
-    absent = await _tool(url, missing, library=library)
+    hidden = await _tool(url, uri, **scope)
+    absent = await _tool(url, missing, **scope)
     assert hidden == absent.replace(missing, uri)
 
 
@@ -547,29 +557,20 @@ async def test_the_full_listing_adds_every_skills_instructions(url):
 
 # -- scope --------------------------------------------------------------------------
 
-LGTM = "grafana/grafana-lgtm"
 
-
-async def test_a_folder_scope_lists_its_folder_and_its_sources_files(url):
-    """Not the library index: under this pin it would list this one folder."""
-    assert [row[0] for row in await _rows(url, library=LGTM)] == [
+async def test_a_tag_scope_lists_the_library_with_the_plugins_carrying_it(url):
+    """The listing is always the library level and its top folders: a tag
+    narrows which plugins count, so the folders and files are theirs alone."""
+    assert [row[0] for row in await _rows(url, tags="core")] == [
+        "skill://grafana/_index.md",
+        "skill://grafana/grafana-k6/_index.md",
         "skill://grafana/grafana-lgtm/_index.md",
+        "skill://grafana/grafana-plugins/_index.md",
         "skill://grafana/_files.md",
     ]
-    files = await _read(url, "skill://grafana/_files.md", library=LGTM)
+    files = await _read(url, "skill://grafana/_files.md", tags="core")
     assert "skill://grafana/shared/style.md" in files
     assert "extra/notes.md" not in files
-
-
-async def test_a_scope_on_a_folder_of_folders_lists_it_and_the_folders_in_it(url):
-    """The listing is the top of the index tree wherever the pin puts that top."""
-    rows = await _rows(url, library="grafana/grafana-plugins")
-    assert [row[0] for row in rows] == [
-        "skill://grafana/grafana-plugins/_index.md",
-        "skill://grafana/grafana-plugins/app/_index.md",
-        "skill://grafana/_files.md",
-    ]
-    assert rows[1][2] == "1 skill in the grafana-plugins/app folder of the grafana library."
 
 
 async def test_every_listed_folder_is_one_an_index_names(url):
@@ -582,37 +583,36 @@ async def test_every_listed_folder_is_one_an_index_names(url):
     } == named
 
 
-async def test_a_folder_scope_cannot_read_another_sources_library_file(url):
-    """`extra/notes.md` belongs to grafana-extra, which has nothing in grafana-lgtm."""
-    assert await _read(url, "skill://grafana/shared/style.md", library=LGTM)
-    error = await _read_error(url, "skill://grafana/extra/notes.md", library=LGTM)
+async def test_a_tag_scope_cannot_read_another_plugins_library_file(url):
+    """`extra/notes.md` belongs to grafana-extra, which does not carry `core`."""
+    assert await _read(url, "skill://grafana/shared/style.md", tags="core")
+    error = await _read_error(url, "skill://grafana/extra/notes.md", tags="core")
     assert "not found" in error
     assert "ops notes" not in await _tool(
-        url, "skill://grafana/extra/notes.md", library=LGTM
+        url, "skill://grafana/extra/notes.md", tags="core"
     )
 
 
-async def test_a_folder_scope_sees_only_the_prompts_of_its_sources(url):
-    async with _client(url, library=LGTM) as client:
-        folder = sorted(p.name for p in await client.list_prompts())
+async def test_a_tag_scope_sees_only_the_prompts_of_the_plugins_carrying_it(url):
+    async with _client(url, tags="core") as client:
+        tagged = sorted(p.name for p in await client.list_prompts())
     async with _client(url, library="grafana") as client:
         library = sorted(p.name for p in await client.list_prompts())
-    assert folder == ["grafana_debug"]
+    assert tagged == ["grafana_debug"]
     assert library == ["grafana_debug", "grafana_ops"]
 
 
-async def test_a_library_scope_reaches_every_source_of_the_library(url):
+async def test_a_library_scope_reaches_every_plugin_of_the_library(url):
     assert await _read(url, "skill://grafana/extra/notes.md", library="grafana")
     assert await _read(url, "skill://grafana/shared/style.md", library="grafana")
 
 
-async def test_a_typo_deep_in_a_folder_path_names_the_folders_at_that_depth(url):
-    """Not the top-level folders: the ones where the path stopped matching."""
+async def test_a_library_slash_folder_is_refused_as_not_a_library(url):
+    """A scope names a library and nothing below it; the refusal says how to
+    narrow instead."""
     with pytest.raises(Exception) as caught:
-        await _rows(url, library="grafana/grafana-plugins/nope")
-    assert str(caught.value).endswith(
-        "The folders in grafana/grafana-plugins are: grafana-plugins/app."
-    )
+        await _rows(url, library="grafana/grafana-plugins")
+    assert "use ?categories= or ?tags= to narrow inside it" in str(caught.value)
 
 
 async def test_a_bare_folder_name_is_refused_as_no_such_library(url):
@@ -637,13 +637,10 @@ async def test_a_library_file_named_manifest_is_not_labelled_json(tmp_path):
     (root / "notes" / "_manifest").write_text("plain words\n")
     config = Config.model_validate(
         {
-            "sources": [
-                {
-                    "name": "lib",
-                    "url": f"file://{root}",
-                    "include": {"files": ["notes/**/*"]},
-                }
-            ]
+            "plugins": [
+                {"name": "lib", "source": f"file://{root}", "files": ["notes/**/*"]}
+            ],
+            "libraries": [{"name": "lib", "plugins": ["lib"]}],
         }
     )
     kb = KnowledgeBase(config, tmp_path / "cache")
@@ -682,7 +679,10 @@ async def test_a_skill_nested_inside_a_skill_is_served_as_the_spec_says(tmp_path
     )
     (root / "skills" / "x" / "y" / "refs" / "a.md").write_text("shared bytes\n")
     config = Config.model_validate(
-        {"sources": [{"name": "lib", "url": f"file://{root}"}]}
+        {
+            "plugins": [{"name": "lib", "source": f"file://{root}"}],
+            "libraries": [{"name": "lib", "plugins": ["lib"]}],
+        }
     )
     kb = KnowledgeBase(config, tmp_path / "cache")
 
@@ -699,4 +699,4 @@ async def test_a_skill_nested_inside_a_skill_is_served_as_the_spec_says(tmp_path
     assert "inner body" in inner
     assert shared == "shared bytes\n"
     assert {"y/SKILL.md", "y/refs/a.md"} <= {f["path"] for f in json.loads(manifest)["files"]}
-    assert "skipped" not in kb.snapshot.status["lib"]
+    assert "skipped" not in kb.snapshot.status["plugins"]["lib"]

@@ -65,15 +65,15 @@ SEPARATOR = "\n\n"
 FOOTER_LINKS = "[Home](Home) · [Installing](Installing) · [Deployment](Deployment)"
 
 # The config models, in the order a reader meets them: the file itself, then
-# what it declares, then the three source kinds, then the two small things a
-# source points at. `Config` is the schema's root; the rest are its `$defs`.
+# its three lists, then the selector a library may carry, then the two small
+# things a source points at. `Config` is the schema's root; the rest are its
+# `$defs`.
 MODELS = [
     "Config",
-    "Library",
-    "Include",
-    "FileSource",
-    "GitSource",
-    "WebdavSource",
+    "SourceConfig",
+    "PluginConfig",
+    "LibraryConfig",
+    "Selector",
     "BasicAuth",
     "EnvRef",
 ]
@@ -269,8 +269,8 @@ def configuration_page() -> str:
         raise SystemExit(f"add these to MODELS in {__file__}: {', '.join(missing)}")
 
     schemes = table(
-        [[f"`{scheme}://`", f"[{kind}]({anchor(kind)})"] for scheme, kind in _kinds()],
-        ["URL scheme", "Source kind"],
+        [[f"`{scheme}://`", kind] for scheme, kind in _kinds()],
+        ["URL scheme", "Backend"],
     )
 
     body = SEPARATOR.join(sections)
@@ -291,10 +291,10 @@ validates as you type.
 
 For what each source kind does with these fields, see [Sources](Sources).
 
-## URL scheme → source kind
+## URL scheme → backend
 
-The `url` decides which model a source is validated against. There is no
-`kind:` field to set and no way to override it.
+A source's `url` decides which backend reads it. There is no `kind:` field to
+set and no way to override it.
 
 {schemes}
 
@@ -307,16 +307,15 @@ The `url` decides which model a source is validated against. There is no
 
 
 def _kinds() -> list[tuple[str, str]]:
-    """(scheme, model name) per `config.SCHEMES`, in the order it declares them."""
-    models = {"file": "FileSource", "git": "GitSource", "webdav": "WebdavSource"}
-    return [(scheme, models[tag]) for scheme, tag in config_module.SCHEMES.items()]
+    """(scheme, backend) per `config.BACKENDS`, in the order it declares them."""
+    return list(config_module.BACKENDS.items())
 
 
 # -- Tools ---------------------------------------------------------------------
 
 
 def _live_tools() -> list:
-    """The tool list of a real server, built over a throwaway `file://` source.
+    """The tool list of a real server, built over a throwaway `file://` plugin.
 
     A tool's schema is assembled by FastMCP from the registered functions and
     the prompt transform, so the only way to describe the four accurately is to
@@ -332,7 +331,10 @@ def _live_tools() -> list:
             "---\nname: example\ndescription: An example skill.\n---\n\nBody.\n"
         )
         config = Config.model_validate(
-            {"sources": [{"name": "example", "url": f"file://{tmp / 'library'}"}]}
+            {
+                "plugins": [{"name": "example", "source": f"file://{tmp / 'library'}"}],
+                "libraries": [{"name": "example", "plugins": ["example"]}],
+            }
         )
         server = KnowledgeBase(config, tmp / "cache")
         found = asyncio.run(server.mcp.list_tools(run_middleware=False))

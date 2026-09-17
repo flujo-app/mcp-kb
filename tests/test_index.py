@@ -9,16 +9,18 @@ import pytest
 
 from kubed.mcp_kb.catalogue.index import (
     INDEX_VERSION,
+    FetchRecord,
     Index,
+    PluginRecord,
     PromptRow,
     SkillRow,
-    SourceRecord,
     config_hash,
     now,
 )
-from kubed.mcp_kb.catalogue.prompts import FilePrompt
 from kubed.mcp_kb.catalogue.skills import Skill
 from kubed.mcp_kb.config import load_config
+
+FETCH = "file:///skills/flatsource"
 
 
 def _skill(**overrides):
@@ -28,41 +30,43 @@ def _skill(**overrides):
         "folder": "",
         "description": "First skill.",
         "path": Path("/skills/flatsource/alpha"),
-        "source": "flatsource",
-        "tags": frozenset({"flatsource", "skill", "b", "a"}),
+        "plugin": "flatsource",
+        "root": Path("/skills/flatsource"),
+        "category": "ops",
+        "tags": frozenset({"b", "a"}),
     }
     fields.update(overrides)
     return Skill(**fields)
 
 
-def _source_record(**overrides):
+def _fetch_record(**overrides):
     fields = {
-        "name": "flatsource",
+        "key": FETCH,
         "status": "ok",
-        "library": "flatsource",
         "root": "/skills/flatsource",
         "fingerprint": {"mtime": 123.0},
         "built": now(),
         "error": None,
+    }
+    fields.update(overrides)
+    return FetchRecord(**fields)
+
+
+def _plugin_record(**overrides):
+    fields = {
+        "id": "flatsource",
+        "fetch": FETCH,
+        "root": "/skills/flatsource",
+        "status": "ok",
+        "error": None,
+        "built": now(),
         "skills": (SkillRow.from_skill(_skill()),),
-        "prompts": (
-            PromptRow.of(
-                Path("/skills/flatsource/debug.md"),
-                FilePrompt(
-                    path=Path("/skills/flatsource/debug.md"),
-                    name="flatsource_debug",
-                    library="flatsource",
-                    source="flatsource",
-                    template="Investigate.",
-                    tags={"flatsource", "prompt", "b", "a"},
-                ),
-            ),
-        ),
+        "prompts": (PromptRow(path="/skills/flatsource/debug.md", dialect="claude"),),
         "files": ("shared/logo.png",),
         "skill_dirs": ("/skills/flatsource/alpha",),
     }
     fields.update(overrides)
-    return SourceRecord(**fields)
+    return PluginRecord(**fields)
 
 
 def _index(**overrides):
@@ -70,7 +74,8 @@ def _index(**overrides):
         "version": INDEX_VERSION,
         "built": now(),
         "config_hash": "deadbeef",
-        "sources": {"flatsource": _source_record()},
+        "fetches": {FETCH: _fetch_record()},
+        "plugins": {"flatsource": _plugin_record()},
     }
     fields.update(overrides)
     return Index(**fields)
@@ -95,15 +100,16 @@ def test_a_missing_or_corrupt_index_reads_as_none(tmp_path):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("version", [INDEX_VERSION + 1, 3, 2, 1])
+@pytest.mark.parametrize("version", [INDEX_VERSION + 1, 4, 3, 2, 1])
 def test_a_different_version_reads_as_none(tmp_path, version):
     """Older as well as newer, by literal and not only by offset.
 
     An index written by an earlier release is the one a real upgrade meets, and
     the literals are the shapes before this one (1 on main, 2 part-way through
-    the address-space work, 3 before a record carried `skipped`): lowering
-    `INDEX_VERSION` back to any of them must fail
-    here, which an offset from the current value alone never would.
+    the address-space work, 3 before a record carried `skipped`, 4 the
+    per-source shape before plugins): lowering `INDEX_VERSION` back to any of
+    them must fail here, which an offset from the current value alone never
+    would.
     """
     path = tmp_path / "index.json"
     _index(version=version).write(path)
@@ -111,19 +117,55 @@ def test_a_different_version_reads_as_none(tmp_path, version):
 
 
 @pytest.mark.unit
-def test_a_wrong_shaped_sources_field_reads_as_none(tmp_path):
+def test_a_v4_index_on_disk_is_discarded_whole(tmp_path):
+    """The shape a running deployment upgrades from: one `sources` mapping.
+
+    Not a version literal alone -- the file as v4 actually wrote it, so a
+    reader that grew lenient about the mapping names would still be caught.
+    """
     path = tmp_path / "index.json"
     path.write_text(
         json.dumps(
             {
-                "version": INDEX_VERSION,
+                "version": 4,
                 "built": now(),
                 "config_hash": "x",
-                "sources": [],
+                "sources": {
+                    "flatsource": {
+                        "name": "flatsource",
+                        "status": "ok",
+                        "library": "flatsource",
+                        "root": "/skills/flatsource",
+                        "fingerprint": {},
+                        "built": now(),
+                        "error": None,
+                        "skills": [],
+                        "prompts": [],
+                        "files": [],
+                        "skill_dirs": [],
+                        "skipped": [],
+                    }
+                },
             }
         ),
         encoding="utf-8",
     )
+    assert Index.read(path) is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("field", ["fetches", "plugins"])
+def test_a_wrong_shaped_mapping_reads_as_none(tmp_path, field):
+    path = tmp_path / "index.json"
+    raw = {
+        "version": INDEX_VERSION,
+        "built": now(),
+        "config_hash": "x",
+        "fetches": {},
+        "plugins": {},
+    }
+    raw[field] = []
+    path.write_text(json.dumps(raw), encoding="utf-8")
     assert Index.read(path) is None
 
 
@@ -136,7 +178,7 @@ def test_a_malformed_skipped_row_reads_as_none(tmp_path, row):
     path = tmp_path / "index.json"
     _index().write(path)
     raw = json.loads(path.read_text(encoding="utf-8"))
-    raw["sources"]["flatsource"]["skipped"] = [row]
+    raw["plugins"]["flatsource"]["skipped"] = [row]
     path.write_text(json.dumps(raw), encoding="utf-8")
     assert Index.read(path) is None
 
@@ -190,14 +232,14 @@ def test_two_writers_in_the_same_directory_do_not_share_a_temp_name(
 def test_config_hash_ignores_key_order_and_changes_with_content(tmp_path):
     forward = tmp_path / "forward.yaml"
     forward.write_text(
-        "libraries:\n- name: lib\n  tags: [x, y]\n"
-        "sources:\n- name: lib\n  url: file:///skills/lib\n"
+        "plugins:\n- name: lib\n  source: file:///skills/lib\n  tags: [x, y]\n"
+        "libraries:\n- name: lib\n  plugins: [lib]\n"
     )
-    # Same content, top-level keys and per-source fields in the opposite order.
+    # Same content, top-level keys and per-plugin fields in the opposite order.
     reordered = tmp_path / "reordered.yaml"
     reordered.write_text(
-        "sources:\n- url: file:///skills/lib\n  name: lib\n"
-        "libraries:\n- tags: [x, y]\n  name: lib\n"
+        "libraries:\n- plugins: [lib]\n  name: lib\n"
+        "plugins:\n- tags: [x, y]\n  source: file:///skills/lib\n  name: lib\n"
     )
     a = load_config(forward)
     b = load_config(reordered)
@@ -205,8 +247,8 @@ def test_config_hash_ignores_key_order_and_changes_with_content(tmp_path):
 
     changed = tmp_path / "changed.yaml"
     changed.write_text(
-        "libraries:\n- name: lib\n  tags: [x, y, z]\n"
-        "sources:\n- name: lib\n  url: file:///skills/lib\n"
+        "plugins:\n- name: lib\n  source: file:///skills/lib\n  tags: [x, y, z]\n"
+        "libraries:\n- name: lib\n  plugins: [lib]\n"
     )
     c = load_config(changed)
     assert config_hash(a) != config_hash(c)
@@ -214,5 +256,20 @@ def test_config_hash_ignores_key_order_and_changes_with_content(tmp_path):
 
 @pytest.mark.unit
 def test_a_skill_row_round_trips_to_a_skill(tmp_path):
+    """The row carries the skill's own fields; the library and the plugin's
+    labels are put back on by whoever assigns the plugin to a library."""
     skill = _skill()
-    assert SkillRow.from_skill(skill).to_skill() == skill
+    row = SkillRow.from_skill(skill)
+    assert not hasattr(row, "library")
+    back = row.to_skill(
+        library=skill.library,
+        plugin=skill.plugin,
+        root=skill.root,
+        category=skill.category,
+        tags=skill.tags,
+    )
+    assert back == skill
+    twice = row.to_skill(
+        library="other", plugin=skill.plugin, root=skill.root, category=None, tags=frozenset()
+    )
+    assert twice.address == "other/alpha"

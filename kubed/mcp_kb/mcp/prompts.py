@@ -3,7 +3,7 @@
 A skill is read by the model when it decides to. A prompt is picked by a person
 -- Claude Code lists them as slash commands -- who fills in a few arguments
 before the model sees anything. Different primitive, so a different module,
-scoped by the same library and ``X-Skill-Library`` rules as skills.
+scoped by the same library, category and tag rules as skills.
 
 The parsing -- frontmatter, placeholders, the loader -- lives in
 ``catalogue/prompts.py`` and has no FastMCP in it at all: ``catalogue/`` is the
@@ -66,8 +66,11 @@ class MCPFilePrompt(Prompt):
 def _adapt(file: FilePrompt) -> MCPFilePrompt:
     return MCPFilePrompt(
         name=file.name,
+        title=file.title,
         description=file.description,
-        tags=set(file.tags),
+        # The plugin's labels plus the library, so FastMCP's own tag filters
+        # can tell one library's prompts from another's.
+        tags={file.library, *file.tags},
         arguments=[
             PromptArgument(name=a.name, description=a.description, required=a.required)
             for a in file.arguments
@@ -83,12 +86,12 @@ class PromptProvider(Provider):
     name up in that same listing, so a prompt outside this client's scope is
     unknown to ``prompts/get`` too, not merely unlisted.
 
-    Takes one getter for the whole ``Snapshot`` rather than one per field. A
-    refresh swaps the server's snapshot with a single assignment; reading the
-    prompts and the index through two separate getters could straddle that
-    swap and mix generations (prompts from N, index from N+1) -- the one thing
-    every other reader in this codebase (``resources.py``, ``routes.py``)
-    already avoids by taking one reference and working off it.
+    Takes one getter for the whole ``Snapshot`` rather than for its prompts. A
+    refresh swaps the server's snapshot with a single assignment; a reader
+    that took two things off it through two getters could straddle that swap
+    and mix generations -- the one thing every other reader in this codebase
+    (``resources.py``, ``routes.py``) avoids by taking one reference and
+    working off it, and the shape this one keeps for the same reason.
     """
 
     def __init__(self, snapshot: Callable[[], Snapshot]):
@@ -96,18 +99,8 @@ class PromptProvider(Provider):
         self._snapshot = snapshot
 
     def visible(self, scope: Scope = EVERYTHING) -> list[FilePrompt]:
-        snapshot = self._snapshot()
-        prompts = list(snapshot.prompts)
-        if not scope:
-            return prompts
-        sources = snapshot.index.sources(scope)
-        return [
-            p
-            for p in prompts
-            if (not scope.library or p.library == scope.library_name)
-            and (sources is None or p.source in sources)
-            and scope.admits_tags(p.tags)
-        ]
+        prompts = self._snapshot().prompts
+        return [p for p in prompts if scope.admits(p.library, p.category, p.tags)]
 
     async def _list_prompts(self) -> Sequence[Prompt]:
         return [_adapt(p) for p in self.visible(requested_scope())]

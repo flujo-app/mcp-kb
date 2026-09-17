@@ -8,7 +8,7 @@ from fastmcp import Client
 
 from kubed.mcp_kb import KnowledgeBase
 from kubed.mcp_kb.config import Config
-from tests.conftest import make_config
+from tests.conftest import key_of, make_config
 
 
 async def call(client, name, **args):
@@ -82,22 +82,26 @@ async def test_server_scoped_to_libraries_hides_the_rest(skills_dir):
 
 @pytest.mark.unit
 async def test_empty_config_still_serves(tmp_path):
-    """No sources configured must not crash the server -- it just serves nothing."""
-    server = KnowledgeBase(Config(sources=[]), tmp_path / "cache")
+    """No plugins configured must not crash the server -- it just serves nothing."""
+    server = KnowledgeBase(Config(), tmp_path / "cache")
     async with Client(server.mcp) as client:
         assert await client.list_resources() == []
 
 
 @pytest.mark.unit
-async def test_a_failed_source_does_not_take_the_others_down(skills_dir):
-    """One bad source must not stop the rest of the catalogue from loading."""
-    raw = {
-        "sources": [s.model_dump(mode="json") for s in make_config(skills_dir).sources]
-    }
-    raw["sources"].append({"name": "gone", "url": "file:///no/such/dir"})
-    server = KnowledgeBase(Config.model_validate(raw), skills_dir / "_cache")
-    assert server.status["gone"]["status"] == "failed"
-    assert server.status["flatsource"]["status"] == "ok"
+async def test_a_failed_fetch_does_not_take_the_others_down(skills_dir):
+    """One bad fetch must not stop the rest of the catalogue from loading, and
+    every plugin reading it carries the fetch's error."""
+    raw = make_config(skills_dir).model_dump(mode="json", by_alias=True, exclude_none=True)
+    raw["plugins"].append({"name": "gone", "source": "file:///no/such/dir"})
+    raw["libraries"].append({"name": "gone", "plugins": ["gone"]})
+    config = Config.model_validate(raw)
+    server = KnowledgeBase(config, skills_dir / "_cache")
+    assert server.status["fetches"]["file:///no/such/dir"]["status"] == "failed"
+    assert server.status["plugins"]["gone"]["status"] == "failed"
+    assert "not a directory" in server.status["plugins"]["gone"]["error"]
+    assert server.status["fetches"][key_of(config, "flatsource")]["status"] == "ok"
+    assert server.status["plugins"]["flatsource"]["status"] == "ok"
     async with Client(server.mcp) as client:
         uris = [str(r.uri) for r in await client.list_resources()]
     assert "skill://flatsource/_index.md" in uris
@@ -208,14 +212,18 @@ async def test_a_configmap_mount_is_served_under_the_names_it_was_mounted_as(tmp
     (root / "..data").symlink_to(stamp)
     (root / "shared").symlink_to(root / "..data" / "shared")
     (root / "skills").symlink_to(root / "..data" / "skills")
-    config = Config(
-        sources=[
-            {
-                "name": "library",
-                "url": f"file://{root}",
-                "include": {"prompts": [], "files": ["shared/**/*"]},
-            }
-        ]
+    config = Config.model_validate(
+        {
+            "plugins": [
+                {
+                    "name": "library",
+                    "source": f"file://{root}",
+                    "prompts": [],
+                    "files": ["shared/**/*"],
+                }
+            ],
+            "libraries": [{"name": "library", "plugins": ["library"]}],
+        }
     )
     knowledge_base = KnowledgeBase(config, tmp_path / "cache")
 
@@ -241,7 +249,10 @@ async def test_a_hidden_file_in_a_skill_is_not_readable_by_guessing(tmp_path):
     (skill / ".env").write_text("SECRET=hunter2\n")
     (skill / "notes.md").write_text("visible\n")
     config = Config.model_validate(
-        {"sources": [{"name": "lib", "url": f"file://{tmp_path / 'src'}"}]}
+        {
+            "plugins": [{"name": "lib", "source": f"file://{tmp_path / 'src'}"}],
+            "libraries": [{"name": "lib", "plugins": ["lib"]}],
+        }
     )
     server = KnowledgeBase(config, tmp_path / "cache")
 

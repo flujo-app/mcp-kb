@@ -18,7 +18,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.utilities.skills import download_skill, get_skill_manifest, list_skills
 
 from kubed.mcp_kb import KnowledgeBase
-from tests.conftest import make_config
+from tests.conftest import fetch_key, make_config
 
 
 def _free_port() -> int:
@@ -209,23 +209,26 @@ async def test_the_pin_still_allows_its_own_library(server_url):
 
 
 @pytest.mark.integration
-async def test_a_folder_pin_cannot_widen_to_the_whole_library(server_url):
-    """Pinning to one folder must not hand over its siblings."""
-    pinned = {"X-Skill-Library": "deepsource/plugin-a"}
-    async with _client(server_url, pinned) as client:
+async def test_a_tag_header_narrows_by_the_plugins_labels(server_url):
+    """`X-Skill-Tags` admits the plugins carrying the tag, and nothing else."""
+    tagged = {"X-Skill-Tags": "deep"}
+    uris = await resource_uris(server_url, headers=tagged)
+    assert "skill://deepsource/_index.md" in uris
+    assert not any("flatsource" in u for u in uris)
+    async with _client(server_url, tagged) as client:
         gamma = "skill://deepsource/plugin-a/gamma/SKILL.md"
         assert "Third skill." in (await client.read_resource(gamma))[0].text
         with pytest.raises(Exception, match=r"nknown|not found"):
-            await client.read_resource("skill://deepsource/plugin-b/delta/SKILL.md")
+            await client.read_resource("skill://flatsource/alpha/SKILL.md")
 
 
 @pytest.mark.integration
 async def test_the_listing_does_not_leak_other_library_names(server_url):
     """A pinned client must not learn the other libraries exist from a listing."""
-    pinned = {"X-Skill-Library": "deepsource/plugin-a"}
+    pinned = {"X-Skill-Library": "deepsource"}
     uris = await resource_uris(server_url, headers=pinned)
     assert uris
-    assert not any("plugin-b" in u or "flatsource" in u for u in uris)
+    assert not any("flatsource" in u for u in uris)
 
 
 # -- prompts ------------------------------------------------------------------
@@ -247,14 +250,14 @@ async def test_the_pin_scopes_prompts_too(server_url):
 
 
 @pytest.mark.integration
-async def test_a_folder_pin_sees_only_the_prompts_of_its_sources(server_url):
-    """A prompt has no folder, so a folder pin admits it by source.
+async def test_a_tag_pin_sees_only_the_prompts_of_the_plugins_carrying_it(server_url):
+    """A prompt carries its plugin's labels, and the prompts plugin carries none.
 
-    `deepsource_check` comes from the `deepsource-prompts` source, which has no
-    skills and so none under `plugin-a`; the whole library still reaches it.
+    `deepsource_check` comes from the `deepsource-prompts` plugin, which has no
+    tags; the whole library still reaches it.
     """
-    pinned = {"X-Skill-Library": "deepsource/plugin-a"}
-    assert await prompt_names(server_url, pinned) == []
+    tagged = {"X-Skill-Tags": "deep"}
+    assert await prompt_names(server_url, tagged) == []
     whole = {"X-Skill-Library": "deepsource"}
     assert await prompt_names(server_url, whole) == ["deepsource_check"]
 
@@ -293,7 +296,7 @@ async def test_the_default_listing_gives_sync_helpers_nothing(server_url):
 
 
 @pytest.mark.integration
-def test_health_reports_the_catalogue(server_url):
+def test_health_reports_the_catalogue(server_url, skills_dir_module):
     """/health is plain HTTP outside the MCP protocol, so it is fetched directly."""
     url = server_url.removesuffix("/mcp") + "/health"
     with urllib.request.urlopen(url) as response:
@@ -302,16 +305,22 @@ def test_health_reports_the_catalogue(server_url):
     assert sorted(body["libraries"]) == ["deepsource", "flatsource"]
     assert body["skills"] == 4
     assert body["prompts"] == 2
-    flatsource = body["sources"]["flatsource"]
     assert body["generation"] == 0
-    assert {
-        k: flatsource[k] for k in ("status", "library", "skills", "prompts", "files")
-    } == {
-        "status": "ok",
-        "library": "flatsource",
+    library = body["libraries"]["flatsource"]
+    assert {k: library[k] for k in ("plugins", "skills", "prompts", "files")} == {
+        "plugins": ["flatsource", "flatsource-prompts"],
         "skills": 2,
-        "prompts": 0,
+        "prompts": 1,
         "files": 0,
     }
-    assert flatsource["built"] and flatsource["fingerprint"]["files"] == 3
-    assert body["sources"]["deepsource-prompts"]["status"] == "ok"
+    plugin = body["plugins"]["flatsource"]
+    assert {k: plugin[k] for k in ("status", "libraries", "skills", "tags")} == {
+        "status": "ok",
+        "libraries": ["flatsource"],
+        "skills": 2,
+        "tags": ["flat"],
+    }
+    fetch = body["fetches"][fetch_key(skills_dir_module / "flatsource")]
+    assert fetch["status"] == "ok"
+    assert fetch["built"] and fetch["fingerprint"]["files"] == 3
+    assert body["plugins"]["deepsource-prompts"]["status"] == "ok"

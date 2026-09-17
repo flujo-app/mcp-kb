@@ -1,0 +1,266 @@
+"""Libraries assembled from marketplaces, named plugins and selectors.
+
+The catalogue's unit is the plugin, and a library is a saved query over
+plugins: a marketplace's entries, a list of names, a selector, or their union.
+These tests build real ``KnowledgeBase``s over local git repositories --
+marketplaces are published in repositories -- and read the result back
+through ``/health`` and a real MCP client.
+"""
+
+import json
+
+import httpx
+import pygit2
+import pytest
+from fastmcp import Client
+
+from kubed.mcp_kb import KnowledgeBase
+from kubed.mcp_kb.config import Config
+
+pytestmark = pytest.mark.unit
+
+SIGNATURE = pygit2.Signature("Test", "test@example.com", 1700000000, 0)
+
+
+def _write(root, rel, text):
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+def _skill(root, rel, name):
+    _write(root, f"{rel}/SKILL.md", f"---\nname: {name}\ndescription: {name}.\n---\n")
+
+
+def _commit(root, message="seed"):
+    """Commit everything under ``root``, initialising the repository if need be."""
+    try:
+        repo = pygit2.Repository(str(root))
+        parents = [repo.head.target]
+    except pygit2.GitError:
+        repo = pygit2.init_repository(str(root), bare=False, initial_head="main")
+        parents = []
+    repo.index.add_all()
+    repo.index.write()
+    repo.create_commit(
+        "refs/heads/main", SIGNATURE, SIGNATURE, message, repo.index.write_tree(), parents
+    )
+
+
+def _catalog(root, *entries):
+    _write(
+        root,
+        ".claude-plugin/marketplace.json",
+        json.dumps({"name": "market", "plugins": list(entries)}),
+    )
+
+
+@pytest.fixture
+def market(tmp_path):
+    """A repository publishing two plugins, each in its own folder with a category."""
+    root = tmp_path / "market"
+    _skill(root, "lgtm/skills/loki", "loki")
+    _skill(root, "k6/skills/load", "load")
+    _write(root, "k6/commands/run.md", "---\ndescription: Run.\n---\nRun $0.\n")
+    _catalog(
+        root,
+        {
+            "name": "lgtm",
+            "source": "./lgtm",
+            "category": "observability",
+            "tags": ["logs"],
+        },
+        {"name": "k6", "source": "./k6", "category": "testing", "keywords": ["load"]},
+        {"name": "cli", "source": {"source": "npm", "package": "x"}},
+    )
+    _commit(root)
+    return root
+
+
+def _config(tmp_path, **extra):
+    return Config.model_validate(
+        {
+            "sources": [{"name": "lab", "url": f"git+file://{tmp_path}"}],
+            **extra,
+        }
+    )
+
+
+async def _health(knowledge_base):
+    transport = httpx.ASGITransport(app=knowledge_base.mcp.http_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://kb") as http:
+        return (await http.get("/health")).json()
+
+
+async def _skills(knowledge_base):
+    """Every served skill's URI: the full listing, which is the index's addresses."""
+    listing = knowledge_base.catalogue.entries(full=True)
+    return sorted(e.uri for e in listing if e.uri.endswith("/SKILL.md"))
+
+
+async def _read(knowledge_base, uri):
+    async with Client(knowledge_base.mcp) as client:
+        return (await client.read_resource(uri))[0].text
+
+
+async def test_a_marketplace_library_lists_its_entries_as_plugins(market, tmp_path):
+    """Each entry is a plugin id'd `<entry>@<library>`, carrying the entry's
+    own category and labels; the uninstallable one is skipped, and said so."""
+    config = _config(tmp_path, libraries=[{"name": "obs", "source": "lab://market"}])
+    kb = KnowledgeBase(config, tmp_path / "cache")
+    health = await _health(kb)
+
+    library = health["libraries"]["obs"]
+    assert library["plugins"] == ["lgtm@obs", "k6@obs"]
+    assert library["skills"] == 2 and library["prompts"] == 1
+    assert library["skipped"] == [
+        {"plugin": "cli", "reason": "source type npm is not supported"}
+    ]
+    lgtm = health["plugins"]["lgtm@obs"]
+    assert lgtm["category"] == "observability"
+    assert lgtm["tags"] == ["logs"]
+    assert lgtm["root"] == "lgtm"
+    assert lgtm["libraries"] == ["obs"]
+    assert health["plugins"]["k6@obs"]["keywords"] == ["load"]
+    assert "loki." in await _read(kb, "skill://obs/loki/SKILL.md")
+    assert "load." in await _read(kb, "skill://obs/load/SKILL.md")
+    async with Client(kb.mcp) as client:
+        rendered = await client.get_prompt("obs_run", {"arguments": "fast"})
+    assert rendered.messages[0].content.text == "Run fast.\n"
+
+
+async def test_a_selector_regroups_a_marketplace_plugin_under_its_own_name(
+    market, tmp_path
+):
+    """Phase two runs over every plugin, marketplace-derived included: a selector
+    picks `lgtm@obs` into `logs` as well, and the skill serves at both bases."""
+    config = _config(
+        tmp_path,
+        libraries=[
+            {"name": "obs", "source": "lab://market"},
+            {"name": "logs", "pluginSelector": {"tags": ["logs"]}},
+        ],
+    )
+    kb = KnowledgeBase(config, tmp_path / "cache")
+    health = await _health(kb)
+
+    assert health["libraries"]["logs"]["plugins"] == ["lgtm@obs"]
+    assert health["plugins"]["lgtm@obs"]["libraries"] == ["obs", "logs"]
+    assert await _skills(kb) == [
+        "skill://logs/loki/SKILL.md",
+        "skill://obs/load/SKILL.md",
+        "skill://obs/loki/SKILL.md",
+    ]
+    assert "loki." in await _read(kb, "skill://logs/loki/SKILL.md")
+    assert "loki." in await _read(kb, "skill://obs/loki/SKILL.md")
+
+
+async def test_a_named_marketplace_plugin_adds_beside_a_library(market, tmp_path):
+    """`plugins: [k6@obs]` is resolved once the marketplace has been read; a
+    name it did not publish is the library's error, and the rest serves."""
+    config = _config(
+        tmp_path,
+        libraries=[
+            {"name": "obs", "source": "lab://market"},
+            {"name": "perf", "plugins": ["k6@obs", "nope@obs"]},
+        ],
+    )
+    kb = KnowledgeBase(config, tmp_path / "cache")
+    health = await _health(kb)
+
+    perf = health["libraries"]["perf"]
+    assert perf["plugins"] == ["k6@obs"]
+    assert perf["error"] == "no plugin named 'nope@obs'; obs publishes: k6, lgtm"
+    assert "load." in await _read(kb, "skill://perf/load/SKILL.md")
+
+
+async def test_two_plugins_on_one_repository_at_one_ref_make_one_clone(
+    market, tmp_path
+):
+    """A declared plugin against the marketplace's repository shares its fetch:
+    one entry under `<cache>/git`, and one fetch in `/health`."""
+    config = _config(
+        tmp_path,
+        plugins=[{"name": "mine", "source": "lab://market//k6", "tags": ["own"]}],
+        libraries=[
+            {"name": "obs", "source": "lab://market"},
+            {"name": "own", "plugins": ["mine"]},
+        ],
+    )
+    kb = KnowledgeBase(config, tmp_path / "cache")
+    health = await _health(kb)
+
+    assert list(health["fetches"]) == ["lab://market"]
+    assert [p.name for p in (tmp_path / "cache" / "git").iterdir()] == [
+        kb.fetches[0].slug
+    ]
+    assert health["plugins"]["mine"]["fetch"] == "lab://market"
+    assert "load." in await _read(kb, "skill://own/load/SKILL.md")
+
+
+async def test_a_library_whose_marketplace_is_missing_says_so(market, tmp_path):
+    config = _config(
+        tmp_path,
+        libraries=[{"name": "obs", "source": "lab://market//lgtm"}],
+    )
+    kb = KnowledgeBase(config, tmp_path / "cache")
+    health = await _health(kb)
+
+    assert health["libraries"]["obs"] == {
+        "description": "",
+        "plugins": [],
+        "skills": 0,
+        "prompts": 0,
+        "files": 0,
+        "error": "no marketplace.json under lgtm",
+    }
+    assert str(tmp_path) not in json.dumps(health)
+
+
+async def test_a_refresh_of_a_marketplace_fetch_serves_an_entry_it_gained(
+    market, tmp_path
+):
+    """The marketplace is re-read off the rebuilt tree, so a new entry -- and
+    the fetch it may bring -- is served after one refresh, with no restart."""
+    config = _config(tmp_path, libraries=[{"name": "obs", "source": "lab://market"}])
+    kb = KnowledgeBase(config, tmp_path / "cache")
+    assert "skill://obs/tempo/SKILL.md" not in await _skills(kb)
+
+    _skill(market, "tempo/skills/tempo", "tempo")
+    _catalog(
+        market,
+        {"name": "lgtm", "source": "./lgtm", "category": "observability"},
+        {"name": "k6", "source": "./k6", "category": "testing"},
+        {"name": "tempo", "source": "./tempo", "category": "observability"},
+    )
+    _commit(market, "add tempo")
+
+    assert kb.refresh() == ["lab://market"]
+    health = await _health(kb)
+    assert health["libraries"]["obs"]["plugins"] == ["lgtm@obs", "k6@obs", "tempo@obs"]
+    assert "tempo." in await _read(kb, "skill://obs/tempo/SKILL.md")
+    assert kb.generation == 1
+
+
+async def test_a_cold_start_reuses_the_index_and_re_reads_the_marketplace(
+    market, tmp_path, monkeypatch
+):
+    """Nothing is cloned or harvested on a restart; the marketplace's entries
+    are re-derived from the tree already on disk."""
+    from kubed.mcp_kb import server
+    from kubed.mcp_kb.catalogue import snapshot
+
+    config = _config(tmp_path, libraries=[{"name": "obs", "source": "lab://market"}])
+    first = KnowledgeBase(config, tmp_path / "cache")
+
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("a cold start must reuse the index")
+
+    # server.py imports build_plugin by name, so it is patched where it is
+    # called from; materialise is called inside snapshot.build_fetch.
+    monkeypatch.setattr(snapshot, "materialise", must_not_run)
+    monkeypatch.setattr(server, "build_plugin", must_not_run)
+    second = KnowledgeBase(config, tmp_path / "cache")
+
+    assert second.status["libraries"]["obs"]["plugins"] == ["lgtm@obs", "k6@obs"]
+    assert await _skills(second) == await _skills(first)

@@ -1,17 +1,22 @@
-"""The on-disk index: what each source yielded, without re-harvesting it.
+"""The on-disk index: what each fetch and each plugin yielded, without re-harvesting.
 
 Cold start reads this file and reconstructs every ``Skill`` and ``FilePrompt``
 straight from it, with no filesystem walk and no frontmatter parse -- that is
 the whole point of writing one. A row is therefore self-contained: absolute
-paths as strings, tags sorted so two harvests of the same tree serialise
-identically, and no reference back to a live object.
+paths as strings, and no reference back to a live object.
 
-``Index`` is a frozen dataclass whose one field, ``sources``, is a plain
-``dict``. Python does not stop a caller from mutating a dict reached through a
-frozen instance; nothing here needs it to. The type is immutable by
-convention, matching every other snapshot in this codebase, and callers that
-build a new ``Index`` build a new ``sources`` mapping rather than mutating one
-in place.
+Two kinds of record, because two things are expensive: a ``FetchRecord`` is
+one materialised tree (a clone, a copy, a directory) and its fingerprint, and
+a ``PluginRecord`` is one plugin's harvest out of such a tree. A skill row
+carries no library: which libraries a plugin serves in is assembled from the
+config at snapshot time, and a plugin in two libraries is one harvest served
+twice.
+
+``Index`` is a frozen dataclass whose two mapping fields are plain ``dict``s.
+Python does not stop a caller from mutating a dict reached through a frozen
+instance; nothing here needs it to. The type is immutable by convention,
+matching every other snapshot in this codebase, and callers that build a new
+``Index`` build new mappings rather than mutating one in place.
 
 ``config_hash`` and the ``version`` field are cold start's two questions before
 it trusts anything in the file: "was this built from the config I have now",
@@ -33,88 +38,108 @@ from pathlib import Path
 from typing import Literal
 
 from ..config import Config
-from .prompts import FilePrompt
 from .skills import Skill
 
-INDEX_VERSION = 4
+INDEX_VERSION = 5
 
 
 @dataclass(frozen=True)
 class SkillRow:
-    """A ``Skill``, flattened to JSON-safe fields."""
+    """A harvested skill, flattened to JSON-safe fields.
+
+    No library, plugin, category or tags: those are the library's and the
+    plugin's, put back on by ``to_skill`` when a snapshot assigns the plugin
+    to a library.
+    """
 
     name: str
-    library: str
     folder: str
     description: str
     path: str
-    source: str
-    tags: tuple[str, ...]
 
     @classmethod
     def from_skill(cls, skill: Skill) -> SkillRow:
         return cls(
             name=skill.name,
-            library=skill.library,
             folder=skill.folder,
             description=skill.description,
             path=str(skill.path),
-            source=skill.source,
-            tags=tuple(sorted(skill.tags)),
         )
 
-    def to_skill(self) -> Skill:
+    def to_skill(
+        self,
+        *,
+        library: str,
+        plugin: str,
+        root: Path,
+        category: str | None,
+        tags: frozenset[str],
+    ) -> Skill:
         return Skill(
             name=self.name,
-            library=self.library,
+            library=library,
             folder=self.folder,
             description=self.description,
             path=Path(self.path),
-            source=self.source,
-            tags=frozenset(self.tags),
+            plugin=plugin,
+            root=root,
+            category=category,
+            tags=tags,
         )
 
 
 @dataclass(frozen=True)
 class PromptRow:
-    """A ``FilePrompt``, flattened to JSON-safe fields."""
+    """A harvested prompt file: where it is and which dialect it is written in.
+
+    The dialect is recorded because detecting it may have been the config's
+    decision (``dialect:`` on the plugin) or the harvest's (a ``commands/``
+    tree), and a re-parse at snapshot time has to reach the same answer.
+    """
 
     path: str
-    library: str
-    source: str
-    tags: tuple[str, ...]
-
-    @classmethod
-    def of(cls, path: Path, prompt: FilePrompt) -> PromptRow:
-        return cls(
-            path=str(path),
-            library=prompt.library,
-            source=prompt.source,
-            tags=tuple(sorted(prompt.tags)),
-        )
+    dialect: str
 
 
 @dataclass(frozen=True)
-class SourceRecord:
-    """One source's harvest: its fingerprint and every row built from it.
+class FetchRecord:
+    """One materialised tree: where it is on disk, and the fingerprint it had.
 
-    ``status``/``error`` carry a failed source the way ``sources.materialise``
-    already does elsewhere -- a bad source is a value on the record, not an
-    exception that would keep the other sources out of the index.
+    ``status``/``error`` carry a failed fetch the way ``sources.materialise``
+    already does elsewhere -- a bad fetch is a value on the record, not an
+    exception that would keep the other fetches out of the index.
 
-    ``"stale"`` is the third state and the useful one: everything a ``"ok"``
-    record has -- a root, rows, a fingerprint -- plus the error from the
-    refresh that failed. It is served exactly like ``"ok"``, because the last
-    good harvest is still on disk and still the best answer available.
+    ``"stale"`` is the third state and the useful one: everything an ``"ok"``
+    record has -- a root, a fingerprint -- plus the error from the refresh that
+    failed. It is served exactly like ``"ok"``, because the last good tree is
+    still on disk and still the best answer available.
     """
 
-    name: str
+    key: str
     status: Literal["ok", "failed", "stale"]
-    library: str
     root: str | None
     fingerprint: dict
     built: str
     error: str | None
+
+
+@dataclass(frozen=True)
+class PluginRecord:
+    """One plugin's harvest out of its fetch's tree: every row built from it.
+
+    ``root`` is the plugin root -- the fetch root joined with the plugin's
+    subdirectory -- and ``fetch`` the key of the record it was harvested from,
+    which is what decides whether this record can be reused when that one is.
+    A plugin fails on its own when its root is not a directory, its manifest
+    does not parse, or its fetch failed; the error says which.
+    """
+
+    id: str
+    fetch: str
+    root: str | None
+    status: Literal["ok", "failed"]
+    error: str | None
+    built: str
     skills: tuple[SkillRow, ...]
     prompts: tuple[PromptRow, ...]
     files: tuple[str, ...]
@@ -125,21 +150,27 @@ class SourceRecord:
     skipped: tuple[dict[str, str], ...] = ()
 
 
-def _source_record_from_dict(raw: dict) -> SourceRecord:
-    return SourceRecord(
-        name=raw["name"],
+def _fetch_record_from_dict(raw: dict) -> FetchRecord:
+    return FetchRecord(
+        key=raw["key"],
         status=raw["status"],
-        library=raw["library"],
         root=raw["root"],
         fingerprint=raw["fingerprint"],
         built=raw["built"],
         error=raw["error"],
-        skills=tuple(
-            SkillRow(**{**s, "tags": tuple(s["tags"])}) for s in raw["skills"]
-        ),
-        prompts=tuple(
-            PromptRow(**{**p, "tags": tuple(p["tags"])}) for p in raw["prompts"]
-        ),
+    )
+
+
+def _plugin_record_from_dict(raw: dict) -> PluginRecord:
+    return PluginRecord(
+        id=raw["id"],
+        fetch=raw["fetch"],
+        root=raw["root"],
+        status=raw["status"],
+        error=raw["error"],
+        built=raw["built"],
+        skills=tuple(SkillRow(**s) for s in raw["skills"]),
+        prompts=tuple(PromptRow(**p) for p in raw["prompts"]),
         files=tuple(raw["files"]),
         skill_dirs=tuple(raw["skill_dirs"]),
         skipped=tuple(_skipped_row(row) for row in raw["skipped"]),
@@ -169,7 +200,8 @@ class Index:
     version: int
     built: str
     config_hash: str
-    sources: dict[str, SourceRecord]
+    fetches: dict[str, FetchRecord]
+    plugins: dict[str, PluginRecord]
 
     def write(self, path: Path) -> None:
         """Write to a unique temp file beside ``path``, then ``os.replace`` it.
@@ -203,18 +235,23 @@ class Index:
             return None
         if not isinstance(raw, dict) or raw.get("version") != INDEX_VERSION:
             return None
-        if not isinstance(raw.get("sources"), dict):
+        if not isinstance(raw.get("fetches"), dict) or not isinstance(
+            raw.get("plugins"), dict
+        ):
             return None
         try:
-            sources = {
-                name: _source_record_from_dict(rec)
-                for name, rec in raw["sources"].items()
-            }
             return cls(
                 version=raw["version"],
                 built=raw["built"],
                 config_hash=raw["config_hash"],
-                sources=sources,
+                fetches={
+                    key: _fetch_record_from_dict(rec)
+                    for key, rec in raw["fetches"].items()
+                },
+                plugins={
+                    pid: _plugin_record_from_dict(rec)
+                    for pid, rec in raw["plugins"].items()
+                },
             )
         except (KeyError, TypeError, AttributeError, ValueError):
             return None
