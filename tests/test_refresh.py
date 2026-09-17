@@ -468,6 +468,40 @@ def test_tick_seconds_defaults_when_nothing_is_scheduled(skills_dir):
     assert refresh.tick_seconds(config.min_refresh_seconds) == refresh.TICK_SECONDS
 
 
+class _Slept(Exception):
+    """Raised by the stand-in sleep to end the loop after its first tick."""
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("interval", "seconds"), [(1, 1), (3600, refresh.TICK_SECONDS)])
+async def test_the_loop_sleeps_the_shorter_of_a_tick_and_the_shortest_refresh(
+    skills_dir, cache, monkeypatch, interval, seconds
+):
+    """Through `loop` itself, not the helper: a `refresh: 1s` source sleeps 1s,
+    and an hourly one still wakes every tick to ask what is due."""
+    raw = {
+        "sources": [
+            {**s.model_dump(mode="json"), "refresh": f"{interval}s"}
+            for s in make_config(skills_dir).sources
+        ]
+    }
+    knowledge_base = KnowledgeBase(Config.model_validate(raw), cache)
+    slept = []
+
+    async def sleep(delay):
+        slept.append(delay)
+        raise _Slept
+
+    async def no_pass(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(refresh, "_pass", no_pass)
+    monkeypatch.setattr(refresh.asyncio, "sleep", sleep)
+    with pytest.raises(_Slept):
+        await refresh.loop(knowledge_base)
+    assert slept == [seconds]
+
+
 @pytest.mark.unit
 async def test_the_loop_keeps_rebuilding_a_source_whose_refresh_is_due(
     skills_dir, cache, monkeypatch

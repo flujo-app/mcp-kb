@@ -220,8 +220,8 @@ def test_a_composite_folder_registers_every_skill_beneath_it(tmp_path):
     skill, it holds them, and pointing at it should mean all of them.
     """
     root = tmp_path / "src"
-    for group, name in (("lgtm", "loki"), ("lgtm", "tempo"), ("sdk", "plugins")):
-        d = root / "skills" / group / name
+    for folder, name in (("lgtm", "loki"), ("lgtm", "tempo"), ("sdk", "plugins")):
+        d = root / "skills" / folder / name
         d.mkdir(parents=True)
         (d / "SKILL.md").write_text(f"---\nname: {name}\n---\nbody")
 

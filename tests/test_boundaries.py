@@ -3,8 +3,9 @@
 ``AGENTS.md`` promises ``catalogue/`` is the FastMCP-free layer: everything a
 client-facing concept needs before it becomes a served resource, tool or
 prompt, with nothing here reaching for the protocol library itself. The
-promise is worth nothing unimport, so this test blocks ``fastmcp`` in a fresh
-subprocess and imports every ``catalogue`` module directly.
+promise is worth nothing unproved, so this test blocks ``fastmcp`` in a fresh
+subprocess and imports every ``catalogue`` module directly -- found by walking
+the package, so a module added later is covered without being listed.
 
 ``kubed.mcp_kb``'s own ``__init__.py`` imports ``.server``, which imports
 ``fastmcp`` -- by design, the server needs it, and that is not what is under
@@ -13,6 +14,7 @@ submodules resolve without running that ``__init__.py``, keeping the blocked
 import limited to what ``catalogue/`` itself pulls in.
 """
 
+import pkgutil
 import subprocess
 import sys
 import textwrap
@@ -24,13 +26,11 @@ pytestmark = pytest.mark.unit
 
 REPO = Path(__file__).parent.parent
 
-CATALOGUE_MODULES = (
-    "kubed.mcp_kb.catalogue.snapshot",
-    "kubed.mcp_kb.catalogue.index",
-    "kubed.mcp_kb.catalogue.uris",
-    "kubed.mcp_kb.catalogue.skills",
-    "kubed.mcp_kb.catalogue.harvest",
-    "kubed.mcp_kb.catalogue.prompts",
+# Walked on disk, not imported: importing the package here would run the very
+# imports the subprocess exists to block.
+CATALOGUE_MODULES = tuple(
+    f"kubed.mcp_kb.catalogue.{module.name}"
+    for module in pkgutil.iter_modules([str(REPO / "kubed" / "mcp_kb" / "catalogue")])
 )
 
 SCRIPT = textwrap.dedent(
@@ -66,6 +66,12 @@ SCRIPT = textwrap.dedent(
     mcp_kb=str(REPO / "kubed" / "mcp_kb"),
     modules=CATALOGUE_MODULES,
 )
+
+
+def test_every_catalogue_module_is_checked():
+    """The walk finds the modules, the refresh loop among them."""
+    assert "kubed.mcp_kb.catalogue.refresh" in CATALOGUE_MODULES
+    assert len(CATALOGUE_MODULES) >= 7
 
 
 def test_catalogue_imports_no_fastmcp():

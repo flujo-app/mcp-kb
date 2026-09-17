@@ -180,13 +180,13 @@ async def test_the_prompt_tools_are_held_to_the_scope(url):
     assert listed == []
 
 
-# -- scope across sources and shared group names --------------------------------
+# -- scope across sources and shared folder names -------------------------------
 
 
 @pytest.fixture
 def mixed(tmp_path):
     """One library fed by two differently-tagged sources, and two libraries that
-    share a group name. The shapes the simple fixture above cannot express."""
+    share a folder name. The shapes the simple fixture above cannot express."""
     from kubed.mcp_kb.mcp.prompts import PromptProvider
 
     def skill(root, *parts):
