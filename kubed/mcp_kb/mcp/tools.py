@@ -14,9 +14,12 @@ inside a SKILL.md does not say which side of that line it falls on.
 Progressive disclosure survives the collapse, because it moved into the address
 space rather than into the tool list::
 
-    list_resources()                     -> ~12 indexes, one per library and folder
-    read_resource("skill://grafana-lgtm") -> that folder's skills, as URIs
-    read_resource("skill://grafana/loki") -> the instructions to follow
+    list_resources()
+        -> ~12 indexes, one per library and folder
+    read_resource("skill://grafana/grafana-lgtm/_index.md")
+        -> that folder's skills, as URIs
+    read_resource("skill://grafana/grafana-lgtm/loki/SKILL.md")
+        -> the instructions to follow
 
 Both tools are hidden from a client that reads resources; see
 ``resources.HideMirrorTools``.
@@ -56,13 +59,15 @@ def register(mcp: FastMCP, catalogue: Callable[[], Catalogue]) -> set[str]:
     """
 
     @mcp.tool(annotations={"title": "List skill resources", **READ_ONLY})
-    def list_resources() -> list[dict]:
+    def list_resources() -> list[dict[str, str]]:
         """List the skill resources available, as `uri`/`name`/`description`.
 
-        Start here. The listing is indexes, not skills: one row per library and
-        per folder within a library, plus one for any files a library ships
-        outside its skills. Read an index URI to get the skills inside it, then
-        read a skill URI for its instructions.
+        Start here. The listing is indexes, not skills: a
+        `skill://<library>/_index.md` per library, a
+        `skill://<library>/<folder>/_index.md` per folder of skills, and a
+        `skill://<library>/_files.md` for a library that ships files outside
+        its skills. Read an index for the URIs inside it, then read a skill's
+        `SKILL.md` URI for its instructions.
 
         This returns exactly what an MCP `resources/list` would, so a `uri` from
         here can be read with `read_resource` or with your own resource reader.
@@ -72,25 +77,40 @@ def register(mcp: FastMCP, catalogue: Callable[[], Catalogue]) -> set[str]:
 
     @mcp.tool(annotations={"title": "Read a skill resource", **READ_ONLY})
     def read_resource(uri: str) -> str:
-        """Read one `skill://` URI: an index, a skill, or a file inside one.
+        """Read one `skill://` URI: an index, a skill's file, or a library's file.
 
         Args:
-            uri: A URI from list_resources, or one built from this grammar:
-                `skill://<library>` or `skill://<folder>` for an index,
-                `skill://<library>/<skill>` for that skill's instructions,
-                `skill://<library>/<skill>/_manifest` for what else it ships,
-                `skill://<library>/<skill>/<path>` for one of those files.
+            uri: A URI from list_resources or an index, or one built from this
+                grammar, where `<folder>` may be empty or several segments:
+                `skill://<library>/_index.md` or
+                `skill://<library>/<folder>/_index.md` for an index of skills,
+                `skill://<library>/<folder>/<skill>/SKILL.md` for a skill's
+                instructions,
+                `skill://<library>/<folder>/<skill>/_manifest` for what else it
+                ships, and `skill://<library>/<folder>/<skill>/<path>` for one
+                of those files,
+                `skill://<library>/_files.md` for the files a library ships
+                outside its skills, and `skill://<library>/<path>` for one of
+                those.
+
+        Only files are read. A library, a folder or a skill without a file
+        named after it is a directory, and reading one says which file to read
+        instead.
 
         Reads only what was asked for. A skill's instructions may cite
         `references/FOO.md`; citing it does not fetch it, so fetch it only if
         you are going to use it.
         """
-        body = catalogue().read(uri, requested_scope())
-        if body is None:
-            return (
-                f"No resource at '{uri}'. Call list_resources() for the indexes,"
-                " then read one to see the URIs inside it."
-            )
-        return body
+        current, scope = catalogue(), requested_scope()
+        body = current.read(uri, scope)
+        if body is not None:
+            return body
+        hint = current.directory(uri, scope)
+        if hint is not None:
+            return f"No resource at '{uri}'. {hint}"
+        return (
+            f"No resource at '{uri}'. Call list_resources() for the indexes,"
+            " then read one to see the URIs inside it."
+        )
 
     return MIRROR_TOOLS

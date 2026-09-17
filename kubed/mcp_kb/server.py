@@ -69,13 +69,18 @@ perform a specific task. Everything it serves is a `skill://` URI, and reading \
 one is the only operation there is.
 
 Work down the address space, cheapest first. Listing gives you indexes -- one \
-per library, one per folder within a library. Reading an index URI \
-(`skill://grafana-lgtm`) gives you the skills in it, as URIs. Reading a skill \
-URI (`skill://grafana/loki`) gives you the instructions to follow.
+per library (`skill://grafana/_index.md`), one per folder of skills within a \
+library (`skill://grafana/grafana-lgtm/_index.md`). Reading an index gives you \
+the skills in it, as URIs. Reading a skill's URI \
+(`skill://grafana/grafana-lgtm/loki/SKILL.md`) gives you the instructions to \
+follow.
 
-A skill may ship supporting files. Append `/_manifest` to its URI to list them, \
-then read one by its path under the same URI. Do not read files you have no use \
-for -- a skill citing one is not a reason to fetch it.
+A skill may ship supporting files. Read `_manifest` in place of `SKILL.md` to \
+list them, then read one by its path under the same skill. A library may also \
+ship files outside its skills, listed at `skill://<library>/_files.md`. Do not \
+read files you have no use for -- a skill citing one is not a reason to fetch \
+it. Only files are read: a library, a folder or a skill's own directory serves \
+nothing.
 """
 
 
