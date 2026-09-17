@@ -71,6 +71,9 @@ def _build(base):
     other = base / "other"
     _skill(other, "skills/grafana-lgtm/loki", "loki", "Another loki.")
 
+    handbook = base / "handbook"
+    _write(handbook, "guide/intro.md", "welcome\n")
+
     return Config.model_validate(
         {
             "sources": [
@@ -86,6 +89,11 @@ def _build(base):
                     "include": {"files": ["extra/**"]},
                 },
                 {"name": "other", "url": f"file://{other}"},
+                {
+                    "name": "handbook",
+                    "url": f"file://{handbook}",
+                    "include": {"skills": [], "prompts": [], "files": ["guide/**"]},
+                },
             ]
         }
     )
@@ -195,6 +203,7 @@ DIRECTORIES = [
     ("skill://grafana/grafana-lgtm", "skill://grafana/grafana-lgtm/_index.md"),
     ("skill://grafana/grafana-plugins", "skill://grafana/_index.md"),
     ("skill://grafana/shared", "skill://grafana/_files.md"),
+    ("skill://handbook", "skill://handbook/_files.md"),
     (LOKI, f"{LOKI}/SKILL.md"),
 ]
 
@@ -220,17 +229,59 @@ async def test_a_missing_address_names_no_file(url):
     assert "list_resources" in await _tool(url, "skill://grafana/nope")
 
 
-async def test_an_out_of_scope_directory_reads_as_a_missing_one(url):
-    """The hint must not confirm a folder the caller was not given."""
-    k6 = "grafana/grafana-k6"
-    hidden = await _read_error(url, "skill://grafana/grafana-lgtm", library=k6)
-    missing = await _read_error(url, "skill://grafana/nope", library=k6)
-    assert "_index.md" not in hidden
-    assert hidden.replace("grafana-lgtm", "nope") == missing
-    assert "grafana-lgtm/_index.md" not in await _tool(
-        url, "skill://grafana/grafana-lgtm", library=k6
-    )
-    assert "_index.md" not in await _read_error(url, "skill://grafana", library="other")
+OUT_OF_SCOPE = [
+    # (a directory unscoped, a missing address beside it, a pin that hides it)
+    ("skill://grafana/grafana-lgtm", "skill://grafana/nope", "grafana/grafana-k6"),
+    (
+        "skill://grafana/grafana-lgtm/loki",
+        "skill://grafana/grafana-lgtm/nope",
+        "grafana/grafana-k6",
+    ),
+    ("skill://grafana/extra", "skill://grafana/nope", "grafana/grafana-lgtm"),
+    ("skill://grafana", "skill://nope", "other"),
+    ("skill://handbook", "skill://nope", "other"),
+]
+
+
+@pytest.mark.parametrize(("uri", "missing", "library"), OUT_OF_SCOPE)
+async def test_an_out_of_scope_directory_reads_as_a_missing_one(
+    url, uri, missing, library
+):
+    """The hint must not confirm a directory the caller was not given.
+
+    Unpinned, each address gets a hint a missing one does not, so the case is
+    live; pinned, the whole message matches the missing address's, through the
+    resource and through the tool.
+    """
+    unpinned = await _read_error(url, uri)
+    assert unpinned != (await _read_error(url, missing)).replace(missing, uri)
+
+    hidden = await _read_error(url, uri, library=library)
+    absent = await _read_error(url, missing, library=library)
+    assert hidden == absent.replace(missing, uri)
+
+    hidden = await _tool(url, uri, library=library)
+    absent = await _tool(url, missing, library=library)
+    assert hidden == absent.replace(missing, uri)
+
+
+async def test_only_a_not_found_read_becomes_a_directory_hint(tmp_path):
+    """A directory address that fails some other way keeps its own error."""
+    from fastmcp.server.middleware import Middleware
+
+    class Explodes(Middleware):
+        async def on_read_resource(self, context, call_next):
+            from fastmcp.exceptions import ResourceError
+
+            raise ResourceError("the backend exploded")
+
+    knowledge_base = KnowledgeBase(_build(tmp_path), tmp_path / "_cache")
+    knowledge_base.mcp.add_middleware(Explodes())
+    async with Client(knowledge_base.mcp) as client:
+        with pytest.raises(Exception) as caught:
+            await client.read_resource("skill://grafana")
+    assert "the backend exploded" in str(caught.value)
+    assert "_index.md" not in str(caught.value)
 
 
 # -- indexes and the listing ------------------------------------------------------
@@ -274,6 +325,13 @@ async def test_the_listing_is_exactly_the_index_rows(url):
             "skill://grafana/_files.md",
             "grafana/_files.md",
             "Files the grafana library ships outside any skill,"
+            " which its skills reference.",
+            md,
+        ),
+        (
+            "skill://handbook/_files.md",
+            "handbook/_files.md",
+            "Files the handbook library ships outside any skill,"
             " which its skills reference.",
             md,
         ),
