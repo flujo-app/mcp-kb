@@ -34,39 +34,65 @@ def test_visible_is_everything_when_unpinned(index):
 
 
 @pytest.mark.unit
-def test_visible_honours_a_library_or_a_group(index):
+def test_visible_honours_a_library_or_a_folder_path(index):
     assert {s.name for s in index.visible(Scope("flatsource"))} == {"alpha", "beta"}
-    assert {s.name for s in index.visible(Scope("plugin-a"))} == {"gamma"}
+    assert {s.name for s in index.visible(Scope("deepsource/plugin-a"))} == {"gamma"}
+    assert index.visible(Scope("plugin-a")) == []
 
 
 @pytest.mark.unit
-def test_select_cannot_widen_past_the_pin(index):
-    """The model's library argument narrows within the pin, never past it."""
-    assert index.select(Scope("flatsource"), "deepsource") == []
-    assert {s.name for s in index.select(Scope("flatsource"), "flatsource")} == {
-        "alpha",
-        "beta",
-    }
+def test_a_folder_selector_admits_the_skills_beneath_it_too(tmp_path):
+    """`grafana/a` covers `a/b/x` as well as `a/x`, and never a folder `ab`."""
+    skills = [
+        _skill_in(tmp_path, folder, name)
+        for folder, name in (("a", "x"), ("a/b", "y"), ("ab", "z"), ("", "w"))
+    ]
+    index = SkillIndex(skills)
+    assert {s.name for s in index.visible(Scope("grafana/a"))} == {"x", "y"}
+    assert {s.name for s in index.visible(Scope("grafana/a/b"))} == {"y"}
+    assert index.sources(Scope("grafana")) is None
+    assert index.sources(Scope("grafana/ab")) == {"src-z"}
+
+
+def _skill_in(root, folder, name):
+    from kubed.mcp_kb.catalogue.skills import Skill
+
+    return Skill(
+        name=name,
+        library="grafana",
+        folder=folder,
+        description="",
+        path=root / name,
+        source=f"src-{name}",
+        tags=frozenset({"grafana"}),
+    )
 
 
 @pytest.mark.unit
 def test_selectors_are_scoped_to_the_pin(index):
     """Suggestions must not leak the other libraries' names."""
     assert "deepsource" not in index.selectors(Scope("flatsource"))
-    assert "deepsource" in index.selectors()
+    assert index.selectors() == [
+        "deepsource",
+        "deepsource/plugin-a",
+        "deepsource/plugin-b",
+        "flatsource",
+    ]
 
 
 @pytest.mark.unit
 def test_get_hides_out_of_scope_skills(index):
     """Out of scope is indistinguishable from missing, on purpose."""
-    assert index.get("gamma") is not None
-    assert index.get("gamma", Scope("flatsource")) is None
-    assert index.get("alpha", Scope("flatsource")) is not None
+    assert index.get("deepsource/plugin-a/gamma") is not None
+    assert index.get("deepsource/plugin-a/gamma", Scope("flatsource")) is None
+    assert index.get("flatsource/alpha", Scope("flatsource")) is not None
 
 
 @pytest.mark.unit
-def test_qualified_name_resolves(index):
-    assert index.get("deepsource/gamma").name == "gamma"
+def test_a_skill_is_found_by_its_full_address_not_its_name(index):
+    assert index.get("deepsource/plugin-a/gamma").name == "gamma"
+    assert index.get("gamma") is None
+    assert index.get("deepsource/gamma") is None
 
 
 @pytest.mark.unit
@@ -137,7 +163,7 @@ def test_listing_never_walks_the_disk_after_startup(skills_dir, monkeypatch):
     monkeypatch.setattr(pathlib.Path, "iterdir", forbidden)
 
     assert "shared/guide.md" in resources.files("deepsource")
-    assert any(e.uri == "skill://deepsource/_files" for e in catalogue.entries())
+    assert any(e.uri == "skill://deepsource/_files.md" for e in catalogue.entries())
 
 
 @pytest.mark.unit

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from kubed.mcp_kb.catalogue.harvest import (
-    group_of,
+    folder_of,
     library_files,
     patterns,
     prompt_files,
@@ -96,11 +96,14 @@ def test_a_glob_cannot_escape_the_source(tree, tmp_path):
     assert library_files(tree, include, []) == []
 
 
-def test_the_group_is_the_containing_directory_unless_that_is_a_skill_root(tree):
-    assert group_of(tree / "skills/grafana-lgtm/loki", tree) == "grafana-lgtm"
-    assert group_of(tree / "skills/flat", tree) is None
-    assert group_of(tree / ".github/skills/gh", tree) is None
-    assert group_of(tree / "template", tree) is None
+def test_the_folder_is_the_path_below_the_deepest_skill_root(tree):
+    assert folder_of(tree / "skills/grafana-lgtm/loki", tree) == "grafana-lgtm"
+    assert folder_of(tree / "skills/flat", tree) == ""
+    assert folder_of(tree / ".github/skills/gh", tree) == ""
+    assert folder_of(tree / "template", tree) == ""
+    assert folder_of(tree / "skills/a/b/deep", tree) == "a/b"
+    assert folder_of(tree / "docs/skills-extra/x", tree) == "docs/skills-extra"
+    assert folder_of(tree, tree) == ""
 
 
 @pytest.mark.unit

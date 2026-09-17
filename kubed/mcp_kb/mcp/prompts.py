@@ -28,7 +28,6 @@ from mcp_types import ToolAnnotations
 from pydantic import ConfigDict
 
 from ..catalogue.prompts import FilePrompt
-from ..catalogue.skills import SkillIndex
 from .request import requested_scope
 from .scope import EVERYTHING, Scope
 from .tools import READ_ONLY
@@ -94,13 +93,13 @@ class PromptProvider(Provider):
         prompts = list(snapshot.prompts)
         if not scope:
             return prompts
-        libraries = _libraries_of(scope.library, snapshot.index)
-        tags = Scope(tags=scope.tags)
+        sources = snapshot.index.sources(scope)
         return [
             p
             for p in prompts
-            if (not libraries or p.library in libraries)
-            and tags.admits(p.library, p.tags)
+            if (not scope.library or p.library == scope.library_name)
+            and (sources is None or p.source in sources)
+            and scope.admits_tags(p.tags)
         ]
 
     async def _list_prompts(self) -> Sequence[Prompt]:
@@ -160,17 +159,3 @@ def register(mcp: FastMCP, snapshot: Callable[[], Snapshot]) -> set[str]:
     mcp.add_transform(ReadOnlyPromptsAsTools(mcp))
     return set(PROMPT_TOOLS)
 
-
-def _libraries_of(selector: str, index: SkillIndex) -> frozenset[str]:
-    """The libraries a scope's ``library`` selects, for matching prompts.
-
-    A prompt belongs to a library, not a group, so a group name resolves to the
-    libraries holding that group -- every one of them, since group names are
-    not unique across libraries and resources already admit them all. The
-    selector also always counts as a library name in its own right, or a library
-    of prompts and no skills would vanish whenever some other library happened
-    to have a group by the same name.
-    """
-    if not selector:
-        return frozenset()
-    return frozenset(s.library for s in index.visible(Scope(selector))) | {selector}

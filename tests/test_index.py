@@ -25,7 +25,7 @@ def _skill(**overrides):
     fields = {
         "name": "alpha",
         "library": "flatsource",
-        "group": "flatsource",
+        "folder": "",
         "description": "First skill.",
         "path": Path("/skills/flatsource/alpha"),
         "source": "flatsource",

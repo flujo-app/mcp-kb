@@ -36,7 +36,7 @@ from ..config import Config
 from .prompts import FilePrompt
 from .skills import Skill
 
-INDEX_VERSION = 2
+INDEX_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -45,7 +45,7 @@ class SkillRow:
 
     name: str
     library: str
-    group: str
+    folder: str
     description: str
     path: str
     source: str
@@ -56,7 +56,7 @@ class SkillRow:
         return cls(
             name=skill.name,
             library=skill.library,
-            group=skill.group,
+            folder=skill.folder,
             description=skill.description,
             path=str(skill.path),
             source=skill.source,
@@ -67,7 +67,7 @@ class SkillRow:
         return Skill(
             name=self.name,
             library=self.library,
-            group=self.group,
+            folder=self.folder,
             description=self.description,
             path=Path(self.path),
             source=self.source,

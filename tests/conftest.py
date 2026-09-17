@@ -18,8 +18,7 @@ NESTED = {"plugin-a": {"gamma": "Third skill."}, "plugin-b": {"delta": "Fourth s
 # relative to that library's directory rather than to the tree root.
 # "**/SKILL.md" finds a skill at any depth under a library -- flatsource lays
 # its directly under itself, deepsource one level deeper under a plugin -- and
-# harvest.group_of() (via SKILL_ROOTS) sorts flat from nested from there,
-# exactly as the old rglob over the whole tree did.
+# harvest.folder_of() (via SKILL_ROOTS) gives the nested ones their folder.
 SKILLS_INCLUDE = Include(skills=["**/SKILL.md"], files=["**/*"])
 LIBRARY_INCLUDES = {"flatsource": SKILLS_INCLUDE, "deepsource": SKILLS_INCLUDE}
 PROMPT_INCLUDE = Include(prompts=["*.md"])
@@ -46,7 +45,7 @@ def build_library_files(root):
         if library_root.is_dir():
             dirs = harvest.skill_dirs(library_root, include)
             files = harvest.library_files(library_root, include, dirs)
-            resources.add(library, library_root, files, dirs)
+            resources.add(library, library_root, files, dirs, source=library)
     return resources
 
 

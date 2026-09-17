@@ -139,7 +139,7 @@ async def test_get_prompt_returns_rendered_role_tagged_messages(url):
 
 async def test_a_library_is_the_whole_library(url):
     _, resources, prompts = await _seen(url, "?library=observe")
-    assert resources == ["observe"]
+    assert resources == ["observe/_index.md"]
     assert prompts == ["observe_debug"]
 
 
@@ -151,13 +151,13 @@ async def test_a_library_of_prompts_alone_is_visible_by_name(url):
 
 async def test_tags_select_across_libraries(url):
     _, resources, prompts = await _seen(url, "?tags=ops")
-    assert resources == ["observe"]
+    assert resources == ["observe/_index.md"]
     assert prompts == ["notes_standup", "observe_debug"]
 
 
 async def test_several_tags_mean_any_of_them(url):
     _, resources, _ = await _seen(url, "?tags=ops,ui")
-    assert resources == ["design", "observe"]
+    assert resources == ["design/_index.md", "observe/_index.md"]
 
 
 async def test_tags_narrow_within_a_library(url):
@@ -168,7 +168,7 @@ async def test_tags_narrow_within_a_library(url):
 
 async def test_a_header_beats_the_url_parameter(url):
     _, resources, _ = await _seen(url, "?library=design", {"X-Skill-Library": "observe"})
-    assert resources == ["observe"]
+    assert resources == ["observe/_index.md"]
 
 
 async def test_the_prompt_tools_are_held_to_the_scope(url):
@@ -239,29 +239,32 @@ def test_a_tag_scope_does_not_list_another_sources_library_files(mixed):
     catalogue = knowledge_base.snapshot.catalogue
     ops, ui = Scope(tags=frozenset({"ops"})), Scope(tags=frozenset({"ui"}))
 
-    assert catalogue.read("skill://obs/_files", ops) is None
-    assert "obs/_files" not in [e.name for e in catalogue.entries(ops)]
-    assert "tokens.md" in catalogue.read("skill://obs/_files", ui)
+    assert catalogue.read("skill://obs/_files.md", ops) is None
+    assert "obs/_files.md" not in [e.name for e in catalogue.entries(ops)]
+    assert "tokens.md" in catalogue.read("skill://obs/_files.md", ui)
 
 
-def test_a_group_name_shared_by_two_libraries_selects_both_libraries_prompts(mixed):
-    """Group names are not unique. Resources admitted every library holding a
-    `core` group; prompts stopped at the first one found."""
+def test_a_folder_name_shared_by_two_libraries_selects_neither(mixed):
+    """Folder names are not unique, so a bare one is not a selector at all.
+
+    Each library's `core` folder is reached by its path, which takes that
+    library's prompts and never the other's.
+    """
     knowledge_base, prompts = mixed
     core = Scope("core")
 
-    assert sorted({s.library for s in knowledge_base.index.visible(core)}) == [
-        "alpha",
-        "beta",
-    ]
-    assert sorted(p.name for p in prompts.visible(core)) == ["alpha_p", "beta_p"]
+    assert knowledge_base.index.visible(core) == []
+    assert prompts.visible(core) == []
+    alpha = Scope("alpha/core")
+    assert {s.library for s in knowledge_base.index.visible(alpha)} == {"alpha"}
+    assert [p.name for p in prompts.visible(alpha)] == ["alpha_p"]
 
 
-def test_a_selector_naming_a_group_and_a_prompts_only_library_selects_both(tmp_path):
-    """`notes` is a group inside `alpha` and also a library holding only prompts.
+def test_a_prompts_only_library_is_selected_by_its_name_alone(tmp_path):
+    """`notes` is a folder inside `alpha` and also a library holding only prompts.
 
-    Resources read the selector both ways; prompts treated the library name as a
-    fallback for when no group matched, so the prompts-only `notes` vanished.
+    Only the library is a selector: `notes` gives the prompts-only library, and
+    `alpha/notes` gives the folder with the prompts of the source holding it.
     """
     from kubed.mcp_kb.mcp.prompts import PromptProvider
 
@@ -282,7 +285,7 @@ def test_a_selector_naming_a_group_and_a_prompts_only_library_selects_both(tmp_p
         }
     )
     knowledge_base = KnowledgeBase(config, tmp_path / "cache")
+    provider = PromptProvider(lambda: knowledge_base.snapshot)
 
-    visible = PromptProvider(lambda: knowledge_base.snapshot).visible(Scope("notes"))
-
-    assert sorted(p.name for p in visible) == ["alpha_a", "notes_n"]
+    assert [p.name for p in provider.visible(Scope("notes"))] == ["notes_n"]
+    assert [p.name for p in provider.visible(Scope("alpha/notes"))] == ["alpha_a"]

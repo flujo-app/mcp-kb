@@ -183,6 +183,7 @@ def build_snapshot(
             [Path(d) for d in record.skill_dirs],
             # What this source's skills carry, since these files serve them.
             tags=[record.library, record.name, "skill", *lib.tags, *source.tags],
+            source=record.name,
         )
         loaded = load_prompts(
             [Path(row.path) for row in record.prompts],

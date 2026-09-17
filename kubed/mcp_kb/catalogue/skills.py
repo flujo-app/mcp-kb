@@ -27,23 +27,26 @@ from . import harvest
 
 @dataclass(frozen=True)
 class Skill:
-    """One skill on disk."""
+    """One skill on disk.
+
+    ``folder`` is where it sits below its source's skill root (see
+    ``harvest.folder_of``), and ``path`` is its directory on disk. A skill is
+    identified by ``address`` -- library, folder and name -- never by its name
+    alone: two skills called ``testing`` in different folders are two skills.
+    """
 
     name: str
     library: str
-    group: str
+    folder: str
     description: str
     path: Path
     source: str = ""
     tags: frozenset[str] = frozenset()
 
     @property
-    def qualified(self) -> str:
-        return f"{self.library}/{self.name}"
-
-    def in_library(self, selector: str) -> bool:
-        """Match a selector against either the library or the group."""
-        return selector in (self.library, self.group)
+    def address(self) -> str:
+        """``<library>/<folder>/<name>``, without an empty folder."""
+        return "/".join(p for p in (self.library, self.folder, self.name) if p)
 
 
 def _frontmatter(skill_md: Path) -> dict:
@@ -66,13 +69,10 @@ def load_skills(
 ) -> list[Skill]:
     """Build ``Skill`` records for the skill directories ``harvest`` already found.
 
-    ``library`` is the library the skills join. ``group`` is
-    ``harvest.group_of(dir, root) or library`` -- a skill with no containing
-    group (a flat source, or one sitting directly in a skill root) is in its
-    library's own group, which is the existing "flat library" behaviour.
-    ``tags`` is the library's tags plus the source's, concatenated by the
-    caller; every skill additionally carries its library, its source and the
-    literal ``"skill"``.
+    ``library`` is the library the skills join, and ``folder`` comes from
+    ``harvest.folder_of``. ``tags`` is the library's tags plus the source's,
+    concatenated by the caller; every skill additionally carries its library,
+    its source and the literal ``"skill"``.
     """
     base_tags = frozenset(t for t in (library, source, "skill", *tags) if t)
     skills: list[Skill] = []
@@ -82,7 +82,7 @@ def load_skills(
             Skill(
                 name=str(meta.get("name") or skill_dir.name),
                 library=library,
-                group=harvest.group_of(skill_dir, root) or library,
+                folder=harvest.folder_of(skill_dir, root),
                 description=" ".join(str(meta.get("description", "")).split()),
                 path=skill_dir,
                 source=source,
@@ -99,10 +99,13 @@ class _Root:
     base: Path
     files: tuple[str, ...]
     # The same tags this source's skills carry. Two sources can feed one
-    # library, so a tag scope has to be checked per root, not per library.
+    # library, so a scope has to be checked per root, not per library.
     tags: frozenset[str] = frozenset()
+    source: str = ""
 
-    def admits(self, tags: frozenset[str]) -> bool:
+    def admits(self, tags: frozenset[str], sources: frozenset[str] | None) -> bool:
+        if sources is not None and self.source not in sources:
+            return False
         return not tags or not tags.isdisjoint(self.tags)
 
 
@@ -142,6 +145,7 @@ class LibraryFiles:
         files: Sequence[str],
         skill_dirs: Sequence[Path],
         tags: Sequence[str] = (),
+        source: str = "",
     ) -> None:
         """Register one source's contribution to ``library``.
 
@@ -156,26 +160,41 @@ class LibraryFiles:
             target = (base / rel).resolve()
             if any(target == d or d in target.parents for d in dirs):
                 raise ValueError(f"{rel!r} lies inside a skill directory")
-        entry = _Root(base=base, files=tuple(files), tags=frozenset(tags))
+        entry = _Root(
+            base=base, files=tuple(files), tags=frozenset(tags), source=source
+        )
         self._roots.setdefault(library, []).append(entry)
 
-    def files(self, library: str, tags: frozenset[str] = frozenset()) -> list[str]:
+    @property
+    def libraries(self) -> list[str]:
+        """Every library some source has added files to, ignoring any scope."""
+        return sorted(
+            lib for lib, roots in self._roots.items() if any(r.files for r in roots)
+        )
+
+    def files(
+        self,
+        library: str,
+        tags: frozenset[str] = frozenset(),
+        sources: frozenset[str] | None = None,
+    ) -> list[str]:
         """Every library-level file, as paths relative to whichever root holds it.
 
         ``tags`` is a request's tag scope: only roots carrying any of them count.
-
-        A path registered by two sources of the same library is listed twice --
-        known, and not reachable from the shipped config, where no library is
-        fed by two sources sharing a file.
+        ``sources``, when given, admits only the roots those sources added.
         """
         found: list[str] = []
         for entry in self._roots.get(library, ()):
-            if entry.admits(tags):
+            if entry.admits(tags, sources):
                 found.extend(entry.files)
         return found
 
     def read(
-        self, library: str, rel: str, tags: frozenset[str] = frozenset()
+        self,
+        library: str,
+        rel: str,
+        tags: frozenset[str] = frozenset(),
+        sources: frozenset[str] | None = None,
     ) -> str | None:
         """Read one library-level file, or None when it is absent or off-limits.
 
@@ -192,7 +211,7 @@ class LibraryFiles:
         """
         target_rel = PurePosixPath(rel).as_posix()
         for entry in self._roots.get(library, ()):
-            if target_rel not in entry.files or not entry.admits(tags):
+            if target_rel not in entry.files or not entry.admits(tags, sources):
                 continue
             target = (entry.base / rel).resolve()
             if not target.is_relative_to(entry.base) or not target.is_file():
@@ -213,12 +232,12 @@ class SkillIndex:
 
     def __init__(self, skills: list[Skill]):
         self._skills = skills
-        # First writer wins on the bare name, so a duplicate across libraries
-        # stays reachable through its qualified "<library>/<name>" form.
-        self._by_name: dict[str, Skill] = {}
+        # First writer wins. Two sources claiming one address are refused
+        # before they get here; one source reaching a skill by two paths (a
+        # symlinked skill root) keeps the one found first.
+        self._by_address: dict[str, Skill] = {}
         for skill in skills:
-            self._by_name.setdefault(skill.name, skill)
-            self._by_name[skill.qualified] = skill
+            self._by_address.setdefault(skill.address, skill)
 
     def __len__(self) -> int:
         return len(self._skills)
@@ -232,32 +251,42 @@ class SkillIndex:
         """The skills a client restricted to ``scope`` may see."""
         return [s for s in self._skills if _admits(scope, s)]
 
-    def select(self, scope: Scope = EVERYTHING, library: str = "") -> list[Skill]:
-        """Visible skills narrowed further by a library or group selector."""
-        return [
-            s for s in self.visible(scope) if not library or s.in_library(library)
-        ]
-
     def selectors(self, scope: Scope = EVERYTHING) -> list[str]:
-        """Valid selectors for this client -- libraries and their groups.
+        """Valid ``library`` selectors for this client -- libraries and folders.
 
         Scoped on purpose: an error message that listed every selector would
         leak the other libraries' names to a scoped client.
         """
-        visible = self.visible(scope)
-        return sorted({s.library for s in visible} | {s.group for s in visible})
+        found: set[str] = set()
+        for skill in self.visible(scope):
+            found.add(skill.library)
+            parts = skill.folder.split("/") if skill.folder else []
+            for depth in range(1, len(parts) + 1):
+                found.add("/".join([skill.library, *parts[:depth]]))
+        return sorted(found)
 
-    def get(self, name: str, scope: Scope = EVERYTHING) -> Skill | None:
-        """Look up one skill, or None when it is absent or out of scope.
+    def sources(self, scope: Scope = EVERYTHING) -> frozenset[str] | None:
+        """The sources whose prompts and library-level files ``scope`` admits.
+
+        None means any source: only a folder selector narrows by source, to the
+        ones contributing a skill under that folder. A prompt or a file has no
+        folder of its own, so the source is the only thing that ties it to one.
+        """
+        if not scope.folder:
+            return None
+        return frozenset(s.source for s in self.visible(scope))
+
+    def get(self, address: str, scope: Scope = EVERYTHING) -> Skill | None:
+        """Look up one skill by its address, or None when absent or out of scope.
 
         Out-of-scope reads are indistinguishable from missing ones by design:
-        knowing a skill's exact name must not be enough to confirm it exists.
+        knowing a skill's exact address must not be enough to confirm it exists.
         """
-        found = self._by_name.get(name)
+        found = self._by_address.get(address)
         if found is not None and not _admits(scope, found):
             return None
         return found
 
 
 def _admits(scope: Scope, skill: Skill) -> bool:
-    return scope.admits(skill.library, skill.tags, skill.group)
+    return scope.admits(skill.library, skill.tags, skill.folder)

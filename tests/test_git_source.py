@@ -196,8 +196,8 @@ def test_a_read_in_flight_survives_a_refresh_that_moved_the_ref(origin, tmp_path
     _advance(origin)
 
     assert knowledge_base.refresh() == ["library"]
-    assert "second" in serving.catalogue.read("skill://library/x")
-    assert "third" in knowledge_base.catalogue.read("skill://library/x")
+    assert "second" in serving.catalogue.read("skill://library/x/SKILL.md")
+    assert "third" in knowledge_base.catalogue.read("skill://library/x/SKILL.md")
 
 
 @pytest.mark.unit
@@ -253,7 +253,7 @@ def test_a_truncated_export_is_rebuilt_across_a_restart(origin, tmp_path):
     restarted.refresh()
 
     assert restarted.status["library"]["status"] == "ok"
-    assert "second" in restarted.catalogue.read("skill://library/x")
+    assert "second" in restarted.catalogue.read("skill://library/x/SKILL.md")
 
 
 @pytest.mark.unit

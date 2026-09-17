@@ -44,8 +44,8 @@ DEFAULTS: dict[str, tuple[str, ...]] = {
     "files": (),
 }
 
-# The directories that hold skills by convention. A skill directly under one of
-# these has no group of its own; anything deeper is grouped by its parent.
+# The directories that hold skills by convention. A skill's folder is its path
+# below the deepest of these that contains it, so a skill directly in one has none.
 SKILL_ROOTS: tuple[str, ...] = (
     "",
     "skills",
@@ -199,10 +199,28 @@ def library_files(
     ]
 
 
-def group_of(skill_dir: Path, root: Path) -> str | None:
-    """The directory containing a skill, unless that is one of the skill roots."""
-    # Not resolved: a skill reached through a symlink is grouped by where the
+def folder_of(skill_dir: Path, root: Path) -> str:
+    """The folders between a skill and its source's skill root, as a posix path.
+
+    Empty for a skill that sits directly in a root. The deepest root wins, so
+    ``skills/grafana-lgtm/loki`` is in ``grafana-lgtm`` and not in
+    ``skills/grafana-lgtm``: every skill of a source loses the same leading
+    segments, which keeps a sibling reference like ``../other/SKILL.md``
+    pointing at the sibling's address.
+    """
+    # Not resolved: a skill reached through a symlink is placed by where the
     # config found it, not by the timestamp directory it happens to live in.
-    parent = skill_dir.parent
-    rel = parent.relative_to(root.resolve()).as_posix()
-    return None if rel in SKILL_ROOTS or rel == "." else parent.name
+    base = root.resolve()
+    if skill_dir == base:
+        return ""
+    rel = skill_dir.parent.relative_to(base).as_posix()
+    if rel == ".":
+        return ""
+    for skill_root in sorted(SKILL_ROOTS, key=len, reverse=True):
+        if not skill_root:
+            continue
+        if rel == skill_root:
+            return ""
+        if rel.startswith(f"{skill_root}/"):
+            return rel[len(skill_root) + 1 :]
+    return rel
