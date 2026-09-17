@@ -2688,6 +2688,56 @@ fill them. So:
 gains their removal; task 6 becomes `?library=` (a name), `?categories=` and
 `?tags=`; task 8 is Claude plus Copilot through the dialect seam of §C1.34.
 
+### §C1.36 — Client-side placeholders as prompt arguments: mostly declined, partly kept (2026-09-17)
+
+Dr K's stretch idea: the client-side placeholders are a finite set, so publish
+each one a prompt uses as an optional MCP argument, say in its description that
+it is the client's to fill, and let a client that can fill it do so.
+
+**Declined as arguments, for three reasons.**
+
+1. **The call path is wrong.** Through the native path — a slash command — the
+   client calls `prompts/get` *before* the model sees anything, and the
+   arguments come from what the person typed after the command. The model,
+   which is the only party that might know the selection or the open file, is
+   not in that conversation. Extra optional arguments would sit in the
+   command's signature waiting for a person to type them.
+2. **It can break a real argument.** A client that maps typed words onto
+   arguments in order can put the first word into a `selection` argument that
+   was never meant for it. Adding placeholders to the argument list changes the
+   meaning of a prompt somebody already invokes.
+3. **Through the tool mirror it is redundant.** In tools mode the model does
+   call `get_prompt` itself, and it could fill `selection` or `file` — this
+   session knew its open file and project directory while writing this. But a
+   model that has the selection does not need an argument to use it: it reads
+   `${selection}` in the rendered text and supplies what it has. The argument
+   buys nothing and costs a schema entry per prompt.
+
+**Kept, because it is the same idea where the server actually knows the
+answer.** Two of Claude's placeholders are not client-side at all — they name
+the plugin and the skill, which *this server* is the authority on:
+
+- `${CLAUDE_PLUGIN_ROOT}` becomes the plugin's address base, so a prompt that
+  cites `${CLAUDE_PLUGIN_ROOT}/shared/tokens.md` renders as
+  `skill://<library>/shared/tokens.md` — a URI the reader can actually read.
+- `${CLAUDE_SKILL_DIR}` becomes that skill's own base, `skill://<library>/<folder>/<name>/`.
+
+That is a real fix rather than a gesture: the two placeholders Anthropic
+documents for "resources shared between the plugin's skills" become addresses
+in the address space, and it needs no argument.
+
+**And the cheap half of the idea, kept too:** a prompt whose body leans on
+placeholders no server can fill says so in its own description — "uses the
+editor selection" — as metadata rather than as arguments. A model that has the
+selection then knows it is expected to bring it; a model that does not loses
+nothing. One sentence, no schema, no positional hazard.
+
+**Recorded for later:** MCP does have a principled route — a prompt may return
+an `InputRequiredResult` (SEP-2322, MCP 2026-07-28) asking the client for a
+value before it renders, which FastMCP supports. That is the mechanism this
+idea wants, and it belongs to a future pass, once clients implement it: today
+Claude Code has an open issue for eliciting MCP prompt inputs at all.
+
 ## Closing questions for Dr K
 
 *Superseded by §C1.22 — the name, here and in question 1, is `mcp-kb`. What was
