@@ -180,10 +180,11 @@ def test_claude_publishes_everything_typed_after_the_command(tmp_path):
 
 
 def test_claude_positionals_name_the_declared_arguments(tmp_path):
+    """0-based, as Claude Code documents it: `$0` is the first declared name."""
     path = write(
         tmp_path / "deploy.md",
         "description: d\narguments: app env\n",
-        "Deploy $1 to $2.",
+        "Deploy $0 to $1.",
     )
     prompt = load_prompt(path, "lib")
     assert [a.name for a in prompt.arguments] == ["app", "env", "arguments"]
@@ -194,7 +195,7 @@ def test_claude_positionals_name_the_declared_arguments(tmp_path):
 
 
 def test_claude_positionals_split_the_free_text_when_nothing_is_declared(tmp_path):
-    path = write(tmp_path / "deploy.md", "description: d\n", "Deploy $1 to $2.")
+    path = write(tmp_path / "deploy.md", "description: d\n", "Deploy $0 to $1.")
     prompt = load_prompt(path, "lib")
     assert [a.name for a in prompt.arguments] == ["arguments"]
     assert prompt.render({"arguments": "api prod"}) == "Deploy api to prod."
@@ -202,9 +203,14 @@ def test_claude_positionals_split_the_free_text_when_nothing_is_declared(tmp_pat
 
 
 def test_claude_indexes_arguments_the_same_way(tmp_path):
-    path = write(tmp_path / "deploy.md", "description: d\n", "Deploy $ARGUMENTS[1].")
+    """`$N` is shorthand for `$ARGUMENTS[N]`, so the two forms agree."""
+    path = write(
+        tmp_path / "deploy.md",
+        "description: d\n",
+        "Deploy $ARGUMENTS[0], then $ARGUMENTS[1] and $1.",
+    )
     prompt = load_prompt(path, "lib")
-    assert prompt.render({"arguments": "api prod"}) == "Deploy api."
+    assert prompt.render({"arguments": "api prod"}) == "Deploy api, then prod and prod."
 
 
 def test_claude_appends_the_free_text_the_body_never_names(tmp_path):
