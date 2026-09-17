@@ -21,8 +21,10 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from ..config import Include
+if TYPE_CHECKING:
+    from ..plugins import Globs
 
 MAIN_FILE = "SKILL.md"
 
@@ -57,7 +59,7 @@ SKILL_ROOTS: tuple[str, ...] = (
 CONVENTIONAL_DOTDIRS: frozenset[str] = frozenset({".github", ".claude", ".agents"})
 
 
-def patterns(kind: str, include: Include) -> tuple[str, ...]:
+def patterns(kind: str, include: Globs) -> tuple[str, ...]:
     explicit = getattr(include, kind)
     chosen = tuple(explicit) if explicit is not None else DEFAULTS[kind]
     return tuple(_globstar(p) for p in chosen)
@@ -136,7 +138,7 @@ def inside(path: Path, base: Path) -> Path | None:
     return target if target.is_relative_to(base) else None
 
 
-def files(root: Path, kind: str, include: Include) -> list[Path]:
+def files(root: Path, kind: str, include: Globs) -> list[Path]:
     """Every regular file matching the kind's globs, inside root, sorted."""
     base = root.resolve()
     found = {
@@ -148,7 +150,7 @@ def files(root: Path, kind: str, include: Include) -> list[Path]:
     return sorted(found)
 
 
-def skill_dirs(root: Path, include: Include) -> list[Path]:
+def skill_dirs(root: Path, include: Globs) -> list[Path]:
     """The skill directories a source's ``include.skills`` globs select.
 
     A glob may name either the ``SKILL.md`` or the *directory*, because both
@@ -182,12 +184,12 @@ def skill_dirs(root: Path, include: Include) -> list[Path]:
     return sorted(found)
 
 
-def prompt_files(root: Path, include: Include) -> list[Path]:
+def prompt_files(root: Path, include: Globs) -> list[Path]:
     return files(root, "prompts", include)
 
 
 def library_files(
-    root: Path, include: Include, skill_dirs: Sequence[Path]
+    root: Path, include: Globs, skill_dirs: Sequence[Path]
 ) -> list[str]:
     """Library-level files as root-relative posix paths, never one inside a skill."""
     base = root.resolve()

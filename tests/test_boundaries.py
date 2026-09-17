@@ -1,11 +1,11 @@
-"""``catalogue/`` imports no FastMCP -- proved with the real thing blocked.
+"""``catalogue/`` and ``plugins/`` import no FastMCP -- proved with it blocked.
 
-``AGENTS.md`` promises ``catalogue/`` is the FastMCP-free layer: everything a
-client-facing concept needs before it becomes a served resource, tool or
-prompt, with nothing here reaching for the protocol library itself. The
-promise is worth nothing unproved, so this test blocks ``fastmcp`` in a fresh
-subprocess and imports every ``catalogue`` module directly -- found by walking
-the package, so a module added later is covered without being listed.
+``AGENTS.md`` promises these are the FastMCP-free layers: ``plugins/`` resolves
+what the config declares and what a marketplace publishes, ``catalogue/`` turns
+that into what a client is served, and neither reaches for the protocol library
+itself. The promise is worth nothing unproved, so this test blocks ``fastmcp``
+in a fresh subprocess and imports every module of both directly -- found by
+walking the packages, so a module added later is covered without being listed.
 
 ``kubed.mcp_kb``'s own ``__init__.py`` imports ``.server``, which imports
 ``fastmcp`` -- by design, the server needs it, and that is not what is under
@@ -31,6 +31,16 @@ REPO = Path(__file__).parent.parent
 CATALOGUE_MODULES = tuple(
     f"kubed.mcp_kb.catalogue.{module.name}"
     for module in pkgutil.iter_modules([str(REPO / "kubed" / "mcp_kb" / "catalogue")])
+)
+
+PLUGINS_MODULES = (
+    "kubed.mcp_kb.plugins",
+    *(
+        f"kubed.mcp_kb.plugins.{module.name}"
+        for module in pkgutil.iter_modules(
+            [str(REPO / "kubed" / "mcp_kb" / "plugins")]
+        )
+    ),
 )
 
 SCRIPT = textwrap.dedent(
@@ -61,17 +71,30 @@ SCRIPT = textwrap.dedent(
 
     print("ok")
     """
-).format(
-    repo=str(REPO),
-    mcp_kb=str(REPO / "kubed" / "mcp_kb"),
-    modules=CATALOGUE_MODULES,
 )
+
+
+def imports_clean(modules: tuple[str, ...]) -> subprocess.CompletedProcess:
+    """Import every module named, in a subprocess where fastmcp cannot load."""
+    script = SCRIPT.format(
+        repo=str(REPO), mcp_kb=str(REPO / "kubed" / "mcp_kb"), modules=modules
+    )
+    return subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True
+    )
 
 
 def test_every_catalogue_module_is_checked():
     """The walk finds the modules, the refresh loop among them."""
     assert "kubed.mcp_kb.catalogue.refresh" in CATALOGUE_MODULES
     assert len(CATALOGUE_MODULES) >= 7
+
+
+def test_every_plugins_module_is_checked():
+    """The walk finds the resolution layer, the marketplace reader among it."""
+    assert "kubed.mcp_kb.plugins.marketplace" in PLUGINS_MODULES
+    assert "kubed.mcp_kb.plugins" in PLUGINS_MODULES
+    assert len(PLUGINS_MODULES) >= 5
 
 
 def test_catalogue_imports_no_fastmcp():
@@ -82,8 +105,18 @@ def test_catalogue_imports_no_fastmcp():
     ``mcp/prompts.py`` -- which imports ``fastmcp`` itself -- and this test
     failed with exactly the blocked-import error.
     """
-    result = subprocess.run(
-        [sys.executable, "-c", SCRIPT], capture_output=True, text=True
-    )
+    result = imports_clean(CATALOGUE_MODULES)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_plugins_import_no_fastmcp():
+    """And every module of the resolution layer, which is checked on its own.
+
+    Two promises, two tests: ``plugins/`` is reachable from ``catalogue/`` but
+    not the reverse, and a layer that has to wait for the other one to be
+    fixed before its own boundary can be proved is not a boundary.
+    """
+    result = imports_clean(PLUGINS_MODULES)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "ok"
