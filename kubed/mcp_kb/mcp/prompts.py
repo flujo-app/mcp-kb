@@ -15,17 +15,16 @@ skills is for prompts.
 
 from __future__ import annotations
 
+import functools
 import logging
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import NotFoundError, ToolError, ValidationError
 from fastmcp.prompts import Prompt, PromptArgument
-from fastmcp.server.dependencies import get_context
 from fastmcp.server.providers.base import Provider
 from fastmcp.server.transforms import PromptsAsTools
-from fastmcp.server.transforms.prompts_as_tools import _format_prompt_result
 from fastmcp.tools.base import Tool
 from fastmcp.utilities.versions import VersionSpec
 from mcp_types import ToolAnnotations
@@ -135,7 +134,7 @@ class ReadOnlyPromptsAsTools(PromptsAsTools):
     advertise a tool as destructive and non-idempotent -- the same mistake the
     resource mirror was corrected for.
 
-    ``get_prompt`` is rebuilt rather than annotated, for its errors. FastMCP's
+    ``get_prompt`` also has its function wrapped, for its errors. FastMCP's
     lets an unknown name escape as a bare exception, which the tool runner logs
     as a traceback at ERROR and reports as "Error calling tool"; and a missing
     argument is logged as a warning about the tool's arguments, which it is
@@ -147,24 +146,13 @@ class ReadOnlyPromptsAsTools(PromptsAsTools):
         return _annotate(super()._make_list_prompts_tool(), "List prompts")
 
     def _make_get_prompt_tool(self) -> Tool:
-        async def get_prompt(
-            name: Annotated[str, "The name of the prompt to get"],
-            arguments: Annotated[
-                dict[str, Any] | None,
-                "Optional arguments for the prompt",
-            ] = None,
-        ) -> str:
-            """Get a prompt by name with optional arguments.
+        generated = super()._make_get_prompt_tool()
+        render = generated.fn
 
-            Returns the rendered prompt as JSON with a messages array.
-            Arguments should be provided as a dict mapping argument names
-            to values.
-            """
-            ctx = get_context()
+        @functools.wraps(render)
+        async def get_prompt(name: str, arguments: dict | None = None) -> str:
             try:
-                result = await ctx.fastmcp.render_prompt(
-                    name, arguments=arguments or {}
-                )
+                return await render(name, arguments)
             except NotFoundError:
                 raise ToolError(
                     f"Unknown prompt: {name!r}. Call list_prompts() for the prompts"
@@ -173,9 +161,11 @@ class ReadOnlyPromptsAsTools(PromptsAsTools):
                 ) from None
             except ValidationError as exc:
                 raise ToolError(str(exc), log_level=logging.DEBUG) from None
-            return _format_prompt_result(result)
 
-        return _annotate(Tool.from_function(fn=get_prompt), "Get a prompt")
+        # FastMCP's tool, schema and all, with only the function it calls
+        # wrapped: its name, arguments and success output stay FastMCP's.
+        wrapped = generated.model_copy(update={"fn": get_prompt})
+        return _annotate(wrapped, "Get a prompt")
 
 
 def _annotate(tool: Tool, title: str) -> Tool:
