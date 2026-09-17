@@ -1774,6 +1774,31 @@ nothing else is.
 
 **Tasks.**
 
+0. **What the last reviews of #18 found**, first, because two of them are about
+   what a client can reach:
+   - `POST /reindex` answers a failure with `str(exc)`, from an unauthenticated
+     endpoint — an internal path or a remote URL can ride out in it. The caller
+     gets a fixed error; the exception goes to the log.
+   - A scope that names a folder does not reach pack-level files: `_admits`
+     checks only that the library holds a matching skill, so a client scoped to
+     one folder can read another folder's pack material by guessing its URI.
+     Task 2 redefines folder scope around path prefixes; the pack-file check is
+     written against that definition, with a test.
+   - `catalogue/index.py` and `catalogue/snapshot.py` import `mcp.prompts`, which
+     imports FastMCP, so `catalogue/` is not the FastMCP-free layer `AGENTS.md`
+     says it is. The prompt row and loader move into `catalogue/`; `mcp/prompts.py`
+     keeps only the provider and the tool transform. A test imports `catalogue`
+     with FastMCP blocked.
+   - The README and the CHANGELOG call every git scheme a shallow clone;
+     `git+file://` is cloned whole, because libgit2's local transport refuses a
+     shallow fetch.
+   - The refresh loop ticks every 5 s while `refresh:` accepts `1s`, so a short
+     interval can be late by a tick. The loop sleeps no longer than the shortest
+     configured interval.
+   - `.github/instructions/python.instructions.md` told reviewers `tests/` is not
+     linted, and the package docstring still said "Serve Agent Skills over MCP".
+     Both corrected in this task's first commit.
+
 1. **Rename `pack` → `library`** throughout `kubed/mcp_kb/**`, tests, `AGENTS.md`,
    `.github/copilot-instructions.md`, the README and the wiki's hand-written
    pages. Delete `X-Skill-Pack` from `mcp/request.py` and every document. Bump

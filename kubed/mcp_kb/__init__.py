@@ -1,4 +1,4 @@
-"""Serve Agent Skills over MCP."""
+"""An MCP knowledge base: skills, prompts and agent material in one catalogue."""
 
 from .catalogue.skills import PackResources, Skill, SkillIndex, load_skills
 from .catalogue.snapshot import Snapshot
