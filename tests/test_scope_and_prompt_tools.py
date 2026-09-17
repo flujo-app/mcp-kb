@@ -212,9 +212,21 @@ REFUSED = [
         " folder. It has no folders.",
     ),
     (
-        "?library=observe&tags=ui",
-        "The scope library='observe' tags='ui' names things that exist, but no"
-        " skill, prompt or file is in all of them at once.",
+        "?library=observe&tags=ui,design",
+        "The scope names tags that exist, but nothing in library 'observe'"
+        " carries any of them: design, ui.",
+    ),
+    (
+        # notes serves a prompt and no skills: up, with no folders to name.
+        "?library=notes/standup",
+        "The scope names folder 'standup' of library 'notes', which has no such"
+        " folder. It has no folders.",
+    ),
+    (
+        # loki is a skill, but not one these tags admit: not confirmed as one.
+        "?library=observe/loki&tags=ui",
+        "The scope names folder 'loki' of library 'observe', which has no such"
+        " folder.",
     ),
 ]
 

@@ -60,12 +60,13 @@ def what_is_wrong(scope: Scope, config: Config, snapshot: Snapshot) -> str | Non
             f" are: {', '.join(sorted(tags))}."
         )
 
-    in_library = [
-        s for s in snapshot.index.visible() if s.library == scope.library_name
-    ]
-    if scope.folder and in_library:
+    # Checked against what the scope's own tags admit, so the answer never
+    # confirms a skill the scope could not see.
+    tagged = Scope(library=scope.library_name, tags=scope.tags)
+    in_library = snapshot.index.visible(tagged)
+    if scope.folder and _up(snapshot, scope.library_name):
         address = scope.library
-        if snapshot.index.get(address) is not None:
+        if snapshot.index.get(address, tagged) is not None:
             return (
                 f"The scope names {address!r}, which is a skill, not a folder."
                 " A scope is a library or a folder of one."
@@ -85,18 +86,30 @@ def what_is_wrong(scope: Scope, config: Config, snapshot: Snapshot) -> str | Non
                 )
             )
 
-    if scope.library and not _serving(snapshot, Scope(library=scope.library)):
+    if scope.library and not _up(snapshot, scope.library_name):
         # Named correctly and serving nothing right now: see the module note.
         return None
     if not scope.library and not _serving(snapshot, EVERYTHING):
         return None
     if not _serving(snapshot, scope):
+        where = f"library {scope.library!r}" if scope.library else "any library"
         return (
-            f"The scope library={scope.library!r} tags="
-            f"{','.join(sorted(scope.tags))!r} names things that exist, but no"
-            " skill, prompt or file is in all of them at once."
+            f"The scope names tags that exist, but nothing in {where} carries"
+            f" any of them: {', '.join(sorted(scope.tags))}."
         )
     return None
+
+
+def _up(snapshot: Snapshot, library: str) -> bool:
+    """Whether any source of ``library`` is serving, however little.
+
+    Not whether it serves skills: a library of prompts or files is up and has
+    no folders, and a folder scope on it names nothing.
+    """
+    return any(
+        entry.get("library") == library and entry.get("status") in ("ok", "stale")
+        for entry in snapshot.status.values()
+    )
 
 
 def _declared_tags(config: Config) -> set[str]:

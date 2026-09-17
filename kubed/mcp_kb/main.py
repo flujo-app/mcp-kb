@@ -95,6 +95,9 @@ def configure_logging(level: str) -> None:
 
     uvicorn's access log is the exception: a line per MCP call and per probe
     is traffic, not what the server did, so it is written only at ``DEBUG``.
+    Its own level is what holds it back -- a record that propagates is not
+    measured against the root's level again -- so it is never set below the
+    level asked for.
     """
     handler = logging.StreamHandler(sys.stderr)
     formatter = logging.Formatter(
@@ -111,7 +114,9 @@ def configure_logging(level: str) -> None:
         logger.propagate = True
         logger.setLevel(logging.NOTSET)
     if level != "DEBUG":
-        logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+        logging.getLogger("uvicorn.access").setLevel(
+            max(logging.WARNING, logging.getLevelName(level))
+        )
 
 
 def main(argv: list[str] | None = None) -> None:

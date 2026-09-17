@@ -69,6 +69,9 @@ def test_one_level_and_one_handler_reach_fastmcp_and_uvicorn_too():
         assert logging.getLogger("fastmcp.server").isEnabledFor(logging.WARNING)
         assert not logging.getLogger("uvicorn.access").isEnabledFor(logging.INFO)
 
+        configure_logging("ERROR")
+        assert not logging.getLogger("uvicorn.access").isEnabledFor(logging.WARNING)
+
         configure_logging("DEBUG")
         assert logging.getLogger("uvicorn.access").isEnabledFor(logging.INFO)
     finally:

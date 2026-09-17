@@ -36,7 +36,7 @@ from ..config import Config
 from .prompts import FilePrompt
 from .skills import Skill
 
-INDEX_VERSION = 3
+INDEX_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -119,6 +119,10 @@ class SourceRecord:
     prompts: tuple[PromptRow, ...]
     files: tuple[str, ...]
     skill_dirs: tuple[str, ...]
+    # What the harvest found and could not load -- a prompt file that does not
+    # parse -- as ``{"path", "reason"}`` rows. Kept on the record because the
+    # harvest is the only pass that sees such a file: its rows never name it.
+    skipped: tuple[dict[str, str], ...] = ()
 
 
 def _source_record_from_dict(raw: dict) -> SourceRecord:
@@ -138,6 +142,7 @@ def _source_record_from_dict(raw: dict) -> SourceRecord:
         ),
         files=tuple(raw["files"]),
         skill_dirs=tuple(raw["skill_dirs"]),
+        skipped=tuple(raw["skipped"]),
     )
 
 

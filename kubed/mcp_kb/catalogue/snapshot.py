@@ -115,11 +115,13 @@ def build_source(
             dirs, library=lib.name, source=source.name, root=root, tags=tags
         )
         files = harvest.library_files(root, source.include, dirs)
+        unloadable: list[tuple[Path, str]] = []
         prompts = load_prompts(
             harvest.prompt_files(root, source.include),
             library=lib.name,
             source=source.name,
             tags=tags,
+            skipped=unloadable,
         )
     except AccessRefused as exc:
         if refusal_is_fatal:
@@ -140,6 +142,10 @@ def build_source(
         prompts=tuple(PromptRow.of(p.path, p) for p in prompts),
         files=tuple(files),
         skill_dirs=tuple(str(d) for d in dirs),
+        skipped=tuple(
+            {"path": _relative(path, root), "reason": _unrooted(reason, root)}
+            for path, reason in unloadable
+        ),
     )
 
 
@@ -200,16 +206,26 @@ def build_snapshot(
             continue
         root = Path(record.root)
         lib = config.library(record.library)
+        vanished: list[tuple[Path, str]] = []
         loaded = load_prompts(
             [Path(row.path) for row in record.prompts],
             library=record.library,
             source=record.name,
             tags=[*lib.tags, *source.tags],
             live=is_live(source),
+            skipped=vanished,
         )
         own, files, loaded, skipped = _admit(
             record, [row.to_skill() for row in record.skills], loaded
         )
+        skipped = [
+            *record.skipped,
+            *(
+                {"path": _relative(p, root), "reason": _unrooted(r, root)}
+                for p, r in vanished
+            ),
+            *skipped,
+        ]
         conflict = claims.conflict(record, own, files, loaded)
         if conflict is not None:
             status[source.name] = {"status": "failed", "error": conflict}
@@ -377,6 +393,17 @@ def _admit(
             continue
         names[prompt.name] = prompt
     return list(served.values()), files, list(names.values()), skipped
+
+
+def _unrooted(text: str, root: Path) -> str:
+    """``text`` with the source's root taken out of any path it quotes.
+
+    A parse or read error names the file it failed on, absolutely; in ``/health``
+    that would be the cache path ``_relative`` keeps out of every other row.
+    """
+    for base in (root.resolve(), root):
+        text = text.replace(f"{base}/", "")
+    return text
 
 
 def _relative(path: Path, root: Path) -> str:

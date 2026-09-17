@@ -847,3 +847,31 @@ def test_a_skipped_path_is_logged_when_first_skipped_and_not_on_every_rebuild(
     caplog.clear()
     knowledge_base.refresh(force=True)
     assert [m for _, m in _source_lines(caplog) if "skips" in m] == []
+
+
+@pytest.mark.unit
+def test_a_prompt_that_does_not_parse_is_skipped_once_in_the_log_and_in_health(
+    tmp_path, caplog
+):
+    """It is a skip like any other: listed under the source, logged when first
+    seen and not on every rebuild, and named by its path in the source."""
+    caplog.set_level(logging.INFO)
+    root = tmp_path / "src"
+    (root / "prompts").mkdir(parents=True)
+    (root / "prompts" / "good.md").write_text("---\ndescription: Good.\n---\nGo.\n")
+    (root / "prompts" / "bad.md").write_text("no frontmatter at all\n")
+    config = Config.model_validate(
+        {"sources": [{"name": "lib", "url": f"file://{root}"}]}
+    )
+    knowledge_base = KnowledgeBase(config, tmp_path / "cache")
+
+    skipped = knowledge_base.status["lib"]["skipped"]
+    assert [row["path"] for row in skipped] == ["prompts/bad.md"]
+    assert str(tmp_path) not in skipped[0]["reason"]
+    assert [p.name for p in knowledge_base.prompts] == ["lib_good"]
+    everything = [r.getMessage() for r in caplog.records]
+    assert sum("bad.md" in m for m in everything) == 1
+
+    caplog.clear()
+    knowledge_base.refresh(force=True)
+    assert not [r for r in caplog.records if "bad.md" in r.getMessage()]
