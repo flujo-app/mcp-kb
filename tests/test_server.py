@@ -164,6 +164,7 @@ async def test_read_resource_explains_an_unknown_uri(skills_dir, caplog):
     """An error result, so a caller branching on isError sees a miss -- with
     what to do next in its message, and no traceback in the server's log."""
     server = KnowledgeBase(make_config(skills_dir), skills_dir / "_cache")
+    caplog.clear()
     with caplog.at_level(logging.INFO):
         async with Client(server.mcp) as client:
             result = await client.call_tool(

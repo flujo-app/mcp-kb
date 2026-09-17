@@ -51,6 +51,7 @@ from .catalogue.snapshot import (
     Snapshot,
     build_snapshot,
     build_source,
+    log_changes,
     record_from_index,
 )
 from .catalogue.uris import Catalogue
@@ -111,6 +112,7 @@ class KnowledgeBase:
 
         self._records = self._cold_start()
         self.snapshot: Snapshot = build_snapshot(config, self._records, generation=0)
+        log_changes({}, self.snapshot.status)
         self._write_index()
 
         ttl = config.min_refresh_seconds
@@ -259,6 +261,7 @@ class KnowledgeBase:
                 self.config, records, generation=self.snapshot.generation + 1
             )
             self._records = records
+            log_changes(self.snapshot.status, snapshot.status)
             self.snapshot = snapshot
             # Best-effort and therefore last: a raise here must not leave
             # _records advanced while snapshot still holds the old generation.
@@ -286,8 +289,21 @@ class KnowledgeBase:
     def run(
         self, transport: str = "http", host: str = "0.0.0.0", port: int = 8000
     ) -> None:
-        """Serve on ``transport``, blocking until the process is stopped."""
+        """Serve on ``transport``, blocking until the process is stopped.
+
+        FastMCP's banner is a box of box-drawing characters, which reads well in
+        a terminal and as noise in a log collector; its own "Starting MCP
+        server" line says the same. uvicorn is given no log config of its own,
+        so its lines go through the handler ``main.configure_logging``
+        installed and read like the rest.
+        """
         if transport == "stdio":
-            self.mcp.run(transport="stdio")
+            self.mcp.run(transport="stdio", show_banner=False)
         else:
-            self.mcp.run(transport="http", host=host, port=port)
+            self.mcp.run(
+                transport="http",
+                host=host,
+                port=port,
+                show_banner=False,
+                uvicorn_config={"log_config": None},
+            )

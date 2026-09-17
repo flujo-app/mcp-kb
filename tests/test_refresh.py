@@ -770,3 +770,80 @@ async def test_a_failed_background_pass_logs_no_credential(
     assert "refresh pass failed" in caplog.text
     assert "RuntimeError" in caplog.text
     assert "s3cr3t-loop-token" not in caplog.text
+
+
+# -- what the log says ----------------------------------------------------------
+
+
+def _source_lines(caplog):
+    return [
+        (r.levelname, r.getMessage())
+        for r in caplog.records
+        if r.name == "kubed.mcp_kb.catalogue.snapshot"
+    ]
+
+
+@pytest.mark.unit
+def test_a_source_going_stale_and_recovering_is_logged_once_each_way(
+    skills_dir, cache, monkeypatch, caplog
+):
+    """/health says what a source is; the log says when that changed, once."""
+    caplog.set_level(logging.INFO)
+    knowledge_base = KnowledgeBase(make_config(skills_dir), cache)
+    boot = _source_lines(caplog)
+    assert ("INFO", "source flatsource is serving 2 skills, 0 prompts and 0 files") in boot
+    assert all(level == "INFO" for level, _ in boot)
+
+    caplog.clear()
+    _breaking_materialise(monkeypatch, "flatsource")
+    knowledge_base.refresh(force=True, only=["flatsource"])
+    knowledge_base.refresh(force=True, only=["flatsource"])
+    assert _source_lines(caplog) == [
+        (
+            "WARNING",
+            "source flatsource is stale, still serving its last harvest:"
+            " flatsource: the remote is unreachable",
+        )
+    ]
+
+    caplog.clear()
+    monkeypatch.undo()
+    knowledge_base.refresh(only=["flatsource"])
+    assert _source_lines(caplog) == [
+        ("INFO", "source flatsource is serving 2 skills, 0 prompts and 0 files")
+    ]
+
+
+@pytest.mark.unit
+def test_a_source_failing_at_boot_is_logged_as_an_error(
+    skills_dir, cache, monkeypatch, caplog
+):
+    caplog.set_level(logging.INFO)
+    _breaking_materialise(monkeypatch, "flatsource")
+    KnowledgeBase(make_config(skills_dir), cache)
+    assert (
+        "ERROR",
+        "source flatsource failed: flatsource: the remote is unreachable",
+    ) in _source_lines(caplog)
+
+
+@pytest.mark.unit
+def test_a_skipped_path_is_logged_when_first_skipped_and_not_on_every_rebuild(
+    tmp_path, caplog
+):
+    caplog.set_level(logging.INFO)
+    root = tmp_path / "src"
+    (root / "skills" / "bad").mkdir(parents=True)
+    (root / "skills" / "bad" / "SKILL.md").write_text(
+        "---\nname: Bad\ndescription: x\n---\nbody\n"
+    )
+    config = Config.model_validate(
+        {"sources": [{"name": "lib", "url": f"file://{root}"}]}
+    )
+    knowledge_base = KnowledgeBase(config, tmp_path / "cache")
+    skips = [m for level, m in _source_lines(caplog) if "skips" in m]
+    assert len(skips) == 1 and skips[0].startswith("source lib skips skills/bad: ")
+
+    caplog.clear()
+    knowledge_base.refresh(force=True)
+    assert [m for _, m in _source_lines(caplog) if "skips" in m] == []

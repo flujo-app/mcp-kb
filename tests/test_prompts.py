@@ -141,6 +141,7 @@ async def test_a_missing_required_argument_is_refused(skills_dir, prompts_dir, c
     from mcp_types import INVALID_PARAMS
 
     server = KnowledgeBase(make_config(skills_dir, prompts_dir), skills_dir / "_cache")
+    caplog.clear()
     with caplog.at_level(logging.INFO):
         async with Client(server.mcp) as client:
             with pytest.raises(MCPError) as caught:

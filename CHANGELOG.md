@@ -62,6 +62,8 @@ at start into a cache volume, and every agent reads them from one address space.
 
 - **`GET /health`** reports the generation, the libraries, the skill and prompt counts and each source's own status — `ok`, `stale` or `failed`, with anything it ships but cannot serve listed under `skipped` — and answers 200 whenever the process is serving, so one unreachable remote never takes a working catalogue down.
 
+- **A log that says what the catalogue did**: one line when a source comes up, fails, goes stale, recovers or skips something, and nothing while it stays as it was. `LOG_LEVEL` sets one level and one line format for everything the process writes.
+
 - **`GET /openapi.yaml`** publishes the HTTP surface as OpenAPI 3.1, generated from the code that serves it.
 
 - **The `kubed/mcp-kb` image** is the whole artifact: two mounts, a config file and a writable cache. The [wiki](https://github.com/kubed-io/mcp-kb/wiki) is the manual.

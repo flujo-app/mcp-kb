@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 from .config import ConfigError, load_config, schema
@@ -21,6 +23,11 @@ from .server import KnowledgeBase
 
 DEFAULT_CONFIG = Path("/etc/mcp-kb/config.yaml")
 DEFAULT_CACHE_DIR = Path("/var/cache/mcp-kb")
+LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+# The loggers that arrive with a handler of their own. Each is emptied and made
+# to propagate, so one line format reaches the collector whoever wrote it.
+THIRD_PARTY_LOGGERS = ("fastmcp", "mcp", "uvicorn", "uvicorn.error", "uvicorn.access")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -67,7 +74,43 @@ def build_parser() -> argparse.ArgumentParser:
         default=int(os.environ.get("PORT", "8000")),
         help="port for http transport (env: PORT)",
     )
+    parser.add_argument(
+        "--log-level",
+        type=str.upper,
+        default=os.environ.get("LOG_LEVEL", "INFO"),
+        choices=LOG_LEVELS,
+        help="the least severe log line written, for every logger (env: LOG_LEVEL)",
+    )
     return parser
+
+
+def configure_logging(level: str) -> None:
+    """One handler on stderr, one line format, one level, for the whole process.
+
+    FastMCP installs a Rich handler of its own on import and uvicorn installs
+    its own on start, each with its own format and level, so ``LOG_LEVEL`` set
+    only on this package would leave most of what the process writes untouched.
+    Each is emptied and sent to the root handler instead.
+
+    uvicorn's access log is the exception: a line per MCP call and per probe
+    is traffic, not what the server did, so it is written only at ``DEBUG``.
+    """
+    handler = logging.StreamHandler(sys.stderr)
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s: %(message)s", "%Y-%m-%dT%H:%M:%SZ"
+    )
+    formatter.converter = time.gmtime
+    handler.setFormatter(formatter)
+    root = logging.getLogger()
+    root.handlers[:] = [handler]
+    root.setLevel(level)
+    for name in THIRD_PARTY_LOGGERS:
+        logger = logging.getLogger(name)
+        logger.handlers.clear()
+        logger.propagate = True
+        logger.setLevel(logging.NOTSET)
+    if level != "DEBUG":
+        logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -76,6 +119,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "schema":
         print(json.dumps(schema(), indent=2))
         return
+    configure_logging(args.log_level)
     try:
         config = load_config(args.config)
     except ConfigError as exc:

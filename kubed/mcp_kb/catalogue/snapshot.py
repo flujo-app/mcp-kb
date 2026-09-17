@@ -38,7 +38,7 @@ from . import harvest
 from .index import PromptRow, SkillRow, SourceRecord, now
 from .prompts import FilePrompt, load_prompts
 from .skills import LibraryFiles, Skill, SkillIndex, load_skills, naming_problem
-from .uris import INDEX, LIBRARY_FILES, SCHEME, Catalogue, uri_for
+from .uris import INDEX, LIBRARY_FILES, SCHEME, Catalogue, _count, uri_for
 
 log = logging.getLogger(__name__)
 
@@ -247,6 +247,50 @@ def build_snapshot(
     )
 
 
+def log_changes(before: dict[str, dict], after: dict[str, dict]) -> None:
+    """One log line for each thing a new snapshot changed about a source.
+
+    ``/health`` is where the state of every source can be read, and nothing reads
+    it unprompted; the log is where a change of that state is *noticed*. So a
+    source that comes up, fails, goes stale or recovers says so once, with its
+    reason, when it happens -- at boot, where ``before`` is empty, and on every
+    rebuild after -- and says nothing while it stays as it was.
+
+    The same goes for what a source skips: a path is logged when it is first
+    left out, not again on every rebuild that leaves it out still.
+    """
+    for name, now_ in after.items():
+        was = before.get(name, {})
+        state, error = now_.get("status"), now_.get("error")
+        if (state, error) != (was.get("status"), was.get("error")):
+            if state == "failed":
+                log.error("source %s failed: %s", name, error)
+            elif state == "stale":
+                log.warning(
+                    "source %s is stale, still serving its last harvest: %s",
+                    name,
+                    error,
+                )
+            else:
+                counts = [
+                    _count(now_.get(key, 0), noun)
+                    for key, noun in (
+                        ("skills", "skill"),
+                        ("prompts", "prompt"),
+                        ("files", "file"),
+                    )
+                ]
+                log.info(
+                    "source %s is serving %s, %s and %s", name, *counts
+                )
+        known = {row["path"] for row in was.get("skipped", ())}
+        for row in now_.get("skipped", ()):
+            if row["path"] not in known:
+                log.warning(
+                    "source %s skips %s: %s", name, row["path"], row["reason"]
+                )
+
+
 def _admit(
     record: SourceRecord, skills: list[Skill], prompts: list[FilePrompt]
 ) -> tuple[list[Skill], list[str], list[FilePrompt], list[dict[str, str]]]:
@@ -276,7 +320,8 @@ def _admit(
     skipped: list[dict[str, str]] = []
 
     def skip(path: str, reason: str) -> None:
-        log.warning("source %s: skipping %s: %s", record.name, path, reason)
+        # Not logged here: a snapshot is rebuilt on every refresh, and this
+        # would repeat the same line each time. ``log_changes`` says it once.
         skipped.append({"path": path, "reason": reason})
 
     root = Path(record.root or "")
