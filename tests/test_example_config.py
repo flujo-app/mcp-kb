@@ -1,11 +1,18 @@
 """examples/config.yaml, the shape the image actually ships, against local git
 repositories standing in for the four upstream libraries.
 
-Pins the marketplace-library shape and guards the ``shared/**/*``/``workflows/**/*``
-fix for the trailing-``**``-is-directories-only glob bug that would otherwise
-only be caught by hand against the real 29-file penpot library. Local rather than
-against github.com: the ``ref`` in the shipped config is a real upstream pin,
-which a unit test must not depend on staying reachable or unchanged.
+Each fixture repository publishes a ``.claude-plugin/marketplace.json`` the way
+its upstream does -- grafana's entries name their own ``skills``, penpot's
+plugin ships a ``plugin.json`` whose ``commands`` are what becomes a prompt,
+superpowers' entry carries nothing but the keywords in its manifest -- so the
+shipped config is exercised through marketplace entries, manifests and
+commands-as-prompts end to end.
+
+It also guards the ``shared/**/*``/``workflows/**/*`` fix for the
+trailing-``**``-is-directories-only glob bug that would otherwise only be caught
+by hand against the real 29-file penpot library. Local rather than against
+github.com: the ``ref`` in the shipped config is a real upstream pin, which a
+unit test must not depend on staying reachable or unchanged.
 """
 
 import json
@@ -50,46 +57,100 @@ def _skill(root: Path, *parts: str) -> None:
     path.write_text(f"---\nname: {path.parent.name}\ndescription: d\n---\nBody.\n")
 
 
-def _marketplace(root: Path, name: str) -> None:
-    """One entry at the repository root, its commands declared and empty.
+def _write(root: Path, relative: str, text: str) -> None:
+    path = root / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
 
-    The entry says what it ships, as a real catalog does: `commands: []`
-    keeps whatever the repository keeps under `prompts/` out of the
-    catalogue, because a marketplace plugin is never edited here.
+
+def _catalog(root: Path, name: str, *entries: dict) -> None:
+    """The repository's ``marketplace.json``, with the entries it publishes."""
+    _write(
+        root,
+        ".claude-plugin/marketplace.json",
+        json.dumps({"name": name, "plugins": list(entries)}),
+    )
+
+
+def _manifest(root: Path, **fields) -> None:
+    """The plugin's own ``plugin.json``: what it says it ships."""
+    _write(root, ".claude-plugin/plugin.json", json.dumps(fields))
+
+
+def _n8n(root: Path) -> None:
+    _skill(root, "skills", "s")
+    _catalog(
+        root,
+        "n8n",
+        {"name": "n8n", "source": "./", "category": "automation", "tags": ["n8n"]},
+    )
+
+
+def _grafana(root: Path) -> None:
+    """Several entries on one repository, each naming the skills it serves.
+
+    grafana/skills really does publish seven that way, and `skills/template` is
+    the one its catalog leaves out -- which is how an entry's own list keeps a
+    repository's scaffolding out of the catalogue without a glob written here.
     """
-    catalog = root / ".claude-plugin" / "marketplace.json"
-    catalog.parent.mkdir(parents=True, exist_ok=True)
-    catalog.write_text(
-        json.dumps(
-            {
-                "name": name,
-                "plugins": [{"name": name, "source": "./", "commands": []}],
-            }
-        )
+    _skill(root, "skills", "g", "s")
+    _skill(root, "skills", "h", "t")
+    _skill(root, "skills", "template")
+    _catalog(
+        root,
+        "grafana",
+        {
+            "name": "grafana-lgtm",
+            "source": "./",
+            "skills": ["./skills/g"],
+            "category": "observability",
+            "tags": ["lgtm"],
+        },
+        {
+            "name": "grafana-cloud",
+            "source": "./",
+            "skills": ["./skills/h"],
+            "category": "observability",
+            "tags": ["cloud"],
+        },
     )
 
 
 def _penpot(root: Path) -> None:
-    """The one library that also references shared material outside its skills."""
+    """The library that ships shared material, and a command in its manifest."""
     _skill(root, "skills", "s")
-    (root / "shared").mkdir()
-    (root / "shared" / "x.md").write_text("shared\n")
-    (root / "workflows").mkdir()
-    (root / "workflows" / "y.md").write_text("workflow\n")
-    # penpot/penpot-ai-kit really does have one of these at its repo root, and
-    # the day an upstream adds frontmatter to a file in it, an entry that names
-    # no commands starts serving whatever is in there.
-    (root / "prompts").mkdir()
-    (root / "prompts" / "brief.md").write_text(
-        "---\ndescription: Not ours to serve.\n---\nDo the thing.\n"
+    _write(root, "shared/x.md", "shared\n")
+    _write(root, "workflows/y.md", "workflow\n")
+    # penpot/penpot-ai-kit keeps its commands under prompts/ and declares each
+    # one in its manifest. The manifest is what decides: a sibling nobody
+    # declared stays out, where the conventional prompt globs would take it.
+    _write(
+        root,
+        "prompts/brief.md",
+        "---\ndescription: Brief a design.\nargument-hint: [board]\n---\n"
+        "Brief the board $ARGUMENTS.\n",
+    )
+    _write(root, "prompts/notes.md", "---\ndescription: Not ours to serve.\n---\nx\n")
+    _manifest(root, name="penpot", commands=["./prompts/brief.md"])
+    _catalog(
+        root,
+        "penpot",
+        {"name": "penpot", "source": "./", "category": "design", "tags": ["penpot"]},
     )
 
 
+def _superpowers(root: Path) -> None:
+    """An entry that says nothing about itself: its manifest carries the words."""
+    _skill(root, "skills", "s")
+    _manifest(root, name="superpowers", keywords=["tdd", "planning"])
+    _catalog(root, "superpowers", {"name": "superpowers", "source": "./"})
+
+
 BUILDERS = {
-    "n8n": lambda root: _skill(root, "skills", "s"),
-    "grafana": lambda root: _skill(root, "skills", "g", "s"),
+    "n8n": _n8n,
+    "grafana": _grafana,
     "penpot": _penpot,
-    "superpowers": lambda root: _skill(root, "skills", "s"),
+    "superpowers": _superpowers,
 }
 
 
@@ -98,7 +159,6 @@ def _repo(tmp_path: Path, name: str) -> None:
     root = tmp_path / name
     repo = pygit2.init_repository(str(root), bare=False, initial_head="main")
     BUILDERS[name](root)
-    _marketplace(root, name)
     repo.index.add_all()
     repo.index.write()
     repo.create_commit(
@@ -153,6 +213,35 @@ def test_the_shipped_config_loads_the_shipped_shape(tmp_path):
     assert not any("error" in lib for lib in knowledge_base.status["libraries"].values())
 
 
+def test_a_marketplace_entry_brings_its_own_plugin_and_its_own_words(tmp_path):
+    """grafana publishes one plugin per entry, each with the category and tags
+    a scope selects it by -- none of which is written in this config."""
+    knowledge_base = KnowledgeBase(_rewritten_config(tmp_path), tmp_path / "cache")
+
+    assert knowledge_base.status["libraries"]["grafana"]["plugins"] == [
+        "grafana-lgtm@grafana", "grafana-cloud@grafana",
+    ]
+    entry = knowledge_base.status["plugins"]["grafana-lgtm@grafana"]
+    assert (entry["category"], entry["tags"]) == ("observability", ["lgtm"])
+    # An entry that says nothing about itself carries nothing: a manifest is
+    # read for the components a plugin ships, not for the words it is selected
+    # by, so superpowers is reached by ?library=superpowers alone.
+    superpowers = knowledge_base.status["plugins"]["superpowers@superpowers"]
+    assert (superpowers["category"], superpowers["tags"], superpowers["keywords"]) == (
+        None, [], [],
+    )
+
+
+def test_an_entrys_skills_list_is_what_that_plugin_serves(tmp_path):
+    """`skills/template` is in the repository and in no entry, so it is served
+    by neither plugin -- and by nothing else in the library either."""
+    knowledge_base = KnowledgeBase(_rewritten_config(tmp_path), tmp_path / "cache")
+
+    served = {skill.name for skill in knowledge_base.index.visible()}
+    assert "template" not in served
+    assert {"s", "t"} <= served
+
+
 def test_two_plugins_on_one_repository_share_one_clone(tmp_path):
     """penpot's marketplace and the `penpot-shared` plugin name one repository
     at one ref, which is one fetch: one clone under the cache, not two."""
@@ -167,15 +256,19 @@ def test_two_plugins_on_one_repository_share_one_clone(tmp_path):
     assert len(list((tmp_path / "cache" / "git").iterdir())) == 4
 
 
-def test_the_shipped_config_serves_no_prompt_it_did_not_ask_for(tmp_path):
+def test_a_declared_command_is_the_prompt_and_its_neighbour_is_not(tmp_path):
     """Every marketplace here is rooted at a repository root, where the
     conventional prompt globs (`prompts/**/*.md` and the rest) find whatever an
-    upstream happens to keep. An entry's own `commands` is what it serves, and
-    the fixture catalogs say `commands: []` and mean it.
+    upstream happens to keep. A plugin that declares its commands is telling us
+    which of those files it publishes, and that is the one served -- in Claude's
+    dialect, which is the dialect a command is written in.
     """
     knowledge_base = KnowledgeBase(_rewritten_config(tmp_path), tmp_path / "cache")
 
-    assert knowledge_base.prompts == ()
+    prompts = {prompt.name: prompt for prompt in knowledge_base.prompts}
+    assert list(prompts) == ["penpot_brief"]
+    assert prompts["penpot_brief"].dialect == "claude"
+    assert [a.name for a in prompts["penpot_brief"].arguments] == ["arguments"]
 
 
 @pytest.mark.parametrize(("library", "uri"), sorted(SKILL_URI_PER_LIBRARY.items()))

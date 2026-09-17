@@ -289,7 +289,8 @@ repository is the same document, so an editor with
 `# yaml-language-server: $schema=…` at the top of the file completes and
 validates as you type.
 
-For what each source kind does with these fields, see [Sources](Sources).
+What a backend does with these fields is [Sources](Sources); what a plugin
+address and a library select is [Plugins](Plugins).
 
 ## URL scheme → backend
 
@@ -302,7 +303,7 @@ set and no way to override it.
 {note_for("Configuration")}
 ---
 
-{FOOTER_LINKS} · [Sources](Sources)
+{FOOTER_LINKS} · [Sources](Sources) · [Plugins](Plugins)
 """
 
 
