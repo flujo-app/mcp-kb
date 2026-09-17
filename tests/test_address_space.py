@@ -399,7 +399,7 @@ async def test_the_listing_is_exactly_the_index_rows(url):
             "skill://grafana/_index.md",
             "grafana/_index.md",
             "The grafana library — 8 skills in 4 folders:"
-            " grafana-k6, grafana-lgtm, grafana-ops, grafana-plugins/app.",
+            " grafana-k6, grafana-lgtm, grafana-ops, grafana-plugins.",
             md,
         ),
         (
@@ -421,9 +421,9 @@ async def test_the_listing_is_exactly_the_index_rows(url):
             md,
         ),
         (
-            "skill://grafana/grafana-plugins/app/_index.md",
-            "grafana/grafana-plugins/app/_index.md",
-            "1 skill in the grafana-plugins/app folder of the grafana library.",
+            "skill://grafana/grafana-plugins/_index.md",
+            "grafana/grafana-plugins/_index.md",
+            "1 skill in the grafana-plugins folder of the grafana library.",
             md,
         ),
         (
@@ -559,6 +559,27 @@ async def test_a_folder_scope_lists_its_folder_and_its_sources_files(url):
     files = await _read(url, "skill://grafana/_files.md", library=LGTM)
     assert "skill://grafana/shared/style.md" in files
     assert "extra/notes.md" not in files
+
+
+async def test_a_scope_on_a_folder_of_folders_lists_it_and_the_folders_in_it(url):
+    """The listing is the top of the index tree wherever the pin puts that top."""
+    rows = await _rows(url, library="grafana/grafana-plugins")
+    assert [row[0] for row in rows] == [
+        "skill://grafana/grafana-plugins/_index.md",
+        "skill://grafana/grafana-plugins/app/_index.md",
+        "skill://grafana/_files.md",
+    ]
+    assert rows[1][2] == "1 skill in the grafana-plugins/app folder of the grafana library."
+
+
+async def test_every_listed_folder_is_one_an_index_names(url):
+    """Unscoped, the listing's folders are the library index's folders exactly."""
+    listed = {r[0] for r in await _rows(url)} - {"skill://grafana/_index.md"}
+    index = await _read(url, "skill://grafana/_index.md")
+    named = set(re.findall(r"^(skill://\S+/_index\.md):", index, re.M))
+    assert {u for u in listed if u.startswith("skill://grafana/")} - {
+        "skill://grafana/_files.md"
+    } == named
 
 
 async def test_a_folder_scope_cannot_read_another_sources_library_file(url):

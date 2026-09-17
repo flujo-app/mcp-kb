@@ -193,6 +193,30 @@ def _manifest_files(skill: Skill) -> list[Path]:
     ]
 
 
+def _in(skill: Skill, folder: str) -> bool:
+    """Whether ``skill`` sits in ``folder`` or anywhere below it; ``""`` is all."""
+    return not folder or skill.folder == folder or skill.folder.startswith(f"{folder}/")
+
+
+def _under(skills: list[Skill], folder: str) -> int:
+    return sum(1 for s in skills if _in(s, folder))
+
+
+def _children(skills: list[Skill], folder: str) -> dict[str, int]:
+    """The folders directly in ``folder``, each with how many skills are below it.
+
+    One definition for the indexes and the listing both, so a folder the listing
+    offers is always one an index names, and the other way round.
+    """
+    prefix = f"{folder}/" if folder else ""
+    found: dict[str, int] = {}
+    for skill in skills:
+        if skill.folder != folder and _in(skill, folder):
+            child = prefix + skill.folder[len(prefix) :].split("/")[0]
+            found[child] = found.get(child, 0) + 1
+    return dict(sorted(found.items()))
+
+
 def mime_for(path: str) -> str:
     """The media type of a path, defaulting to markdown rather than octets.
 
@@ -274,14 +298,21 @@ class Catalogue:
         for library in sorted(libraries):
             in_library = [s for s in visible if s.library == library]
             index_tags = tuple(sorted({library, "index"}))
-            folders = sorted({s.folder for s in in_library} - {""})
-            summary = _count(len(in_library))
-            if folders:
-                summary += f" in {_count(len(folders), 'folder')}: {', '.join(folders)}"
             rows: list[Entry] = []
-            # Under a folder pin the library index would list that one folder,
-            # which its own row already is.
-            if in_library and not scope.folder:
+            # The listing is the top of the same tree the indexes are: the
+            # library's index and its top-level folders, or -- under a folder
+            # pin -- that folder's index and the folders directly in it. The
+            # library's own row is dropped there, since it would list only the
+            # pinned folder, whose row this already is.
+            here = scope.folder
+            children = _children(in_library, here)
+            if in_library and not here:
+                summary = _count(len(in_library))
+                if children:
+                    summary += (
+                        f" in {_count(len(children), 'folder')}:"
+                        f" {', '.join(children)}"
+                    )
                 rows.append(
                     Entry(
                         index_uri(library),
@@ -291,11 +322,12 @@ class Catalogue:
                         index_tags,
                     )
                 )
+            folders = ([here] if here and in_library else []) + list(children)
             rows += [
                 Entry(
                     index_uri(library, folder),
                     f"{library}/{folder}/{INDEX}",
-                    f"{_count(sum(1 for s in in_library if s.folder == folder))}"
+                    f"{_count(_under(in_library, folder))}"
                     f" in the {folder} folder of the {library} library.",
                     "text/markdown",
                     index_tags,
@@ -473,20 +505,11 @@ class Catalogue:
         unique.
         """
         here = folder or ""
-        prefix = f"{here}/" if here else ""
-        under = [
-            s
-            for s in self._in_library(library, scope)
-            if s.folder == here or s.folder.startswith(prefix)
-        ]
+        under = [s for s in self._in_library(library, scope) if _in(s, here)]
         if not under:
             return None
 
-        below: dict[str, int] = {}
-        for skill in under:
-            if skill.folder != here:
-                child = prefix + skill.folder[len(prefix) :].split("/")[0]
-                below[child] = below.get(child, 0) + 1
+        below = _children(under, here)
         lines = [
             f"{index_uri(library, child)}: {_count(count)}"
             for child, count in sorted(below.items())

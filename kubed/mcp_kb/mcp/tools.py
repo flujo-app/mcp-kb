@@ -66,7 +66,7 @@ def register(mcp: FastMCP, catalogue: Callable[[], Catalogue]) -> set[str]:
 
         Start here. The listing is indexes, not skills: a
         `skill://<library>/_index.md` per library, a
-        `skill://<library>/<folder>/_index.md` per folder of skills, and a
+        `skill://<library>/<folder>/_index.md` per top-level folder, and a
         `skill://<library>/_files.md` for a library that ships files outside
         its skills. Read an index for the URIs inside it, then read a skill's
         `SKILL.md` URI for its instructions.

@@ -71,7 +71,7 @@ perform a specific task. Everything it serves is a `skill://` URI, and reading \
 one is the only operation there is.
 
 Work down the address space, cheapest first. Listing gives you indexes -- one \
-per library (`skill://grafana/_index.md`), one per folder of skills within a \
+per library (`skill://grafana/_index.md`), one per top-level folder of a \
 library (`skill://grafana/grafana-lgtm/_index.md`). Reading an index gives you \
 what is directly in it, as URIs: its folders' indexes, and its skills. \
 Reading a skill's URI (`skill://grafana/grafana-lgtm/loki/SKILL.md`) gives you \
