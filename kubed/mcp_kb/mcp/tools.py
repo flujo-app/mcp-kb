@@ -105,7 +105,7 @@ def register(mcp: FastMCP, catalogue: Callable[[], Catalogue]) -> set[str]:
         body = current.read(uri, scope)
         if body is not None:
             return body
-        hint = current.directory(uri, scope)
+        hint = current.hint(uri, scope)
         if hint is not None:
             return f"No resource at '{uri}'. {hint}"
         return (

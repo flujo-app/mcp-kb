@@ -117,7 +117,7 @@ class NameTheFileToRead(Middleware):
             return await call_next(context)
         except NotFoundError:
             uri = str(context.message.uri)
-            hint = self._catalogue().directory(uri, requested_scope())
+            hint = self._catalogue().hint(uri, requested_scope())
             if hint is None:
                 raise
             raise MCPError(

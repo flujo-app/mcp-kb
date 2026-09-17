@@ -29,8 +29,8 @@ sources (git · WebDAV · folders)  ──▶  mcp-kb  ──▶  agents (resour
 Everything served is a `skill://` URI, and reading one is the only operation there is. The grammar follows the [MCP Skills extension](https://modelcontextprotocol.io/extensions/skills/overview): the library and folder are a prefix, and the last segment before the file is always the skill's name.
 
 ```
-skill://<library>/_index.md                  an index: every skill in the library
-skill://<library>/<folder>/_index.md         the skills directly in one folder
+skill://<library>/_index.md                  an index: the library's folders and skills
+skill://<library>/<folder>/_index.md         the same, one folder down
 skill://<library>/<folder>/<skill>/SKILL.md  that skill's instructions
 skill://<library>/<folder>/<skill>/_manifest what else it ships
 skill://<library>/<folder>/<skill>/<path>    one of those files

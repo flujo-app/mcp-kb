@@ -71,13 +71,14 @@ one is the only operation there is.
 Work down the address space, cheapest first. Listing gives you indexes -- one \
 per library (`skill://grafana/_index.md`), one per folder of skills within a \
 library (`skill://grafana/grafana-lgtm/_index.md`). Reading an index gives you \
-the skills in it, as URIs. Reading a skill's URI \
-(`skill://grafana/grafana-lgtm/loki/SKILL.md`) gives you the instructions to \
-follow.
+what is directly in it, as URIs: its folders' indexes, and its skills. \
+Reading a skill's URI (`skill://grafana/grafana-lgtm/loki/SKILL.md`) gives you \
+the instructions to follow.
 
 A skill may ship supporting files. Read `_manifest` in place of `SKILL.md` to \
 list them, then read one by its path under the same skill. A library may also \
-ship files outside its skills, listed at `skill://<library>/_files.md`. Do not \
+ship files outside its skills, listed at `skill://<library>/_files.md`; a path \
+a skill cites that is not inside the skill is usually one of those. Do not \
 read files you have no use for -- a skill citing one is not a reason to fetch \
 it. Only files are read: a library, a folder or a skill's own directory serves \
 nothing.
