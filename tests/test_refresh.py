@@ -1,6 +1,7 @@
 """Cold start, the background refresh, and what a client is told when it moves."""
 
 import asyncio
+import logging
 import os
 import time
 
@@ -574,6 +575,36 @@ async def test_reindex_answers_with_an_error_payload_instead_of_a_500(
 
     assert response.status_code == 500
     assert response.json()["status"] == "error"
+
+
+@pytest.mark.unit
+async def test_reindex_failure_body_never_carries_the_exception_text(
+    skills_dir, cache, monkeypatch, caplog
+):
+    """`/reindex` is unauthenticated, so `str(exc)` in its body can hand any
+    caller an internal path or a remote URL. The response is a fixed message;
+    the real exception, with its traceback, goes to the log instead.
+    """
+    knowledge_base = KnowledgeBase(make_config(skills_dir), cache)
+    secret = "/var/secrets/deploy-key or https://user:token@example.com/repo.git"
+
+    async def boom(**kwargs):
+        raise RuntimeError(f"cloning {secret} failed")
+
+    monkeypatch.setattr(knowledge_base, "refresh_async", boom)
+    transport = httpx.ASGITransport(app=knowledge_base.mcp.http_app())
+    with caplog.at_level(logging.ERROR):
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://knowledge_base"
+        ) as http:
+            response = await http.post("/reindex")
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body["status"] == "error"
+    assert secret not in response.text
+    assert secret in caplog.text
+    assert "Traceback" in caplog.text
 
 
 @pytest.mark.unit

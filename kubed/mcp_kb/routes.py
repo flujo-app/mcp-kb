@@ -27,6 +27,11 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+# `/reindex` is unauthenticated: `str(exc)` can carry an internal path or a
+# remote URL, so the caller gets this fixed message and the real exception,
+# with its traceback, goes to the log instead.
+REINDEX_FAILURE_MESSAGE = "reindex failed; see the server log"
+
 
 def register(mcp: FastMCP, knowledge_base: KnowledgeBase) -> None:
     """Register the HTTP routes on ``mcp``."""
@@ -105,7 +110,9 @@ def register(mcp: FastMCP, knowledge_base: KnowledgeBase) -> None:
         """
         try:
             rebuilt = await knowledge_base.refresh_async(force=True)
-        except Exception as exc:
+        except Exception:
             log.exception("reindex failed")
-            return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+            return JSONResponse(
+                {"status": "error", "error": REINDEX_FAILURE_MESSAGE}, status_code=500
+            )
         return JSONResponse({**report(), "rebuilt": rebuilt})

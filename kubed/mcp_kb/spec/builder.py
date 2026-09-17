@@ -173,9 +173,10 @@ REINDEX_ERROR = {
         "status": {"type": "string", "const": "error"},
         "error": _field(
             "string",
-            "str(exc) from a refresh that raised outside build_source's own "
+            "A fixed message: a refresh raised outside build_source's own "
             "per-source failure handling -- the one case this manual "
-            "recovery lever can still fail at.",
+            "recovery lever can still fail at. The exception itself, with "
+            "its traceback, goes to the server log, never this body.",
         ),
     },
 }
