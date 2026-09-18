@@ -20,6 +20,8 @@ from kubed.mcp_kb import KnowledgeBase
 from kubed.mcp_kb.catalogue.index import PluginRecord, now
 from kubed.mcp_kb.catalogue.snapshot import Library, build_snapshot
 from kubed.mcp_kb.config import Config
+from kubed.mcp_kb.mcp.pins import what_is_wrong
+from kubed.mcp_kb.mcp.scope import Scope
 from tests.conftest import fake_plugin
 
 pytestmark = pytest.mark.unit
@@ -586,3 +588,38 @@ async def test_an_in_root_symlinked_subdir_and_manifest_still_serve(linked, tmp_
         "skill://kit/mine/SKILL.md",
         "skill://kit/ok/SKILL.md",
     ]
+
+
+# -- a scope on a library whose marketplace could not be read -------------------
+
+
+async def test_a_library_whose_marketplace_failed_is_not_refused_a_category_or_tag(
+    market, tmp_path
+):
+    """A declared library is refused for what it *names*, never for what it
+    happens to be serving -- and a marketplace's categories and tags exist
+    only in the snapshot, so a library that could not be read has none of
+    either. A serving library still refuses one it does not carry.
+    """
+    config = _config(
+        tmp_path,
+        libraries=[
+            {"name": "obs", "source": "lab://market"},
+            {"name": "far", "source": "lab://nowhere"},
+        ],
+    )
+    kb = KnowledgeBase(config, tmp_path / "cache")
+    assert kb.status["libraries"]["far"]["error"]
+
+    for narrower in ({"categories": ["whatever"]}, {"tags": ["whatever"]}):
+        scope = Scope.parse(library="far", **narrower)
+        assert what_is_wrong(scope, config, kb.snapshot) is None
+
+    problem = what_is_wrong(
+        Scope.parse(library="obs", categories=["whatever"]), config, kb.snapshot
+    )
+    assert problem.startswith("The scope names category 'whatever'")
+    problem = what_is_wrong(
+        Scope.parse(library="obs", tags=["whatever"]), config, kb.snapshot
+    )
+    assert problem.startswith("The scope names tag 'whatever'")

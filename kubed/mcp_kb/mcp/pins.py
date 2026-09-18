@@ -64,6 +64,13 @@ def what_is_wrong(scope: Scope, config: Config, snapshot: Snapshot) -> str | Non
     if any("," in category for category in scope.categories):
         return COMMA_IN_CATEGORY
 
+    # Before the categories and the tags, which are read off the snapshot: a
+    # declared library that is serving nothing right now has none of either,
+    # and refusing a client for what its library does not *currently* carry is
+    # refusing it for what happens to be served. See the module note.
+    if scope.library and not _up(snapshot, scope.library):
+        return None
+
     # What the plugins declare, in the library if one is named and anywhere
     # otherwise -- from the snapshot, since a marketplace's plugins are not in
     # the config to be read from.
@@ -89,9 +96,6 @@ def what_is_wrong(scope: Scope, config: Config, snapshot: Snapshot) -> str | Non
             f" are: {_listed(tags)}."
         )
 
-    if scope.library and not _up(snapshot, scope.library):
-        # Named correctly and serving nothing right now: see the module note.
-        return None
     if not scope.library and not _serving(snapshot, EVERYTHING):
         return None
     if (scope.categories or scope.tags) and not _serving(snapshot, scope):

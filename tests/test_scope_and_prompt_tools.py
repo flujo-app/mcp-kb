@@ -333,6 +333,18 @@ async def test_a_library_that_is_up_and_empty_is_empty_not_refused(url):
     assert await _seen(url, "?library=blank") == ([], [], [])
 
 
+@pytest.mark.parametrize("narrower", ["categories", "tags"])
+async def test_a_library_that_is_down_carries_no_category_or_tag_to_refuse(
+    url, narrower
+):
+    """The categories and the tags are read off the *snapshot*, because a
+    marketplace's are not in the config -- so a library serving nothing has
+    none of either, and checking them before the library short-circuit told a
+    client pinned to a declared library that its category does not exist.
+    """
+    assert await _seen(url, f"?library=down&{narrower}=whatever") == ([], [], [])
+
+
 async def test_a_header_scope_is_refused_the_same_way(url):
     with pytest.raises(Exception, match="no such library"):
         await _seen(url, headers={"X-Skill-Library": "nope"})
