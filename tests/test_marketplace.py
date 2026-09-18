@@ -198,6 +198,18 @@ def test_an_entrys_commands_become_prompt_patterns(tmp_path):
     assert plugin.globs == Globs(prompts=patterns, commands=patterns)
 
 
+def test_a_field_this_server_has_no_use_for_is_ignored(tmp_path):
+    """`files:` is a field of a plugin *we* declare, and inventing it for
+    Claude's entry schema is exactly what §C1.34 refuses: a catalogue does not
+    get to widen what is served. It is not a reason to skip the entry either --
+    an unknown key is somebody else's client's, and the entry is still
+    installable here."""
+    catalog = read(tmp_path, entry(files=["shared/**/*"], author={"name": "x"}))
+
+    assert only(catalog).globs == Globs()
+    assert catalog.skipped == ()
+
+
 def test_an_entrys_keywords_join_its_tags_as_labels(tmp_path):
     plugin = only(read(tmp_path, entry(tags=["design"], keywords=["penpot"])))
 

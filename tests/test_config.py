@@ -332,6 +332,13 @@ def test_a_ref_on_a_non_git_source_is_refused(tmp_path):
 
 
 def test_a_ref_on_a_git_source_parses(tmp_path):
+    """A branch, with no `refresh:` on the source: accepted, not a config error.
+
+    A moving ref is supported on purpose -- a sha pins, a branch floats and a
+    restart re-fetches (§C1.17, §C1.18) -- and whether the source is asked "has
+    it moved?" on a timer is a separate choice the operator makes. A config
+    that refused this would have no way to track a branch at all.
+    """
     text = _sources() + "plugins:\n- name: p\n  source: gh://o/r?ref=main\n"
     config = load_config(write(tmp_path, text))
     assert config.plugins[0].address.ref == "main"
