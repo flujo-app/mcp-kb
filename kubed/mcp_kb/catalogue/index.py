@@ -92,9 +92,10 @@ class SkillRow:
 class PromptRow:
     """A harvested prompt file: where it is and which dialect it is written in.
 
-    The dialect is recorded because detecting it may have been the config's
-    decision (``dialect:`` on the plugin) or the harvest's (a ``commands/``
-    tree), and a re-parse at snapshot time has to reach the same answer.
+    The dialect is recorded because deciding it may have been the config's
+    doing (``dialect:`` on the plugin), the harvest's (a ``commands/`` tree)
+    or the file's own; the snapshot re-parses the file in the dialect the
+    row records, so every rebuild and restart reads it the same way.
     """
 
     path: str

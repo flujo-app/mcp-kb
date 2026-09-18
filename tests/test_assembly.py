@@ -8,6 +8,8 @@ through ``/health`` and a real MCP client.
 """
 
 import json
+import os
+from pathlib import Path
 
 import httpx
 import pygit2
@@ -15,7 +17,10 @@ import pytest
 from fastmcp import Client
 
 from kubed.mcp_kb import KnowledgeBase
+from kubed.mcp_kb.catalogue.index import PluginRecord, now
+from kubed.mcp_kb.catalogue.snapshot import Library, build_snapshot
 from kubed.mcp_kb.config import Config
+from tests.conftest import fake_plugin
 
 pytestmark = pytest.mark.unit
 
@@ -215,6 +220,44 @@ async def test_a_library_whose_marketplace_is_missing_says_so(market, tmp_path):
         "error": "no marketplace.json under lgtm",
     }
     assert str(tmp_path) not in json.dumps(health)
+
+
+async def test_an_unreadable_marketplace_is_reported_without_the_cache_path(
+    market, tmp_path
+):
+    """An OSError quotes the file's absolute path, which for a fetched tree is
+    a cache path; the library's error must name the file and nothing above the
+    plugin root. The export is made unreadable after one build, and the restart
+    -- which reuses the fetch and re-reads the catalog off it -- meets it."""
+    config = _config(tmp_path, libraries=[{"name": "obs", "source": "lab://market"}])
+    first = KnowledgeBase(config, tmp_path / "cache")
+    root = Path(first._fetches["lab://market"].root)
+    catalog = root / ".claude-plugin" / "marketplace.json"
+    catalog.chmod(0o000)
+    if os.access(catalog, os.R_OK):
+        pytest.skip("running as root: the file is readable whatever its mode")
+
+    kb = KnowledgeBase(config, tmp_path / "cache")
+    health = await _health(kb)
+
+    error = health["libraries"]["obs"]["error"]
+    assert "marketplace.json" in error and "Permission denied" in error
+    assert str(tmp_path) not in json.dumps(health)
+
+
+def test_a_plugin_status_never_carries_a_null_error(tmp_path):
+    """`PluginStatus.error` is a string: an ok record with no root -- a shape
+    nothing builds, but the index could hold -- says so in words."""
+    plugin = fake_plugin("p", tmp_path)
+    record = PluginRecord(
+        id="p", fetch=plugin.fetch.key, root=None, status="ok", error=None,
+        built=now(), skills=(), prompts=(), files=(), skill_dirs=(),
+    )
+    snapshot = build_snapshot(
+        Config(), [plugin], [Library("lib", "", ("p",))], {}, {"p": record}, 0
+    )
+
+    assert snapshot.status["plugins"]["p"]["error"] == "not harvested"
 
 
 async def test_a_refresh_of_a_marketplace_fetch_serves_an_entry_it_gained(

@@ -66,6 +66,7 @@ from .catalogue.snapshot import (
     effective_globs,
     failed_plugin,
     log_changes,
+    unrooted,
 )
 from .catalogue.uris import Catalogue
 from .config import Config
@@ -291,7 +292,9 @@ class KnowledgeBase:
                     config=self.config,
                 )
             except ValueError as exc:
-                errors[name] = str(exc)
+                # An unreadable file's error quotes its absolute path, which
+                # is a cache path: stripped, as every harvest string is.
+                errors[name] = unrooted(str(exc), root)
                 continue
             derived += market.plugins
             if market.skipped:

@@ -205,6 +205,44 @@ async def test_a_claude_command_and_a_copilot_prompt_serve_as_one_kind_of_prompt
     assert {p.dialect for p in server.prompts} == {"claude", "copilot"}
 
 
+async def test_the_index_row_decides_a_prompts_dialect(tmp_path):
+    """The dialect a row records is the authority at snapshot time, not the
+    path rule: a command under `commands/` whose row says `copilot` is read as
+    Copilot on the next start, `${input:app}` becoming its one argument."""
+    import json
+
+    root = tmp_path / "plugin"
+    (root / "commands").mkdir(parents=True)
+    (root / "commands" / "deploy.md").write_text(
+        "---\ndescription: Deploy.\narguments: [env]\n---\n"
+        "Deploy ${input:app} to $env.\n"
+    )
+    config = Config.model_validate(
+        {
+            "plugins": [{"name": "kit", "source": f"file://{root}"}],
+            "libraries": [{"name": "kit", "plugins": ["kit"]}],
+        }
+    )
+    cache = tmp_path / "cache"
+    harvested = KnowledgeBase(config, cache)
+    assert [(p.dialect, [a.name for a in p.arguments]) for p in harvested.prompts] == [
+        ("claude", ["env"])
+    ]
+
+    index = json.loads((cache / "index.json").read_text())
+    (row,) = index["plugins"]["kit"]["prompts"]
+    row["dialect"] = "copilot"
+    (cache / "index.json").write_text(json.dumps(index))
+    restarted = KnowledgeBase(config, cache)
+
+    (prompt,) = restarted.prompts
+    assert prompt.dialect == "copilot"
+    assert [a.name for a in prompt.arguments] == ["app"]
+    async with Client(restarted.mcp) as client:
+        rendered = await client.get_prompt("kit_deploy", {"app": "api"})
+    assert text(rendered) == "Deploy api to $env.\n"
+
+
 async def test_a_prompts_title_is_published(tmp_path):
     """FastMCP's ``Prompt`` has a title, and a file that declares one gets it."""
     root = tmp_path / "plugin"
