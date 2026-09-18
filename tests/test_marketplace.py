@@ -190,9 +190,12 @@ def test_penpots_entry_leaves_its_components_to_its_manifest(tmp_path):
 
 
 def test_an_entrys_commands_become_prompt_patterns(tmp_path):
+    """And are remembered as commands: what they select is Claude's whether or
+    not it sits in a `commands/` tree."""
     plugin = only(read(tmp_path, entry(commands=["./prompts/brief.md", "commands"])))
 
-    assert plugin.globs == Globs(prompts=("prompts/brief.md", "commands/*.md"))
+    patterns = ("prompts/brief.md", "commands/*.md")
+    assert plugin.globs == Globs(prompts=patterns, commands=patterns)
 
 
 def test_an_entrys_keywords_join_its_tags_as_labels(tmp_path):

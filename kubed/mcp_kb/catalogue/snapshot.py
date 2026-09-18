@@ -180,6 +180,9 @@ def with_manifest(plugin: Plugin, root: Path) -> tuple[Plugin, Globs]:
         skills=own.skills if own.skills is not None else manifest.skills,
         prompts=own.prompts if own.prompts is not None else manifest.commands,
         files=own.files,
+        # Which of the prompt patterns in force came from a `commands`
+        # declaration: the entry's when it named any, else the manifest's.
+        commands=own.commands if own.prompts is not None else (manifest.commands or ()),
     )
     return completed, globs
 
@@ -207,9 +210,10 @@ def build_plugin(plugin: Plugin, root: Path, *, globs: Globs) -> PluginRecord:
         files = harvest.library_files(root, globs, dirs)
         unloadable: list[tuple[Path, str]] = []
         found = harvest.prompt_files(root, globs)
+        declared = harvest.matching(root, globs.commands)
         groups: dict[str, list[Path]] = {}
         for path in found:
-            groups.setdefault(_dialect(plugin, path, root), []).append(path)
+            groups.setdefault(_dialect(plugin, path, root, declared), []).append(path)
         prompts = _load_prompts(plugin, groups, skipped=unloadable)
     except OSError as exc:
         return failed_plugin(plugin, unrooted(str(exc), root))
@@ -262,18 +266,21 @@ def _load_prompts(
     return sorted(prompts, key=lambda p: p.path)
 
 
-def _dialect(plugin: Plugin, path: Path, root: Path) -> str:
-    """The dialect a harvested file is read in: the plugin's, else by its path.
+def _dialect(plugin: Plugin, path: Path, root: Path, declared: set[Path]) -> str:
+    """The dialect a harvested file is read in: the plugin's, else how it was found.
 
-    Decided here rather than in ``detect.py`` because it is the one signal
-    that lives in the path and not the file: a ``commands/`` tree is Claude's
-    convention, and a description-only command in it renders the same in
-    every dialect until it carries an ``argument-hint``. ``"auto"`` leaves the
+    Decided here rather than in ``detect.py`` because these are the signals
+    ``detect`` cannot see: a ``commands/`` tree is Claude's convention, and a
+    file a *publisher* called a command is Claude's wherever it put it --
+    penpot declares seven under ``prompts/``, and left to the body a
+    description-only one reads as this server's own dialect. ``declared`` is
+    what the ``commands`` patterns matched; a config's own ``prompts:`` glob is
+    not a command declaration and puts nothing in it. ``"auto"`` leaves the
     rest to ``detect``, and what it decides is what the row records.
 
-    A ``.prompt.md`` in that tree is the exception: a filename that names its
-    own dialect beats the directory it happens to sit in, so the convention
-    yields and ``detect`` reads it as Copilot's.
+    A ``.prompt.md`` is the exception to both: a filename that names its own
+    dialect beats the directory it sits in and the field that selected it, so
+    the convention yields and ``detect`` reads it as Copilot's.
     """
     if plugin.dialect != "auto":
         return plugin.dialect
@@ -281,6 +288,8 @@ def _dialect(plugin: Plugin, path: Path, root: Path) -> str:
         return "auto"
     rel = _relative(path, root)
     if any(rel.startswith(f"{d}/") for d in COMMAND_DIRS):
+        return "claude"
+    if path in declared:
         return "claude"
     return "auto"
 

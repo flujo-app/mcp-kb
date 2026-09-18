@@ -261,12 +261,17 @@ def _globs(raw: dict) -> Globs:
     of the catalogue without a hand-written glob here.
     """
     try:
-        return Globs(
-            skills=paths(raw.get("skills"), "skills"),
-            prompts=command_patterns(raw.get("commands")),
-        )
+        commands = command_patterns(raw.get("commands"))
     except ValueError as exc:
         raise _Skip(str(exc)) from exc
+    try:
+        skills = paths(raw.get("skills"), "skills")
+    except ValueError as exc:
+        raise _Skip(str(exc)) from exc
+    # The same patterns twice: what to serve as prompts, and the note that the
+    # entry called them commands -- which is what makes them Claude's wherever
+    # in the tree they sit.
+    return Globs(skills=skills, prompts=commands, commands=commands or ())
 
 
 def _label(raw: object) -> str:

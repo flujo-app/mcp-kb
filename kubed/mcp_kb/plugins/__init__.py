@@ -63,11 +63,18 @@ class Globs:
     ``None`` for a kind means "nothing was said about it": the plugin's own
     manifest decides, and failing that the conventions. An empty tuple is a
     decision -- serve none of that kind.
+
+    ``commands`` is not a kind and serves nothing: it is which of the
+    ``prompts`` patterns came from a *command* declaration -- a manifest's
+    ``commands`` or an entry's -- because that is a Claude signal and the file
+    it selects may sit anywhere, penpot's ``prompts/`` included. A config's own
+    ``prompts:`` glob is not a command declaration and leaves it empty.
     """
 
     skills: tuple[str, ...] | None = None
     prompts: tuple[str, ...] | None = None
     files: tuple[str, ...] | None = None
+    commands: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

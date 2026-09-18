@@ -19,7 +19,7 @@ running it.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -145,16 +145,25 @@ def readable(base: Path, rel: str | Path) -> Path | None:
     return target if target is not None and target.is_file() else None
 
 
-def files(root: Path, kind: str, globs: Globs) -> list[Path]:
-    """Every regular file matching the kind's globs, inside root, sorted."""
+def matching(root: Path, globs: Iterable[str]) -> set[Path]:
+    """Every regular file inside ``root`` that one of ``globs`` selects.
+
+    Separate from ``files`` because a pattern set is not always a kind: the
+    command patterns a manifest declared are matched against the prompts
+    already harvested, to tell which of them the plugin called a command.
+    """
     base = root.resolve()
-    found = {
+    return {
         hit
-        for pattern in patterns(kind, globs)
-        for hit in _matches(base, pattern)
+        for pattern in globs
+        for hit in _matches(base, _globstar(pattern))
         if hit.is_file()
     }
-    return sorted(found)
+
+
+def files(root: Path, kind: str, globs: Globs) -> list[Path]:
+    """Every regular file matching the kind's globs, inside root, sorted."""
+    return sorted(matching(root, patterns(kind, globs)))
 
 
 def skill_dirs(root: Path, globs: Globs) -> list[Path]:

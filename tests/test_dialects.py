@@ -7,6 +7,7 @@ detection ladder or one substitution form, because those are the parts a
 reader of the ladder cannot check by inspection.
 """
 
+import json
 import logging
 
 import pytest
@@ -469,6 +470,88 @@ def test_an_instructions_file_in_a_commands_tree_is_not_published(tmp_path):
     assert kb.snapshot.prompts == ()
     skipped = kb.snapshot.status["plugins"]["src"]["skipped"]
     assert [s["reason"] for s in skipped] == ["not a prompt: has `globs`"]
+
+
+def _plugin(base, rel, frontmatter, body, **plugin):
+    """A server over one plugin at ``base``, holding one prompt file at ``rel``."""
+    root = base / "src"
+    write(root / rel, frontmatter, body)
+    config = Config.model_validate(
+        {
+            "plugins": [
+                {"name": "src", "source": f"file://{root}", "skills": [], **plugin}
+            ],
+            "libraries": [{"name": "lib", "plugins": ["src"]}],
+        }
+    )
+    return KnowledgeBase(config, base / "c")
+
+
+def _manifested(base, rel, frontmatter, body, commands):
+    """The same, with the plugin's own `plugin.json` declaring its commands."""
+    root = base / "src"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "plugin.json").write_text(json.dumps({"commands": commands}))
+    return _plugin(base, rel, frontmatter, body)
+
+
+PENPOT = ("description: Work on a Penpot file.\nargument-hint: '[file] [board]'\n",
+          "Open the file named in the arguments.")
+
+
+def test_a_manifests_command_is_claudes_wherever_it_sits(tmp_path):
+    """penpot's shape: seven `commands`, declared under `prompts/` and not in a
+    `commands/` tree. A description and a body are the same file in every
+    dialect, so left to `detect` this one is read as this server's own and the
+    free text a command takes is never published."""
+    kb = _manifested(
+        tmp_path,
+        "prompts/review.md",
+        "description: Review a diff.\n",
+        "Review the diff.",
+        ["./prompts/review.md"],
+    )
+
+    (prompt,) = kb.snapshot.prompts
+    assert prompt.dialect == "claude"
+    assert [a.name for a in prompt.arguments] == ["arguments"]
+    assert (
+        prompt.render({"arguments": "src/a.py"})
+        == "Review the diff.\n\nARGUMENTS: src/a.py"
+    )
+
+
+def test_the_same_file_under_a_config_prompts_glob_is_detected_as_before(tmp_path):
+    """A `prompts:` glob says which files to serve, never that they are
+    commands -- that is the publisher's word, and a config has its own
+    `dialect:` for saying it."""
+    kb = _plugin(
+        tmp_path,
+        "prompts/review.md",
+        "description: Review a diff.\n",
+        "Review the diff.",
+        prompts=["prompts/*.md"],
+    )
+
+    (prompt,) = kb.snapshot.prompts
+    assert prompt.dialect == "mcp-kb"
+    assert list(prompt.arguments) == []
+    assert prompt.render() == "Review the diff."
+
+
+def test_a_commands_argument_hint_decides_for_itself_either_way(tmp_path):
+    """The rung this adds sits below the frontmatter: a command that says what
+    it takes was already Claude's through `detect`, and reads identically
+    whether it was declared as a command or merely globbed."""
+    declared = _manifested(tmp_path / "a", "prompts/penpot.md", *PENPOT, ["./prompts"])
+    globbed = _plugin(
+        tmp_path / "b", "prompts/penpot.md", *PENPOT, prompts=["prompts/*.md"]
+    )
+
+    for kb in (declared, globbed):
+        (prompt,) = kb.snapshot.prompts
+        assert prompt.dialect == "claude"
+        assert [a.description for a in prompt.arguments] == ["[file] [board]"]
 
 
 def test_a_prompt_md_in_a_commands_tree_is_copilots(tmp_path):
