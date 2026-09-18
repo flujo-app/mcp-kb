@@ -1,23 +1,34 @@
 # yaml-language-server: $schema=../config.schema.json
-# The catalogue the image serves out of the box: four upstream skill libraries,
-# each a marketplace published in a GitHub repository, pinned to a commit and
-# read straight from GitHub when the container starts. Copy this file, point it
-# at your own sources, and mount it at /etc/mcp-kb/config.yaml.
+# The catalogue the image serves out of the box: four upstream libraries, each
+# a marketplace published in a GitHub repository, pinned to a commit and read
+# when the container starts. Copy this file, point it at your own material, and
+# mount it at /etc/mcp-kb/config.yaml.
 #
-# `sources` names a backend once; a plugin or a library then addresses a path
-# under it as `<source>://<path>[//<subdir>][?ref=<ref>]`. A library whose
-# `source` is a marketplace takes its plugins from that repository's
-# `marketplace.json`; a `plugins:` list adds beside it, and a plugin declared
-# against the same repository shares its one clone.
+# Three lists. A `source` is a backend, named once. A `plugin` is a folder of
+# skills and prompts at a path under one, written
+# `<source>://<path>[//<subdir>][?ref=<ref>]`. A `library` is the first segment
+# of every URI served, and is a marketplace, a list of plugin names, or a query.
+
 sources:
 - name: github
   url: git+https://github.com
+  # A private repository takes its credential here — never on a plugin, and
+  # never in a URL, which is refused for carrying one. GitHub wants the literal
+  # `x-access-token` as the username and a token as the password:
+  #
+  # auth:
+  #   username: x-access-token
+  #   password: {env: GITHUB_TOKEN}
 
 plugins:
-# penpot's skills reference shared material from outside themselves. A
-# marketplace entry cannot say so, so a plugin of our own on the same
-# repository serves those directories at skill://penpot/<path>.
+# penpot's skills cite shared material that sits outside them. A marketplace
+# entry cannot say so, and no field of one is editable here, so this is a plugin
+# of our own against the same repository at the same ref — which costs no second
+# clone, because a fetch is keyed by URL and ref.
 - name: penpot-shared
+  description: The material penpot's skills cite from outside themselves.
+  category: design
+  tags: [penpot]
   source: github://penpot/penpot-ai-kit?ref=c63d8e3717323fad859e794848e5a602b155a7ec
   skills: []
   prompts: []
@@ -38,9 +49,19 @@ libraries:
   description: General-purpose engineering skills.
   source: github://obra/superpowers?ref=b36e0829c6d0140e93cfef2ca599b1b07d4a7797
 
-# A pinned ref never needs re-checking, which is why the source above sets no
-# `refresh:`. Track a branch instead and the server re-resolves it on that
-# interval, rebuilding only if the commit moved:
+# A library can also be a query over every plugin the config knows, the
+# marketplaces' entries included, rather than a catalogue of its own. A comma
+# means all of and a separate item means any of, here and in `?tags=` alike:
+#
+# - name: design
+#   description: Everything anybody here publishes about design.
+#   pluginSelector:
+#     categories: [design]
+#     tags: ["ui,tokens", penpot]
+
+# A pinned ref never needs re-checking — a commit cannot move — which is why the
+# source above sets no `refresh:`. Track a branch instead and the server
+# re-resolves it on that interval, rebuilding only if the commit moved:
 #
 # sources:
 # - name: github
