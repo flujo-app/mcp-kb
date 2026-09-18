@@ -34,7 +34,7 @@
 
 ---
 
-## Status: **OPEN — design, awaiting sign-off** — opened 2026-09-15
+## Status: **CLOSED** — opened 2026-09-15, closed 2026-09-18 at `v0.1.0`
 
 **Second pass, same day.** Dr K closed four forks and added three requirements
 the first pass did not have: a name with `mcp` in it, a cache with an index, and
@@ -2805,6 +2805,40 @@ is worth writing down: a config that pins refs is only as true as the last boot,
 so a ref that moves gets a boot and a read of `/health` before it is committed,
 and a review of one repeats it.
 
+### §C1.39 — The elicitation path is live, and MCP now has two eras (2026-09-18)
+
+Probing the deployed server after the merge, an `initialize` handshake offering
+`2026-07-28` came back at `2025-11-25`, and a prompt missing a required argument
+answered `-32602` instead of the input-required form. I read that as FastMCP not
+yet speaking the new revision. It was the wrong reading, and the right one is
+worth writing down because anyone testing this server will make the same mistake.
+
+`2026-07-28` is **not reachable through `initialize` at all**. The SDK splits
+the revisions into two eras — `HANDSHAKE_PROTOCOL_VERSIONS` ends at
+`2025-11-25`, and `MODERN_PROTOCOL_VERSIONS` is `("2026-07-28",)` on its own —
+because the modern revision is a stateless per-request envelope rather than a
+session negotiated once. A client reaches it by sending `server/discover` with
+`params._meta` carrying `io.modelcontextprotocol/protocolVersion`,
+`clientInfo` and `clientCapabilities`, plus `MCP-Protocol-Version` and
+`MCP-Method` headers; every subsequent request repeats that envelope, and one
+that names a target adds an `MCP-Name` header the server checks against the
+body. An `initialize` handshake proposing a modern version does not fail — it is
+answered at the newest handshake-era version, which is exactly what we saw.
+
+Probed that way, the server answers `server/discover` with
+`supportedVersions: ["2026-07-28"]`, and `prompts/get` on `grafana_debug-logs`
+with no arguments returns `resultType: "input_required"` carrying one
+`elicitation/create` form whose `requestedSchema` holds just `app` — the shape
+§C1.37 locked, live in the pod on the first try. FastMCP 4.0.5, which the image
+runs, is the current release (PyPI, 2026-09-17).
+
+The lesson is the same one §C1.38 point 2 charged for at a different address: a
+negative result from a probe is a claim about the probe until the probe is
+checked. A handshake that silently downgrades looks identical to a server that
+cannot do the thing.
+
+---
+
 ## Closing questions for Dr K
 
 *Superseded by §C1.22 — the name, here and in question 1, is `mcp-kb`. What was
@@ -2823,9 +2857,12 @@ Still open:
    metaphor better, and this is the one word that appears in every URI. My
    preference is to keep `library`: it is what the thing is, and the metaphor
    should not cost a reader clarity.
-2. **§C1.18 — `refresh` per source, or one server-wide interval?** Per source is
-   in the schema above because a pinned git repo and a live drive folder want
-   very different numbers, but it is one more knob.
+2. *Answered by the build: per source, and the knob earned itself.* The cluster
+   pins four marketplaces at commits and floats one Nextcloud folder at `5m`;
+   one interval would have been wrong for both. **§C1.18 — `refresh` per source,
+   or one server-wide interval?** Per source is in the schema above because a
+   pinned git repo and a live drive folder want very different numbers, but it
+   is one more knob.
 3. **§C1.8 — instructions and agents as resources** under `instructions://` and
    `agent://` in E5, or cut them from this chapter?
 4. **§C1.13 — who bumps pinned SHAs** now that `update-skills.yml` is gone.
@@ -2833,8 +2870,110 @@ Still open:
    and datasource, so a cluster-repo Renovate rule is the off-the-shelf answer;
    the alternative is floating trusted upstreams on a branch and letting
    `refresh` pick them up.
-5. **§C1.13 — where `prompts/grafana/debug-logs.md` lives:** a ConfigMap-mounted
-   `file://` source in the cluster repo, or a `git+https` source back at this
-   repo?
+5. *Answered by the build: the ConfigMap.* It is a `file://` plugin in the
+   cluster repo, mounted at `/srv/prompts/grafana`, and it joins the `grafana`
+   library beside the marketplace's own plugins. **§C1.13 — where
+   `prompts/grafana/debug-logs.md` lives:** a ConfigMap-mounted `file://` source
+   in the cluster repo, or a `git+https` source back at this repo?
 6. **Order after E2** — the default is E3, E4, E5, E6, E7, E8. Any of E4, E5,
    E6 and E8 can move up once E2 lands.
+
+---
+
+## What this chapter cost, and what it kept charging for
+
+Four faults recurred often enough to be the chapter's real subject, and every
+one of them was a **green suite saying nothing**.
+
+**An untested path is an unbuilt path.** 250 tests passed over a `git+https`
+source whose authentication no test had ever exercised. Every private remote
+would have failed on the first clone, and the catalogue would have come up empty
+with nothing in the logs to say why. The suite was not wrong; it was silent,
+which is worse, because silence reads as coverage.
+
+**Never rewrite served state in place.** An export rebuilt as rmtree-then-rename
+corrupted 56 of 222 live reads, and — the part that mattered — left a half tree
+behind on a crash that the next boot trusted completely. A snapshot is served
+while it is being replaced; the replacement gets its own directory and one
+atomic swap, or it is not a replacement.
+
+**One URI, one answer, under every scope.** The whole-branch review found the
+plugin-root fallback computing its ceiling over one plugin's skills rather than
+the library's, so a client scoped away from a skill could still read it — with
+its placeholders unsubstituted — through a sibling plugin sharing the root
+(§C1.38). That is the same bug the D2 round had already closed one level down.
+Fixing the instance in front of us and not sweeping the class is the habit this
+chapter paid for most.
+
+**A negative result is a claim about the probe.** Twice. A pinned penpot ref
+that predated its own `marketplace.json` looked like a working config until
+something booted it (§C1.38), and an `initialize` handshake that silently
+downgrades looked exactly like a server with no elicitation support (§C1.39).
+Both cost ten seconds to check and would have cost a release to miss.
+
+The Copilot rounds earned their slowness: across two passes they found a
+malformed prompt that could kill the server at boot and a marketplace URL that
+could publish a credential into an unauthenticated `/health`. Neither was
+reachable from any test we had written, because both arrive from somebody else's
+repository.
+
+---
+
+> **Dr K, at the front desk, the drawers finally empty of books:** *"You built a
+> catalogue that holds no books, which is the only kind worth having. Four
+> collections turned up this morning from four different buildings and the desk
+> did not notice the difference — that is the whole trick. What you have not got
+> is a reader who isn't you. Cut the version, put the card in the window, and
+> find out which shelf somebody else reaches for first."*
+
+---
+
+## Chapter 1 — closed
+
+**Shipped:** `v0.1.0` — a config of sources, plugins and libraries; `file://`,
+git and WebDAV backends; marketplaces read as their publishers wrote them; the
+`skill://` address space on the MCP Skills extension; three prompt dialects
+behind one MCP prompt; the plugin root and its fallback; an index that cold-starts
+in milliseconds and refreshes in the background; library, category and tag
+scoping with refusals that say what exists; mirror tools for clients with neither
+resources nor prompts; `/health`, `/reindex` and `/openapi.yaml`; and a generated
+wiki. Cut from `main`, image on Docker Hub, wheel and sdist on the release.
+
+**Verified live before the cut** (2026-09-18, `apps/mcp-kb` in `flow`): 5
+libraries, 91 skills, 8 prompts, every fetch `ok`; a skill written into Nextcloud
+served after one `POST /reindex`, and the same file edited in place served on the
+next read with no reindex at all.
+
+**Carried forward** (Chapter 2 opens after the publish, not before):
+
+- **E6 — `mcp+http` sources.** The largest gap and the one with something already
+  waiting on it: the n8n MCP server's workflow SDK reference, which an n8n agent
+  cannot reach today, and the Grafana MCP server's material. Both blocks sit
+  commented in the cluster config. Grafana additionally needs its token mirrored
+  into `flow` — a Secret cannot be mounted across namespaces.
+- **E7 — tool → resource mappings**, which E6 is the precondition for. The
+  `tools:` shape is sketched in the cluster config's comments.
+- **E5's other half — `instructions://` and `agent://`.** The drive plugin
+  already carves `agents/` out and serves nothing from it. Closing question 3 is
+  still Dr K's: build them, or cut them from the chapter.
+- **Who bumps the pinned SHAs** (closing question 4). Four marketplaces are
+  pinned to commits and nothing watches them. A cluster-repo Renovate regex rule
+  is the off-the-shelf answer.
+- **A library that declares no `files:` glob publishes no `_files.md`.** Penpot's
+  `shared/` files read correctly through the plugin-root fallback but are not
+  discoverable, because discovery and resolution are two different mechanisms and
+  only one of them is declared. Either the fallback should feed the index or the
+  wiki should say plainly that it does not.
+- **The `kubed` library is empty** until somebody puts a skill in the Nextcloud
+  `ai` folder. The path is proven; the shelf is bare.
+- **The elicitation path has no client.** It answers correctly on a modern
+  connection (§C1.39) and nothing we run negotiates one yet.
+
+---
+
+Sources / cross-links:
+- [`kubed/mcp-kb` on Docker Hub](https://hub.docker.com/r/kubed/mcp-kb)
+- [The wiki](https://github.com/kubed-io/mcp-kb/wiki) — sources, plugins, scoping, prompts, skills and operations, three pages of it generated from the code.
+- [The MCP Skills extension](https://modelcontextprotocol.io/extensions/skills/overview) — the address-space grammar §C1.23 adopted.
+- `apps/mcp-kb` in the cluster repo — the config this chapter was designed against, and the only deployment.
+- This chapter's work, by PR: #10 through #21.

@@ -34,6 +34,10 @@ skills and prompts under them and the libraries they group into; the server read
 them at start into a cache volume, and every agent reads them from one address
 space.
 
+Everything is new, which is why there is only an *Added* section below —
+*Changed* and *Fixed* are relative to a version somebody is running, and there
+isn't one.
+
 ### Added
 
 - **A config file of sources, plugins and libraries** — `CONFIG`, `/etc/mcp-kb/config.yaml` by default — where a credential is an `{env: NAME}` reference and never a value. `mcp-kb schema` prints its JSON Schema, and `config.schema.json` ships in the repository for an editor to validate against as you type.
@@ -88,4 +92,4 @@ space.
 
 - **`GET /openapi.yaml`** publishes the HTTP surface as OpenAPI 3.1, generated from the code that serves it.
 
-- **The `kubed/mcp-kb` image** is the whole artifact: two mounts, a config file and a writable cache. The [wiki](https://github.com/kubed-io/mcp-kb/wiki) is the manual.
+- **Ships as the `kubed/mcp-kb` image** — the whole artifact: two mounts, a config file and a writable cache — and as a wheel and sdist attached to each release. The manual is the [wiki](https://github.com/kubed-io/mcp-kb/wiki).
