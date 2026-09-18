@@ -43,6 +43,16 @@ def _skill(root, rel, name, description, body="Body.\n"):
     )
 
 
+# The two placeholders this server is the authority on -- the plugin root and
+# the skill's own directory -- in a skill's instructions and in a file beside
+# them, which are two different answers.
+PLACEHOLDERS = (
+    "Style: ${CLAUDE_PLUGIN_ROOT}/shared/style.md."
+    " Links: ${CLAUDE_SKILL_DIR}/references/LINKS.md."
+    " The editor has ${selection}.\n"
+)
+
+
 def _build(base):
     grafana = base / "grafana"
     _skill(
@@ -54,7 +64,14 @@ def _build(base):
     )
     _write(grafana, "skills/grafana-lgtm/loki/references/LOGQL.md", "logql notes\n")
     _write(grafana, "skills/grafana-lgtm/loki/.env", "LOKI_SECRET=1\n")
-    _skill(grafana, "skills/grafana-lgtm/tempo", "tempo", "Query traces.")
+    _skill(
+        grafana,
+        "skills/grafana-lgtm/tempo",
+        "tempo",
+        "Query traces.",
+        PLACEHOLDERS,
+    )
+    _write(grafana, "skills/grafana-lgtm/tempo/references/LINKS.md", PLACEHOLDERS)
     _skill(grafana, "skills/grafana-lgtm/testing", "testing", "Test the stack.")
     _skill(grafana, "skills/grafana-k6/k6", "k6", "Load test.")
     _write(grafana, "skills/grafana-k6/k6/SETUP.md", "k6 setup\n")
@@ -228,6 +245,69 @@ async def test_a_library_level_file_keeps_its_path_from_the_plugin_root(url):
     assert await _read(url, "skill://grafana/extra/notes.md") == "ops notes\n"
 
 
+# -- the placeholders this server can answer --------------------------------------
+
+TEMPO = "skill://grafana/grafana-lgtm/tempo"
+RESOLVED = (
+    "Style: skill://grafana/shared/style.md."
+    f" Links: {TEMPO}/references/LINKS.md."
+    " The editor has ${selection}.\n"
+)
+
+
+async def test_a_skills_instructions_name_the_plugin_root_and_its_own_directory(url):
+    """Both become addresses, and both addresses read. Everything else that is
+    the client's to fill -- ``${selection}`` here -- is served as written."""
+    body = await _read(url, f"{TEMPO}/SKILL.md")
+    assert body.endswith(RESOLVED)
+    assert body == await _tool(url, f"{TEMPO}/SKILL.md")
+    assert await _read(url, "skill://grafana/shared/style.md") == "house style\n"
+    assert await _read(url, f"{TEMPO}/references/LINKS.md")
+
+
+async def test_every_other_file_of_the_skill_is_served_verbatim(url):
+    """``_manifest`` publishes a size and a hash of the bytes on disk, so only
+    the instructions are rewritten."""
+    assert await _read(url, f"{TEMPO}/references/LINKS.md") == PLACEHOLDERS
+    manifest = json.loads(await _read(url, f"{TEMPO}/_manifest"))
+    sizes = {f["path"]: f["size"] for f in manifest["files"]}
+    assert sizes["references/LINKS.md"] == len(PLACEHOLDERS)
+
+
+async def test_a_prompt_body_names_the_plugin_root_in_every_dialect(tmp_path):
+    """A prompt is not a skill and has no directory of its own, so
+    ``${CLAUDE_SKILL_DIR}`` stays as written; the plugin root is answered."""
+    root = tmp_path / "plugin"
+    cite = "Read ${CLAUDE_PLUGIN_ROOT}/shared/x.md, not ${CLAUDE_SKILL_DIR}.\n"
+    _write(root, "prompts/own.md", f"---\ndescription: Ours.\n---\n{cite}")
+    _write(root, "commands/theirs.md", f"---\ndescription: Claude's.\n---\n{cite}")
+    _write(
+        root,
+        ".github/prompts/vscode.prompt.md",
+        f"---\ndescription: Copilot's.\n---\n{cite}",
+    )
+    config = Config.model_validate(
+        {
+            "plugins": [{"name": "kit", "source": f"file://{root}"}],
+            "libraries": [{"name": "kit", "plugins": ["kit"]}],
+        }
+    )
+    knowledge_base = KnowledgeBase(config, tmp_path / "cache")
+    expected = "Read skill://kit/shared/x.md, not ${CLAUDE_SKILL_DIR}.\n"
+
+    async with Client(knowledge_base.mcp) as client:
+        rendered = {
+            name: (await client.get_prompt(name)).messages[0].content.text
+            for name in ("kit_own", "kit_theirs", "kit_vscode")
+        }
+    assert {p.dialect for p in knowledge_base.prompts} == {
+        "mcp-kb",
+        "claude",
+        "copilot",
+    }
+    assert set(rendered.values()) == {expected}
+
+
 # -- dot segments ---------------------------------------------------------------
 #
 # A skill links a sibling as `../other/SKILL.md`, and a client that resolves
@@ -307,30 +387,20 @@ async def test_a_directory_is_not_found_and_names_the_file_to_read(url, uri, ins
     assert instead in mirrored.content[0].text
 
 
-LIBRARY_FILE_CITED_FROM_A_SKILL = "skill://grafana/grafana-lgtm/loki/shared/style.md"
+CITED_FROM_A_SKILL = "skill://grafana/grafana-lgtm/loki/shared/style.md"
 
 
-async def test_a_library_file_cited_from_inside_a_skill_names_its_address(url):
-    """Skills cite shared material from the repository root; resolved against
-    the skill it misses, and the error says where the file actually is."""
-    for error in (
-        await _read_error(url, LIBRARY_FILE_CITED_FROM_A_SKILL),
-        await _tool(url, LIBRARY_FILE_CITED_FROM_A_SKILL),
+async def test_a_library_file_cited_from_inside_a_skill_reads_there(url):
+    """Skills cite shared material from the repository root, which is their
+    plugin root: the citation reads at the address it resolves to."""
+    assert await _read(url, CITED_FROM_A_SKILL) == "house style\n"
+    assert await _tool(url, CITED_FROM_A_SKILL) == "house style\n"
+    # Another plugin's root is not this skill's, in either direction.
+    for uri in (
+        "skill://grafana/grafana-lgtm/loki/extra/notes.md",
+        "skill://grafana/grafana-ops/runbook/shared/style.md",
     ):
-        assert "skill://grafana/shared/style.md" in error
-
-
-async def test_the_library_file_hint_respects_the_scope(url):
-    """Scoped to plugins that do not ship the file, no hint."""
-    cited = "skill://grafana/grafana-ops/runbook/extra/notes.md"
-    assert "skill://grafana/extra/notes.md" in await _read_error(url, cited)
-    pinned = await _read_error(url, cited, tags="extra")
-    assert "skill://grafana/extra/notes.md" in pinned
-    # loki is in this scope; the grafana-extra plugin that ships the file is not.
-    from_loki = "skill://grafana/grafana-lgtm/loki/extra/notes.md"
-    assert "skill://grafana/extra/notes.md" in await _read_error(url, from_loki)
-    hidden = await _read_error(url, from_loki, tags="core")
-    assert "skill://grafana/extra/notes.md" not in hidden
+        assert "not found" in await _read_error(url, uri)
 
 
 async def test_a_skill_root_names_its_manifest_too(url):

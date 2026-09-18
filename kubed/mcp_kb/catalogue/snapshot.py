@@ -45,7 +45,7 @@ from . import harvest
 from .index import FetchRecord, PluginRecord, PromptRow, SkillRow, now
 from .prompts import FilePrompt, load_prompts, stem
 from .skills import LibraryFiles, Skill, SkillIndex, load_skills, naming_problem
-from .uris import INDEX, LIBRARY_FILES, SCHEME, Catalogue, _count, uri_for
+from .uris import RESERVED_NAMES, SCHEME, Catalogue, _count, uri_for
 
 log = logging.getLogger(__name__)
 
@@ -53,9 +53,6 @@ log = logging.getLogger(__name__)
 # one of them: its tree is the last good one, which is the whole point.
 SERVABLE = ("ok", "stale")
 
-# Names the server generates at any folder. A library file called one of these
-# would be listed and then never read, since the index answers first.
-RESERVED_NAMES = frozenset({INDEX, LIBRARY_FILES})
 
 # The directories whose markdown files are Claude Code commands by convention.
 # A file there is read in Claude's dialect unless the plugin says otherwise;

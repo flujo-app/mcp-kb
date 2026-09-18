@@ -50,9 +50,10 @@ import json
 import mimetypes
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from ..mcp.scope import EVERYTHING, Scope
+from . import placeholders
 from .harvest import hidden
 from .skills import LibraryFiles, Skill, SkillIndex
 
@@ -61,6 +62,10 @@ MAIN_FILE = "SKILL.md"
 MANIFEST = "_manifest"
 INDEX = "_index.md"
 LIBRARY_FILES = "_files.md"
+# Names the server generates at any folder. A file called one of these is
+# skipped by the harvest and never served by the plugin-root fallback: where
+# there is a generated body it answers first, and ``/health`` says as much.
+RESERVED_NAMES = frozenset({INDEX, LIBRARY_FILES})
 # Distinct scopes a catalogue remembers listings for before starting over.
 MEMO_LIMIT = 64
 
@@ -388,6 +393,23 @@ class Catalogue:
                 return skill, "/".join(segments[cut:])
         return None
 
+    def _unclaimed(self, library: str, path: str) -> bool:
+        """Whether the library-wide fallback may answer ``path`` at all.
+
+        Two addresses it may not, and they are the two the harvest already
+        refuses to serve a library file at (``snapshot._admit``), so that
+        ``/health``'s ``skipped`` stays true and one URI keeps one answer:
+
+        - one inside a skill's address, *whoever* may see that skill -- the
+          skill branch above owns it, and a scope that hides the skill must not
+          uncover something else at the same URI;
+        - one named like an index the server generates, which answers first
+          wherever there is one.
+        """
+        if PurePosixPath(path).name in RESERVED_NAMES:
+            return False
+        return self._skill_at(library, path, EVERYTHING) is None
+
     # -- reading ------------------------------------------------------------
 
     def read(self, uri: str, scope: Scope = EVERYTHING) -> str | None:
@@ -403,6 +425,12 @@ class Catalogue:
         the snapshot serves no such pair: a library file inside a skill of its
         own plugin, or named like an index, is skipped, and one inside another
         plugin's skill fails that plugin.
+
+        Either kind of miss falls back to the plugin root -- the skill's own,
+        then every one the library has -- because that is where a kit's shared
+        material actually sits and what its citations and
+        ``${CLAUDE_PLUGIN_ROOT}`` point at. The fallback reads what it is asked
+        for and lists nothing.
         """
         parsed = parse(uri)
         if parsed is None:
@@ -413,6 +441,8 @@ class Catalogue:
         found = self._skill_at(library, path, scope)
         if found is not None and found[1]:
             body = self._skill_file(*found)
+            if body is None:
+                body = self._root_file(*found)
             if body is not None:
                 return body
         if path == INDEX:
@@ -426,17 +456,18 @@ class Catalogue:
                 return body
         if scope.library and scope.library != library:
             return None
-        return self._resources.read(library, path, scope)
+        body = self._resources.read(library, path, scope)
+        if body is None and self._unclaimed(library, path):
+            body = self._resources.read_any(library, path, scope)
+        return body
 
     def hint(self, uri: str, scope: Scope = EVERYTHING) -> str | None:
         """What to read instead of an address that serves nothing, or None.
 
-        Two kinds of miss get one. A directory -- a library, a folder, a skill's
-        root -- names the file to read in its place. And a path under a skill
-        that is really one of the library's own files: skills that factor
-        material up out of themselves cite it from the repository root
-        (``shared/tokens.md``), which resolved against the skill's directory
-        is an address with nothing at it.
+        One kind of miss gets one: a directory -- a library, a folder, a skill's
+        root -- which names the file to read in its place. A path under a skill
+        that is really the library's own material needs no hint any more; the
+        plugin-root fallback in ``read`` serves it where it was asked for.
 
         Answered from what ``scope`` can see, so a hint never confirms an
         address the caller could not list.
@@ -465,13 +496,6 @@ class Catalogue:
                 f" read {uri_for(skill)} for its instructions, or"
                 f" {uri_for(skill, MANIFEST)} for the files it ships."
             )
-        if found is not None:
-            skill, rest = found
-            if rest in files:
-                return (
-                    f"The {skill.name} skill ships no {rest}, but its library"
-                    f" does: read {SCHEME}{library}/{rest}."
-                )
         folder = path.strip("/")
         if any(s.folder == folder or s.folder.startswith(f"{folder}/") for s in skills):
             return (
@@ -557,6 +581,34 @@ class Catalogue:
             return None
         # A live source's file may have moved since it was copied, and this
         # is where that is noticed -- a read is the only thing that asks.
+        if self._revalidate is not None:
+            self._revalidate(target)
+        text = target.read_text(encoding="utf-8", errors="replace")
+        if file != MAIN_FILE:
+            # Instructions are substituted; everything else is bytes on disk,
+            # which is what `_manifest`'s size and hash describe.
+            return text
+        return placeholders.substitute(
+            text,
+            plugin_root=f"{SCHEME}{skill.library}",
+            skill_dir=f"{SCHEME}{skill.address}",
+        )
+
+    def _root_file(self, skill: Skill, file: str) -> str | None:
+        """One file of the skill's plugin root, addressed below the skill.
+
+        A skill that factors material up out of itself cites it from the
+        repository root (``shared/tokens.md``), and resolved against the skill's
+        own directory that is an address with nothing at it. The plugin root is
+        the ceiling -- what ``${CLAUDE_PLUGIN_ROOT}`` reaches in Claude Code --
+        so the citation reads, at the address the skill's text produced.
+        """
+        if hidden(Path(file)) or PurePosixPath(file).name in RESERVED_NAMES:
+            return None
+        root = skill.root.resolve()
+        target = (root / file).resolve()
+        if not target.is_relative_to(root) or not target.is_file():
+            return None
         if self._revalidate is not None:
             self._revalidate(target)
         return target.read_text(encoding="utf-8", errors="replace")
