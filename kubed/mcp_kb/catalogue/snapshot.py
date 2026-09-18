@@ -554,10 +554,20 @@ def _plugin_status(
 
 
 def _fetch_status(record: FetchRecord, live: bool) -> dict:
+    """One fetch's ``/health`` entry, which the published contract describes.
+
+    ``built`` and ``fingerprint`` describe the tree being served, so only a
+    record that has one carries them: a failed fetch published an empty
+    fingerprint and a timestamp for a tree nobody can read, which an operator
+    cannot tell from a real one.
+    """
     return {
         "status": record.status,
-        "built": record.built,
-        "fingerprint": record.fingerprint,
+        **(
+            {"built": record.built, "fingerprint": record.fingerprint}
+            if record.status in SERVABLE
+            else {}
+        ),
         # Config, so it is here rather than in the counters /health merges
         # in: an operator has to be able to see that a fetch is live even
         # before anything has read one of its files.

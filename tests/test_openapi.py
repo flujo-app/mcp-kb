@@ -228,6 +228,23 @@ async def test_a_real_health_response_matches_the_documented_fields(every_status
             assert set(info) <= set(schemas[schema]["properties"]), (part, info)
 
 
+async def test_a_failed_fetch_carries_only_its_status_and_error(every_status):
+    """`built` and `fingerprint` describe the tree being served, which a fetch
+    that never materialised one has not got -- and the document says they are
+    absent only when `status` is `failed`, so the published contract is what
+    is checked here rather than the field list, which a superset satisfies."""
+    transport = httpx.ASGITransport(app=every_status.mcp.http_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://kb") as http:
+        fetches = (await http.get("/health")).json()["fetches"]
+
+    assert [
+        set(info) for info in fetches.values() if info["status"] == "failed"
+    ] == [{"status", "error"}]
+    for info in fetches.values():
+        if info["status"] != "failed":
+            assert info["built"] and info["fingerprint"] is not None
+
+
 async def test_a_real_reindex_response_matches_the_documented_fields(knowledge_base):
     transport = httpx.ASGITransport(app=knowledge_base.mcp.http_app())
     async with httpx.AsyncClient(transport=transport, base_url="http://kb") as http:
