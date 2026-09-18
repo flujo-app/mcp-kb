@@ -171,6 +171,15 @@ jobs:
   image:
     name: Publish Image
     needs: version
+    # A called workflow cannot hold a permission its caller did not grant, and
+    # image.yml's job asks for id-token to reach GCP for the Docker Hub
+    # credentials. Without this block the call inherits the workflow default —
+    # contents: read — and the whole run is rejected before any job starts, with
+    # a startup failure that names publish.yml and not the job. On a direct push
+    # image.yml's own permissions apply, so only this path was ever short.
+    permissions:
+      contents: read
+      id-token: write   # GCP workload-identity federation, for the registry creds
     uses: ./.github/workflows/image.yml
     with:
       tag: ${{ inputs.push && needs.version.outputs.tag || '' }}
