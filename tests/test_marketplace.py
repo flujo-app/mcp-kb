@@ -415,8 +415,12 @@ def test_a_strict_true_entry_is_ordinary(tmp_path):
     assert only(read(tmp_path, entry(strict=True))).name == "p"
 
 
-@pytest.mark.parametrize("name", ["Not A Name", "", "-x", "a/b"])
+@pytest.mark.parametrize("name", ["Not A Name", "", "-x", "a/b", "valid\n", "va\nlid"])
 def test_an_entry_whose_name_could_not_be_a_library_segment_is_skipped(tmp_path, name):
+    """The two newline rows are what `re.match` let through: Python's `$` also
+    matches before a final newline, so `"valid\n"` passed a pattern anchored
+    at both ends -- and an entry name becomes a plugin id, a `/health` key, a
+    `skill://` segment and a log line that splits."""
     catalog = read(tmp_path, {"plugins": [{"name": name, "source": "./"}]})
 
     assert "name" in skip_reason(catalog)

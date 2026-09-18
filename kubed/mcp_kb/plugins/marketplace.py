@@ -120,7 +120,13 @@ def _plugin(
     if not isinstance(raw, dict):
         raise _Skip("an entry must be an object")
     name = raw.get("name")
-    if not isinstance(name, str) or not re.match(NAME, name):
+    # `fullmatch`, not `match`: Python's `$` also matches before a final
+    # newline, so `re.match` let "valid\n" through -- and that name becomes a
+    # plugin id, a `/health` key, a `skill://` segment and a log line that
+    # splits. (`config.py`'s pydantic `pattern=NAME` fields are not affected:
+    # pydantic-core matches with the Rust engine, whose `$` is the end of the
+    # string and nothing else. `tests/test_config.py` pins it.)
+    if not isinstance(name, str) or not re.fullmatch(NAME, name):
         raise _Skip(f"{name!r} is not a plugin name")
     if raw.get("strict") is False:
         # The entry would be the whole definition, the plugin's own manifest

@@ -188,6 +188,17 @@ def test_a_bad_source_name_is_rejected_not_slugged(tmp_path, name):
         load_config(write(tmp_path, f"sources:\n- name: '{name}'\n  url: file:///a\n"))
 
 
+@pytest.mark.parametrize("name", ['"valid\\n"', '"va\\nlid"'])
+def test_a_name_carrying_a_newline_is_refused_here_too(tmp_path, name):
+    """`NAME` is anchored at both ends, and pydantic-core matches it with the
+    Rust engine, whose `$` is the end of the string and nothing else. Python's
+    `re` also matches before a *final* newline, which is how the same pattern
+    accepted `"valid\n"` in `marketplace.py`. This pins the engine: these
+    names stay refused whatever `regex_engine` a later pydantic defaults to."""
+    with pytest.raises(ConfigError):
+        load_config(write(tmp_path, f"sources:\n- name: {name}\n  url: file:///a\n"))
+
+
 def test_live_caching_is_refused_on_a_git_source(tmp_path):
     """Revalidation is WebDAV's; on git it would be silently nothing."""
     with pytest.raises(ConfigError, match="webdav"):
