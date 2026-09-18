@@ -35,7 +35,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 
-from ..config import Config
+from ..config import Config, scrub
 from ..plugins import Fetch, Globs, Plugin
 from ..plugins.manifest import read_manifest
 from ..plugins.select import select
@@ -331,8 +331,16 @@ def assemble_libraries(
                 name=lib.name,
                 description=lib.description,
                 plugins=tuple(dict.fromkeys(ids)),
-                error="; ".join(problems) or None,
-                skipped=(skipped or {}).get(lib.name, ()),
+                error=scrub("; ".join(problems)) or None,
+                # Both of these quote fetched content -- a marketplace entry's
+                # own fields -- and `/health` publishes them unauthenticated,
+                # so they meet the same guard a log line does. The messages are
+                # built from a host rather than a URL where they can be; this
+                # is what stops the next one that is not from being a leak.
+                skipped=tuple(
+                    {key: scrub(value) for key, value in row.items()}
+                    for row in (skipped or {}).get(lib.name, ())
+                ),
             )
         )
     return libraries

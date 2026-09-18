@@ -224,6 +224,43 @@ async def test_a_library_whose_marketplace_is_missing_says_so(market, tmp_path):
     assert str(tmp_path) not in json.dumps(health)
 
 
+async def test_a_credential_in_an_entry_never_reaches_health(market, tmp_path):
+    """A marketplace is fetched content, and its skip reasons are published
+    unauthenticated. Two hazards, one per entry: a `url` this server has no
+    source for, whose message is built from the host alone; and a `source`
+    type nothing installs, whose message quotes what the entry wrote -- the
+    class of message a future one will join, and what the scrub at the library
+    boundary is for."""
+    _catalog(
+        market,
+        {
+            "name": "sneaky",
+            "source": {
+                "source": "url",
+                "url": "https://user:s3cret@git.example.org/o/r.git",
+            },
+        },
+        {
+            "name": "sneakier",
+            "source": {"source": "https://user:s3cret@git.example.org/o/r"},
+        },
+    )
+    _commit(market, "credentials")
+    config = _config(tmp_path, libraries=[{"name": "obs", "source": "lab://market"}])
+    kb = KnowledgeBase(config, tmp_path / "cache")
+    health = await _health(kb)
+
+    assert health["libraries"]["obs"]["skipped"] == [
+        {"plugin": "sneaky", "reason": "no source for git.example.org is declared"},
+        {
+            "plugin": "sneakier",
+            "reason": "source type https://***@git.example.org/o/r is not supported",
+        },
+    ]
+    assert "s3cret" not in json.dumps(health)
+    assert "user:" not in json.dumps(health)
+
+
 async def test_an_unreadable_marketplace_is_reported_without_the_cache_path(
     market, tmp_path
 ):

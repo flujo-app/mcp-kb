@@ -177,7 +177,7 @@ def _where(
             raise _Skip(f"a {kind} entry needs a url")
         found = _under(config, url)
         if found is None:
-            raise _Skip(f"no source for {urlsplit(url).netloc} is declared")
+            raise _Skip(f"no source for {_host(url)} is declared")
         declared, path = found
         subdir = ""
         if kind == "git-subdir":
@@ -189,6 +189,18 @@ def _where(
             subdir = _join("", path_in_repo)
         return _fetch(config, declared, path, ref), subdir
     raise _Skip(f"source type {kind} is not supported")
+
+
+def _host(url: str) -> str:
+    """The host an entry's ``url`` names, and nothing else of it.
+
+    ``hostname`` rather than ``netloc``: a marketplace is somebody else's
+    file, so an entry may carry ``https://user:token@example.org/repo``, and
+    ``netloc`` keeps the userinfo -- into this library's ``skipped`` rows,
+    which ``/health`` serves unauthenticated. The port goes with it; which
+    port an undeclared host answers on is not what the message is about.
+    """
+    return urlsplit(url).hostname or "that url"
 
 
 def _declared(config: Config, url: str) -> SourceConfig | None:

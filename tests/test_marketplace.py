@@ -340,6 +340,24 @@ def test_a_url_entry_on_an_undeclared_host_is_skipped_naming_the_host(tmp_path):
     assert skip_reason(catalog) == "no source for git.example.org is declared"
 
 
+def test_a_url_entry_carrying_a_credential_names_only_the_host(tmp_path):
+    """A marketplace is somebody else's file, so an entry's url may carry
+    `user:token@` -- and this reason is published in that library's `skipped`
+    rows, which `/health` serves unauthenticated. `netloc` keeps the userinfo;
+    `hostname` is the host and nothing else of the url."""
+    catalog = read(
+        tmp_path,
+        entry(
+            source={
+                "source": "url",
+                "url": "https://user:s3cret@git.example.org:8443/o/r.git",
+            }
+        ),
+    )
+
+    assert skip_reason(catalog) == "no source for git.example.org is declared"
+
+
 def test_a_git_subdir_entry_keeps_the_path_as_its_subdir(tmp_path):
     plugin = only(
         read(

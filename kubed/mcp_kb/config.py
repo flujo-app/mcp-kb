@@ -75,9 +75,22 @@ REFRESH = r"^[1-9]\d*[smh]$"
 USERINFO = re.compile(r"(?<=://)[^/\s'\"]+@")
 
 
+def scrub(text: str) -> str:
+    """``text`` with any URL userinfo masked, for something about to be published.
+
+    ``redact`` is this plus the config's own resolved secrets, which is what a
+    log line or a traceback needs. This half is for what ``/health`` serves,
+    where the hazard is a credential that arrived in *fetched* content -- a
+    marketplace entry whose ``url`` carries ``user:token@`` -- rather than one
+    of ours. The guard is deliberately not the only line of defence: a message
+    is built from the host and not the URL where it can be.
+    """
+    return USERINFO.sub("***@", text)
+
+
 def redact(text: str, secrets: list[str]) -> str:
     """``text`` with URL userinfo and every value in ``secrets`` masked."""
-    text = USERINFO.sub("***@", text)
+    text = scrub(text)
     for secret in sorted(set(secrets), key=len, reverse=True):
         text = text.replace(secret, "***")
     return text
