@@ -29,7 +29,7 @@ plugins:
   description: The material penpot's skills cite from outside themselves.
   category: design
   tags: [penpot]
-  source: github://penpot/penpot-ai-kit?ref=c63d8e3717323fad859e794848e5a602b155a7ec
+  source: github://penpot/penpot-ai-kit?ref=efbefc935ee43804502976aa5ec9659a8bb7e207
   skills: []
   prompts: []
   files: ["shared/**/*", "workflows/**/*"]
@@ -43,7 +43,7 @@ libraries:
   source: github://grafana/skills?ref=51d33e71e191b409bbd25fc7be2684c610d18166
 - name: penpot
   description: Design skills for Penpot.
-  source: github://penpot/penpot-ai-kit?ref=c63d8e3717323fad859e794848e5a602b155a7ec
+  source: github://penpot/penpot-ai-kit?ref=efbefc935ee43804502976aa5ec9659a8bb7e207
   plugins: [penpot-shared]
 - name: superpowers
   description: General-purpose engineering skills.
