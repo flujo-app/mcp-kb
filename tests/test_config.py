@@ -85,7 +85,7 @@ def _webdav(*extra: str) -> str:
 
 
 def test_the_sketch_config_parses(tmp_path):
-    """The shape `stuff/config.yaml` sketches: named sources, plugins, libraries."""
+    """The shape §C1.30 settled on: named sources, plugins, libraries."""
     config = load_config(write(tmp_path, SKETCH))
 
     assert [s.name for s in config.sources] == ["nextcloud", "github"]

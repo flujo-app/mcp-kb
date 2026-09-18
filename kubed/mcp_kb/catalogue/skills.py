@@ -19,7 +19,7 @@ itself, because a file has no row of its own to copy them onto.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
@@ -134,18 +134,20 @@ class _Root:
     def admits(self, scope: Scope) -> bool:
         return scope.admits_labels(self.plugin.category, self.plugin.labels)
 
-    def holds(self, rel: str) -> Path | None:
+    def holds(self, rel: str, excluded: Iterable[Path] = ()) -> Path | None:
         """``rel`` as a file inside this root that a fallback may serve, or None.
 
         ``harvest.readable`` decides containment; on top of it, a path inside
         one of the plugin's skills is refused because that file already has an
         address -- the skill's -- whether or not the skill is one the snapshot
-        went on to serve.
+        went on to serve. ``excluded`` adds the other plugins' skills, for a
+        caller that knows the whole library (see ``LibraryFiles._skill_dirs``).
         """
         target = harvest.readable(self.base, rel)
         if target is None:
             return None
-        if any(target == d or d in target.parents for d in self.skills):
+        blocked = (*self.skills, *excluded)
+        if any(target == d or d in target.parents for d in blocked):
             return None
         return target
 
@@ -263,16 +265,17 @@ class LibraryFiles:
         is unlisted, and ``files()`` is unchanged.
 
         Hidden paths are refused as everywhere else, and ``_Root.holds`` decides
-        containment. Roots are tried in the order the library declares its
-        plugins, so a file two plugins ship is the first one's, as it is for a
-        harvested file.
+        containment, against every skill directory of the library. Roots are
+        tried in the order the library declares its plugins, so a file two
+        plugins ship is the first one's, as it is for a harvested file.
         """
         if harvest.hidden(Path(rel)):
             return None
+        excluded = self._skill_dirs(library)
         for entry in self._roots.get(library, ()):
             if not entry.admits(scope):
                 continue
-            target = entry.holds(rel)
+            target = entry.holds(rel, excluded)
             if target is not None:
                 return self._serve(target)
         return None
@@ -283,18 +286,31 @@ class LibraryFiles:
         What ``read_any`` does for every root, for the one root a caller
         already has: ``uris.py``'s skill-level fallback, where the root is the
         skill's own plugin's and the scope was decided by that skill being
-        visible at all. Same rule, so a path inside any of that plugin's skill
-        directories is refused here too -- reaching one through a sibling's
-        address would serve one file at two addresses.
+        visible at all. Same rule, so a path inside any skill directory of the
+        library is refused here too -- reaching one through a sibling's address
+        would serve one file at two addresses.
         """
         base = root.resolve()
+        excluded = self._skill_dirs(library)
         for entry in self._roots.get(library, ()):
             if entry.base != base:
                 continue
-            target = entry.holds(rel)
+            target = entry.holds(rel, excluded)
             if target is not None:
                 return self._serve(target)
         return None
+
+    def _skill_dirs(self, library: str) -> tuple[Path, ...]:
+        """Every skill directory of every plugin registered for ``library``.
+
+        The ceiling on a fallback read is the library's, not the answering
+        plugin's. Two plugins on one root -- the shape ``penpot-shared`` has,
+        and the one an operator writes to add files beside somebody else's kit
+        -- would otherwise let a scope that admits only the file-shipping
+        plugin read the other's skill files at the library base, at an address
+        the skill's own scope refuses. One URI, one answer, under every scope.
+        """
+        return tuple(d for entry in self._roots.get(library, ()) for d in entry.skills)
 
     def _serve(self, target: Path) -> str:
         # A live fetch's file may have moved since it was copied, and a read is

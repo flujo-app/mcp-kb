@@ -353,7 +353,9 @@ class KnowledgeBase:
         try:
             plugin, globs = with_manifest(plugin, root)
         except ValueError as exc:
-            return plugin, failed_plugin(plugin, str(exc))
+            # An OSError behind the read quotes the cache path; /health is
+            # published, so the root comes back out of it here as everywhere.
+            return plugin, failed_plugin(plugin, unrooted(str(exc), root))
         kept = reusable.get(plugin.id)
         if kept is not None and kept.fetch == fetch.key and _serving(kept):
             return plugin, kept

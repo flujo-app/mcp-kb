@@ -2,8 +2,10 @@
 
 A duck check on the body alone would misread prose -- a paragraph that
 mentions `$5` is not a Claude command -- so the body is the last resort and
-only decides between dialects nothing else has ruled on. What the config says
-comes first, then where the file is, then which frontmatter keys it carries.
+only decides between dialects nothing else has ruled on. The one key that says
+the file is not a prompt comes before all of it, since every rung below only
+answers *which* dialect; then what the config says, then where the file is,
+then which frontmatter keys it carries.
 
 Directories are deliberately not looked at here: a `commands/` tree and a
 manifest's `commands` entry are Claude's, and the caller that knows about
@@ -36,17 +38,23 @@ _OBJECTS = "objects"
 
 def dialect_for(path: Path, meta: dict, body: str, declared: str = AUTO) -> str | None:
     """The dialect's ``NAME``, or None when the file is not a prompt at all."""
+    # Above everything, the declaration included: a dialect says how to read a
+    # prompt, never whether the file is one. An instructions file that landed
+    # in a `commands/` tree, or under a plugin declaring `dialect: claude`, is
+    # still a rule for the model to follow -- publishing it as a command is
+    # precisely what this key exists to refuse.
+    if not_a_prompt(meta):
+        return None
+
     if declared and declared != AUTO:
         return declared
 
     if path.name.endswith(COPILOT_SUFFIX):
         return copilot.NAME
 
-    # First of the keys, because it is the one that disqualifies the file: a
-    # VS Code instructions or chatmode file carries `tools:` as well, and
-    # reading that key first would publish a rule as a command.
-    if not_a_prompt(meta):
-        return None
+    # Before the rest of the keys: a VS Code instructions or chatmode file
+    # carries `tools:` as well, so reading that key first would decide a
+    # dialect for a file the check above has not seen.
     if any(key in meta for key in COPILOT_KEYS):
         return copilot.NAME
 

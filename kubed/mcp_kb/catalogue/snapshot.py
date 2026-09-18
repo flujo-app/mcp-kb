@@ -44,6 +44,7 @@ from ..sources.live import Revalidator, is_live
 from . import harvest
 from .index import FetchRecord, PluginRecord, PromptRow, SkillRow, now
 from .prompts import FilePrompt, load_prompts, stem
+from .prompts.detect import COPILOT_SUFFIX
 from .skills import LibraryFiles, Skill, SkillIndex, load_skills, naming_problem
 from .uris import RESERVED_NAMES, SCHEME, Catalogue, _count, uri_for
 
@@ -269,9 +270,15 @@ def _dialect(plugin: Plugin, path: Path, root: Path) -> str:
     convention, and a description-only command in it renders the same in
     every dialect until it carries an ``argument-hint``. ``"auto"`` leaves the
     rest to ``detect``, and what it decides is what the row records.
+
+    A ``.prompt.md`` in that tree is the exception: a filename that names its
+    own dialect beats the directory it happens to sit in, so the convention
+    yields and ``detect`` reads it as Copilot's.
     """
     if plugin.dialect != "auto":
         return plugin.dialect
+    if path.name.endswith(COPILOT_SUFFIX):
+        return "auto"
     rel = _relative(path, root)
     if any(rel.startswith(f"{d}/") for d in COMMAND_DIRS):
         return "claude"

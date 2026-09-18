@@ -193,11 +193,18 @@ def _declared(config: Config, url: str) -> SourceConfig | None:
 
 
 def _under(config: Config, url: str) -> tuple[SourceConfig, str] | None:
-    """The declared git source this URL sits under, and the path below it."""
+    """The declared git source this URL sits under, and the path below it.
+
+    A trailing ``.git`` goes: it is a spelling of the same repository, and the
+    path is what the fetch key is built from -- so a catalogue writing
+    ``https://github.com/o/r.git`` shares its clone with a plugin somebody
+    declared as ``github://o/r``, instead of cloning it a second time and
+    reporting a second fetch in ``/health``.
+    """
     for source in config.sources:
         base = _base(source)
         if source.backend == "git" and url.startswith(f"{base}/"):
-            return source, url[len(base) + 1 :]
+            return source, url[len(base) + 1 :].removesuffix(".git")
     return None
 
 

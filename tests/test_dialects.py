@@ -11,7 +11,9 @@ import logging
 
 import pytest
 
+from kubed.mcp_kb import KnowledgeBase
 from kubed.mcp_kb.catalogue.prompts import load_prompt, load_prompts
+from kubed.mcp_kb.config import Config
 
 pytestmark = pytest.mark.unit
 
@@ -427,3 +429,57 @@ def test_a_file_with_nothing_to_drop_says_nothing(tmp_path, caplog):
     with caplog.at_level(logging.DEBUG, logger="kubed.mcp_kb.catalogue.prompts"):
         load_prompt(path, "lib")
     assert dropped(caplog) == []
+
+
+def test_an_instructions_file_is_not_a_prompt_under_a_declared_dialect(tmp_path):
+    """A dialect says *how* to read a prompt, never whether the file is one.
+
+    A plugin declaring `dialect: claude` -- or a `commands/` tree, which the
+    caller spells as the same declaration -- would otherwise walk straight past
+    the one key that disqualifies the file, and publish a rule as a command."""
+    path = write(
+        tmp_path / "style.md", "description: d\napplyTo: '**/*.py'\n", "Type your code."
+    )
+    skipped = []
+    assert load_prompts([path], library="lib", dialect="claude", skipped=skipped) == []
+    assert skipped == [(path, "not a prompt: has `applyTo`")]
+
+
+def _kb(tmp_path, rel, frontmatter, body):
+    """A server over one plugin holding one prompt file at ``rel``."""
+    root = tmp_path / "src"
+    write(root / rel, frontmatter, body)
+    config = Config.model_validate(
+        {
+            "plugins": [{"name": "src", "source": f"file://{root}", "skills": []}],
+            "libraries": [{"name": "lib", "plugins": ["src"]}],
+        }
+    )
+    return KnowledgeBase(config, tmp_path / "c")
+
+
+def test_an_instructions_file_in_a_commands_tree_is_not_published(tmp_path):
+    """The path convention reaches the harvest before any key is read, so this
+    is the one instructions file the ladder could never see. Through a real
+    server, because the `commands/` rung only exists there."""
+    kb = _kb(
+        tmp_path, "commands/style.md", "description: d\nglobs: '**/*.py'\n", "Type it."
+    )
+
+    assert kb.snapshot.prompts == ()
+    skipped = kb.snapshot.status["plugins"]["src"]["skipped"]
+    assert [s["reason"] for s in skipped] == ["not a prompt: has `globs`"]
+
+
+def test_a_prompt_md_in_a_commands_tree_is_copilots(tmp_path):
+    """A filename that names its own dialect beats the directory it sits in."""
+    kb = _kb(
+        tmp_path,
+        "commands/greet.prompt.md",
+        "description: Greet.\narguments:\n- name: who\n  description: Whom.\n",
+        "Hi ${input:who}.",
+    )
+
+    (prompt,) = kb.snapshot.prompts
+    assert prompt.dialect == "copilot"
+    assert prompt.render({"who": "you"}) == "Hi you."

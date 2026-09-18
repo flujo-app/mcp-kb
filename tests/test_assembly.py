@@ -245,6 +245,40 @@ async def test_an_unreadable_marketplace_is_reported_without_the_cache_path(
     assert str(tmp_path) not in json.dumps(health)
 
 
+async def test_an_unreadable_manifest_is_reported_without_the_cache_path(
+    market, tmp_path
+):
+    """The same leak, on the other file a plugin root is read for.
+
+    ``read_manifest``'s OSError quotes the absolute path it failed on, and a
+    plugin's error is published in ``/health`` exactly as a library's is. Built
+    once, made unreadable, then met on the restart that reuses the fetch."""
+    _write(market, "lgtm/.claude-plugin/plugin.json", '{"version": "1.0"}')
+    _commit(market, "manifest")
+    config = _config(
+        tmp_path,
+        plugins=[{"name": "lgtm", "source": "lab://market//lgtm"}],
+        libraries=[{"name": "obs", "plugins": ["lgtm"]}],
+    )
+    first = KnowledgeBase(config, tmp_path / "cache")
+    manifest = (
+        Path(first._fetches["lab://market"].root)
+        / "lgtm"
+        / ".claude-plugin"
+        / "plugin.json"
+    )
+    manifest.chmod(0o000)
+    if os.access(manifest, os.R_OK):
+        pytest.skip("running as root: the file is readable whatever its mode")
+
+    kb = KnowledgeBase(config, tmp_path / "cache")
+    health = await _health(kb)
+
+    error = health["plugins"]["lgtm"]["error"]
+    assert "plugin.json" in error and "Permission denied" in error
+    assert str(tmp_path) not in json.dumps(health)
+
+
 def test_a_plugin_status_never_carries_a_null_error(tmp_path):
     """`PluginStatus.error` is a string: an ok record with no root -- a shape
     nothing builds, but the index could hold -- says so in words."""

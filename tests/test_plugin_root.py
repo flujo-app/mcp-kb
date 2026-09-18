@@ -213,3 +213,78 @@ async def test_a_scope_that_excludes_the_plugin_reaches_nothing_under_its_root(u
     assert await _missing(url, "skill://kit/writing/shared/x.md", tags="extra")
     assert await _read(url, "skill://kit/ops-notes.md", tags="extra") == "ops notes\n"
     assert await _missing(url, "skill://kit/ops-notes.md", tags="core")
+
+
+def _build_shared_root(base):
+    """Two plugins on one root: a kit, and a helper shipping its shared files.
+
+    ``penpot-shared``'s shape, and what ``wiki/Plugins.md`` tells an operator to
+    write when somebody else's kit needs files beside it.
+    """
+    kit = base / "kit"
+    _write(
+        kit,
+        "skills/loki/SKILL.md",
+        "---\nname: loki\ndescription: Query Loki.\n---\n\n"
+        "See ${CLAUDE_SKILL_DIR}/ref.md.\n",
+    )
+    _write(kit, "skills/loki/ref.md", "LOKI REF\n")
+    _write(kit, "shared/x.md", "shared bytes\n")
+
+    return Config.model_validate(
+        {
+            "plugins": [
+                {"name": "a", "source": f"file://{kit}", "tags": ["core"]},
+                {
+                    "name": "b",
+                    "source": f"file://{kit}",
+                    "tags": ["extra"],
+                    "skills": [],
+                    "files": ["shared/**/*"],
+                },
+            ],
+            "libraries": [{"name": "lib", "plugins": ["a", "b"]}],
+        }
+    )
+
+
+@pytest.fixture(scope="module")
+def shared_root_url(tmp_path_factory):
+    base = tmp_path_factory.mktemp("shared-root")
+    app = KnowledgeBase(_build_shared_root(base), base / "_cache").mcp.http_app()
+    port = _free_port()
+    server = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    for _ in range(100):
+        if server.started:
+            break
+        threading.Event().wait(0.05)
+    yield f"http://127.0.0.1:{port}/mcp"
+    server.should_exit = True
+    thread.join(timeout=5)
+
+
+async def test_a_sibling_plugins_skill_is_not_readable_through_a_shared_root(
+    shared_root_url,
+):
+    """The ceiling excludes every skill directory of the *library*.
+
+    Two plugins on one root: ``a`` ships the skills, ``b`` only the shared
+    files. ``b`` has no skill directories of its own, so a per-plugin exclusion
+    let its root answer for ``a``'s skills -- and a client scoped to ``extra``,
+    which may not see skill ``loki`` at its own address, read the skill's
+    instructions and references at the library base, unsubstituted.
+    """
+    url = shared_root_url
+    for uri in ("skill://lib/skills/loki/SKILL.md", "skill://lib/skills/loki/ref.md"):
+        assert await _missing(url, uri, tags="extra")
+        assert "LOKI" not in await _tool(url, uri, tags="extra")
+        assert "Query Loki" not in await _tool(url, uri, tags="extra")
+    # The skill's own addresses still answer the scope that admits it, and the
+    # placeholder resolves there -- the point of keeping one address per file.
+    body = await _read(url, "skill://lib/loki/SKILL.md", tags="core")
+    assert "See skill://lib/loki/ref.md." in body
+    assert await _read(url, "skill://lib/loki/ref.md", tags="core") == "LOKI REF\n"

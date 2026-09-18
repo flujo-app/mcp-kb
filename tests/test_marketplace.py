@@ -294,8 +294,26 @@ def test_a_url_entry_resolves_through_the_source_that_prefixes_it(tmp_path):
         )
     )
 
-    assert plugin.fetch.url == "https://gitlab.com/group/repo.git"
-    assert plugin.fetch.key == "gitlab://group/repo.git"
+    assert plugin.fetch.url == "https://gitlab.com/group/repo"
+    assert plugin.fetch.key == "gitlab://group/repo"
+
+
+def test_a_url_entrys_git_suffix_does_not_cost_a_second_clone(tmp_path):
+    """`.../group/repo.git` and `gitlab://group/repo` are one repository, so
+    they have to key as one -- the promise a `github` entry already keeps, and
+    the whole reason "declare your own plugin against the same repo" is free."""
+    here = config(plugins=[{"name": "mine", "source": "gitlab://group/repo"}])
+    plugin = only(
+        read(
+            tmp_path,
+            entry(
+                source={"source": "url", "url": "https://gitlab.com/group/repo.git"}
+            ),
+            config=here,
+        )
+    )
+
+    assert plugin.fetch == fetch_for(here, parse_address("gitlab://group/repo"))
 
 
 def test_a_url_entry_on_an_undeclared_host_is_skipped_naming_the_host(tmp_path):
