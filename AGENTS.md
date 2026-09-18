@@ -17,9 +17,11 @@ cited as `§C1.n` and are the reference for anything here that says "see the
 saga".
 
 [Chapter 1 — The Card Catalogue](saga/Chapter_1_The_Card_Catalogue.md) is the
-whole design: a config file of sources (§C1.3, §C1.4), one per backend (§C1.5 —
-§C1.7), the index and the `snapshot`/`live` dial (§C1.18), libraries and tags
-(§C1.19), and the name (§C1.22).
+whole design: a config file (§C1.3, §C1.4), one module per backend (§C1.5 —
+§C1.7), the index and the `snapshot`/`live` dial (§C1.18), the name (§C1.22),
+and the shape the config settled into — sources, plugins and libraries, with a
+library as a marketplace or a query (§C1.30 — §C1.33), the prompt dialects
+(§C1.34) and what a placeholder may become (§C1.35 — §C1.37).
 
 Three other places, and none of them overlaps this file:
 
@@ -42,16 +44,25 @@ installer's, against whatever image tag it chooses.
 | `kubed/mcp_kb/server.py` | `KnowledgeBase` — the composition root: cold start, the refresh loop, which snapshot is current. No tool bodies |
 | `kubed/mcp_kb/main.py` | CLI and env parsing, and the `mcp-kb` console script |
 | `kubed/mcp_kb/routes.py` | the plain-HTTP surface: `/health`, `/reindex`, `/openapi.yaml` |
-| `kubed/mcp_kb/config.py` | the config file's model — `Config`, `Library`, `Include`, the `*Source` models, `EnvRef`, `schema()` |
+| `kubed/mcp_kb/config.py` | the config file's model — `Config`, `SourceConfig`, `PluginConfig`, `LibraryConfig`, `Selector`, `BasicAuth`, `EnvRef`, `schema()` |
+| `kubed/mcp_kb/plugins/` | what the config declares and a marketplace publishes, resolved |
+| ⤷ `address.py` | `<source>://<path>[//<subdir>][?ref=]` — `Address`, and the fetch key that makes two plugins one clone |
+| ⤷ `__init__.py` | `Fetch`, `Globs`, `Plugin`, and the resolution of a declared plugin. Imports no FastMCP |
+| ⤷ `marketplace.py` | somebody else's `marketplace.json`, read as plugins of ours — which entry sources are honoured, and why the rest are skipped |
+| ⤷ `manifest.py` | a plugin's own `plugin.json`: the components it says it ships |
+| ⤷ `select.py` | `pluginSelector` and `?tags=` — the comma rule, in one place |
 | `kubed/mcp_kb/catalogue/` | what is served, and how it is found, addressed and persisted |
-| ⤷ `harvest.py` | the `include` globs, and what counts as a skill, a prompt or a library file |
+| ⤷ `harvest.py` | a plugin's globs, and what counts as a skill, a prompt or a library file |
 | ⤷ `skills.py` | the domain — `Skill`, `SkillIndex`, and the scoping rules. Imports no FastMCP |
 | ⤷ `uris.py` | the `skill://` address space — `Catalogue`, the grammar |
-| ⤷ `prompts.py` | `FilePrompt`, frontmatter parsing, rendering — no FastMCP |
-| ⤷ `index.py` | `Index`/`SourceRecord`, the on-disk `index.json` a cold start reads |
+| ⤷ `prompts/` | `FilePrompt`, the dialect seam, rendering — no FastMCP |
+| ⤷⤷ `detect.py` | which dialect a file is, strongest signal first |
+| ⤷⤷ `mcpkb.py`, `claude.py`, `copilot.py` | one module per dialect: `parse` into `Parsed`, `substitute` back out |
+| ⤷ `placeholders.py` | the two `${CLAUDE_*}` placeholders this server is the authority on |
+| ⤷ `index.py` | `Index`, `FetchRecord`, `PluginRecord` — the on-disk `index.json` a cold start reads |
 | ⤷ `snapshot.py` | `Snapshot`, `build_snapshot` — the immutable view every request reads |
-| ⤷ `refresh.py` | when a source is due to be looked at again, bounded to the shortest configured interval, and what a failure does to the last good one |
-| `kubed/mcp_kb/sources/` | where bytes come from — `file.py`, `git.py`, `webdav.py`, the shared per-version `export.py`, `errors.py`, and `live.py`, because revalidation is a source concern |
+| ⤷ `refresh.py` | when a fetch is due to be looked at again, bounded to the shortest configured interval, and what a failure does to the last good one |
+| `kubed/mcp_kb/sources/` | where bytes come from, one `Fetch` at a time — `file.py`, `git.py`, `webdav.py`, the shared per-version `export.py`, `errors.py`, and `live.py`, because revalidation is a source concern |
 | `kubed/mcp_kb/mcp/` | what an agent sees |
 | ⤷ `resources.py` | the resources, which are the interface, and the middleware — `NameTheFileToRead`, `HideMirrorTools` |
 | ⤷ `tools.py`, `prompts.py` | the two mirror pairs |
@@ -60,7 +71,7 @@ installer's, against whatever image tag it chooses.
 | ⤷ `pins.py` | `RefuseEmptyScope` — a scope that names nothing fails every request, saying what there is |
 | `kubed/mcp_kb/spec/` | `builder.py`, the OpenAPI document for the HTTP surface |
 | `scripts/` | `generate_openapi.py`, `generate_wiki.py`, and `requirements.py` for the image build |
-| `examples/config.yaml` | the worked config the image ships — four libraries as `github://` sources |
+| `examples/config.yaml` | the worked config the image ships — four marketplace libraries, and one plugin of our own beside penpot's |
 | `config.schema.json` | `Config.model_json_schema()`, committed so an editor can validate a config live |
 | `wiki/` | the GitHub wiki, as a submodule |
 
@@ -84,19 +95,36 @@ names with a prefix, and these names are the agent's API.
   the published contract starts lying.
 - **Changing what counts as a skill, a prompt or a library file** →
   `catalogue/harvest.py` for the rule, `catalogue/uris.py` for where it applies.
+- **A new prompt dialect** → one module in `catalogue/prompts/` with a `NAME`, a
+  `parse(meta, body) -> Parsed` and a `substitute(body, values)`, registered in
+  `DIALECTS`, plus its signal in `detect.py` and its literal in
+  `PluginConfig.dialect`. Never a branch inside an existing dialect: the seam is
+  what keeps "read every dialect, publish one" true.
+- **A new marketplace entry source form** → `plugins/marketplace.py::_where`,
+  and it must resolve to a *declared* source. A catalogue does not get to
+  introduce a host, because a host is where a credential and a refresh interval
+  are configured. An entry this server cannot install is skipped with a reason,
+  never guessed at.
+- **A new backend** → a module in `sources/` taking a `Fetch`, its scheme in
+  `config.BACKENDS`, and `sources/__init__.py`'s dispatch. Everything above it
+  sees a directory and nothing else, so nothing in `catalogue/` or `plugins/`
+  should need a line.
 - **Changing who may see one** → `catalogue/skills.py` for the rule,
   `catalogue/uris.py` for where it is applied. Every `Catalogue` method takes a
   `Scope`, so there is no method that can be called without deciding about it —
   a handler that reimplements that filter is how a pinned client ends up seeing
   another library.
-- **Adding a prompt** → a file matching a source's `include.prompts` glob (or
-  the convention), exposed as `<library>_<file stem>`. No code. Every
-  placeholder must be a declared argument and a required argument cannot have a
-  default; the server skips a file that breaks either rule, and
-  `tests/test_prompts.py` loads a broken one to prove it.
-- **A library referencing files outside its skills** → that source's
-  `include.files`. They are served at `skill://<library>/<path>` and listed
-  under `_files.md`, never indexed as skills.
+- **Adding a prompt** → a file matching a plugin's `prompts:` globs, its
+  manifest's `commands`, or the convention; exposed as `<library>_<file stem>`.
+  No code. In this server's own dialect every placeholder must be a declared
+  argument and a required argument cannot have a default; the server skips a
+  file that breaks either rule, and `tests/test_prompts.py` loads a broken one
+  to prove it.
+- **A library referencing files outside its skills** → a plugin's `files:`.
+  They are served at `skill://<library>/<path>` and listed under `_files.md`,
+  never indexed as skills. A citation that misses inside a skill is tried once
+  against the plugin root, which is that fallback's ceiling — nothing is
+  rewritten and a file the skill has always wins.
 - **A new flag or env var** → `main.py`, which is the whole configuration
   surface. Nothing else in the package reads `os.environ`, except `{env: NAME}`
   resolution in `config.py`, which is the one other reader — and it resolves a
@@ -104,9 +132,10 @@ names with a prefix, and these names are the agent's API.
 - **Anything that changes what the catalogue holds** goes through
   `KnowledgeBase.refresh` and produces a new `Snapshot`; never mutate one.
 
-`catalogue/` imports no FastMCP, deliberately: the catalogue is testable without
-an MCP client, and `tests/test_skills.py` and `tests/test_uris.py` exercise the
-scoping rules directly rather than only through a tool call.
+`catalogue/` and `plugins/` import no FastMCP, deliberately: both are testable
+without an MCP client, `tests/test_skills.py` and `tests/test_uris.py` exercise
+the scoping rules directly rather than only through a tool call, and
+`tests/test_boundaries.py` fails if either package grows the import.
 
 ## The surface, and why the tools are a mirror
 
@@ -127,8 +156,8 @@ neither tools nor listing rows:
 
 `<library>` is the first segment of every skill URI (the MCP Skills
 extension's "server-chosen prefix"), `<folder>` mirrors the skill's directory
-below its source's conventional skill root, and the last segment before the
-file is always the skill's `name`. A library, a folder or a skill's own
+below its plugin root with the conventional skill roots stripped, and the last
+segment before the file is always the skill's `name`. A library, a folder or a skill's own
 directory is a directory address and serves nothing; see `catalogue/uris.py`'s
 module docstring for the grammar in full.
 
@@ -143,26 +172,33 @@ prompts are a server capability, so a client cannot advertise using them. The
 tools stay callable either way: hiding one from a listing is presentation,
 refusing to run one would be a different and worse contract.
 
-Two ways to hard-scope, both ceilings the model cannot widen past:
+Three ways to hard-scope, the first two ceilings the model cannot widen past:
 
-- **A `Scope`, per client** — `?library=` / `?tags=` or the `X-Skill-Library` /
-  `X-Skill-Tags` headers. One deployment serves many narrow agents; in n8n it
-  is a Header Auth credential on the MCP Client Tool node. Prefer this — a
-  second copy of the server is a whole extra pod for something a header
-  solves.
+- **A `Scope`, per client** — `?library=`, `?categories=`, `?tags=` or the
+  `X-Skill-Library` / `X-Skill-Categories` / `X-Skill-Tags` headers. One
+  deployment serves many narrow agents; in n8n it is a Header Auth credential on
+  the MCP Client Tool node. Prefer this — a second copy of the server is a whole
+  extra pod for something a header solves. A scope names a library and nothing
+  below it: folders exist in URIs, not as selectors.
 - **A config that lists less**, per deployment. Narrower blast radius, but a
   whole pod.
+- **A library of your own**, assembled with a `pluginSelector` — a saved query a
+  client can then be pinned to by name. Not a boundary on its own; it is what
+  makes one nameable.
 
 They compose: the header narrows within whatever the config loads. Header
 scoping only exists inside an HTTP request, so it is inert over stdio — which is
 why `tests/test_header_scope.py` runs a real uvicorn server.
 
-`GET /health` reports the libraries, the skill and prompt counts, the
-catalogue's generation and when it was built, and each source's own status and
-fingerprint. `POST /reindex` returns the same payload plus `rebuilt`. Between
+`GET /health` reports the skill and prompt counts, the catalogue's generation
+and when it was built, and three maps: `libraries` (what each serves and what it
+could not resolve), `plugins` (keyed by id — `<entry>@<library>` for a
+marketplace entry — with its fetch, category, tags and what it yielded) and
+`fetches` (one per materialised tree, with its status and fingerprint).
+`POST /reindex` returns the same payload plus `rebuilt`, the fetch keys. Between
 them they answer the three questions worth asking of a running instance: did
-every configured source load, which generation is being served, and has a
-refresh picked up an edit yet.
+everything configured load, which generation is being served, and has a refresh
+picked up an edit yet.
 
 ## Things that already cost someone an afternoon
 
@@ -220,7 +256,7 @@ refresh picked up an edit yet.
   first. **Making the read path async — a thread for the blocking call, or an
   async WebDAV client — is the outstanding follow-up**, and it is a change to
   `mcp/resources.py`, `catalogue/uris.py` (the skill and library-file read) and
-  `catalogue/prompts.py` (`FilePrompt.body()`, the live prompt read), not to
+  `catalogue/prompts/` (`FilePrompt.body()`, the live prompt read), not to
   `sources/live.py`.
 - **An export is named by its version, so a rebuild of a version that has not
   moved is a rebuild over a tree being read.** That is the one case a repair
@@ -261,6 +297,11 @@ refresh picked up an edit yet.
   the tests, computes the next version, and builds both the image and the
   package without pushing any of them. A failed build after a successful tag
   strands a tag on a nonexistent image, which is exactly what the dry run buys.
+- **Nothing fetched is ever executed.** A marketplace entry with
+  `source: command` is skipped, and a `!` shell line or a `!{…}` block in a
+  prompt is text. A server that ran shell out of a repository it fetched would
+  be a supply-chain hole, and "just this one trusted catalogue" is how that
+  starts.
 - **A credential never reaches a log, an error, a path on disk, the index,
   `/health` or a served body.** A backend is config-only: no cache path, clone
   path, WebDAV URL or backend name in a served URI, a listing row, a prompt name

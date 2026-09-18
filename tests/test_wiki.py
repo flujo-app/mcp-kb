@@ -127,6 +127,7 @@ def test_installing_documents_every_url_parameter_and_header():
     page = (WIKI / "Installing.md").read_text().lower()
     parameters = [
         request.LIBRARY_PARAM,
+        request.CATEGORIES_PARAM,
         request.TAGS_PARAM,
         request.PROMPTS_PARAM,
         request.RESOURCES_PARAM,
@@ -134,6 +135,7 @@ def test_installing_documents_every_url_parameter_and_header():
     ]
     headers = [
         request.LIBRARY_HEADER,
+        request.CATEGORIES_HEADER,
         request.TAGS_HEADER,
         request.PROMPTS_HEADER,
         request.RESOURCES_HEADER,
