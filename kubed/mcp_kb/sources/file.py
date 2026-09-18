@@ -6,7 +6,7 @@ import os
 import stat
 from pathlib import Path
 
-from ..catalogue.harvest import CONVENTIONAL_DOTDIRS, inside
+from ..catalogue.harvest import FINGERPRINTED_DOTDIRS, inside
 from ..plugins import Fetch
 from .errors import SourceError
 
@@ -25,8 +25,14 @@ def fingerprint_file(fetch: Fetch, cache: Path, root: Path) -> dict:
     Served in place, so there is no clone or cache state to key off --
     ``fetch`` and ``cache`` are accepted only to keep the same signature every
     backend's fingerprint shares. Walked with ``os.walk`` (no globs), skipping
-    hidden directories except the conventional agent-tooling ones, same as
-    ``harvest.files``.
+    hidden directories except ``harvest.FINGERPRINTED_DOTDIRS``: the ones a
+    harvest reads, *plus* ``.claude-plugin``, which holds the marketplace and
+    manifest files a harvest is steered by. Editing a local
+    ``marketplace.json`` is the whole point of a ``file://`` marketplace, and
+    it changes nothing else in the tree -- so a walk that could not see it left
+    the fingerprint where it was and a configured ``refresh:`` never re-read
+    the catalogue. Those directories stay ``harvest.hidden``, so nothing in
+    them is ever served.
 
     Only regular files count, and a symlink counts only when it lands *inside*
     the root -- the same rule ``harvest.files`` applies, and the two must agree.
@@ -50,7 +56,7 @@ def fingerprint_file(fetch: Fetch, cache: Path, root: Path) -> dict:
     for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
         kept = []
         for d in dirnames:
-            if d.startswith(".") and d not in CONVENTIONAL_DOTDIRS:
+            if d.startswith(".") and d not in FINGERPRINTED_DOTDIRS:
                 continue
             target = inside(Path(dirpath) / d, base)
             if target is None or target in seen:

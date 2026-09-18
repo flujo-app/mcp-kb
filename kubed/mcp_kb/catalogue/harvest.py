@@ -9,7 +9,8 @@ empty list turns a kind off.
 Everything found is resolved and checked to lie inside the root, the same
 guard ``uris.py`` applies on read, so a glob like ``../**`` finds nothing.
 Dot directories are skipped, except the three that agent tooling conventionally
-lives in.
+lives in. A backend's *fingerprint* walk sees one more of them --
+``FINGERPRINTED_DOTDIRS`` below says which, and why the two sets differ.
 
 ``dir/**`` and ``dir/**/*`` mean the same thing here: ``patterns`` normalises
 the first into the second, because a trailing ``**`` matches directories only
@@ -50,6 +51,20 @@ SKILL_ROOTS: tuple[str, ...] = (
 )
 
 CONVENTIONAL_DOTDIRS: frozenset[str] = frozenset({".github", ".claude", ".agents"})
+
+# Where this server's own metadata files live: a `marketplace.json` and a
+# `plugin.json` (`plugins/marketplace.py`, `plugins/manifest.py`). Deliberately
+# *not* in CONVENTIONAL_DOTDIRS, and the two sets differ for one reason --
+# `hidden` keeps these out of every listing, because a catalogue and a manifest
+# are what say *what* to serve and are not themselves a skill, a prompt or a
+# library file, while a backend's fingerprint walk has to see them or editing a
+# local marketplace never looks like a change and a configured `refresh:` never
+# re-reads it.
+METADATA_DOTDIRS: frozenset[str] = frozenset({".claude-plugin"})
+
+# What a fingerprint descends into: everything a harvest reads, plus the
+# directories holding the files that decide what a harvest reads.
+FINGERPRINTED_DOTDIRS: frozenset[str] = CONVENTIONAL_DOTDIRS | METADATA_DOTDIRS
 
 
 def patterns(kind: str, globs: Globs) -> tuple[str, ...]:

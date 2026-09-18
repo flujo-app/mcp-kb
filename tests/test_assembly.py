@@ -699,3 +699,70 @@ async def test_a_library_whose_marketplace_failed_is_not_refused_a_category_or_t
         Scope.parse(library="obs", tags=["whatever"]), config, kb.snapshot
     )
     assert problem.startswith("The scope names tag 'whatever'")
+
+
+# -- a marketplace or a manifest edited in place -------------------------------
+
+
+async def test_editing_a_local_marketplace_is_picked_up_by_a_refresh(tmp_path):
+    """A `file://` marketplace is the case this whole shape exists for -- a
+    mounted volume, edited in place -- and `.claude-plugin/` holds the only
+    file that changes when an entry is added. A fingerprint walk that could not
+    see it left the fingerprint where it was, so a configured `refresh:` never
+    re-read the catalogue and only a restart or `/reindex` picked the entry up.
+    """
+    root = tmp_path / "market"
+    _skill(root, "lgtm/skills/loki", "loki")
+    _skill(root, "k6/skills/load", "load")
+    lgtm = {"name": "lgtm", "source": "./lgtm"}
+    _catalog(root, lgtm)
+    config = Config.model_validate(
+        {"libraries": [{"name": "obs", "source": f"file://{root}"}]}
+    )
+    kb = KnowledgeBase(config, tmp_path / "cache")
+    key = f"file://{root}"
+    assert await _skills(kb) == ["skill://obs/loki/SKILL.md"]
+    before = kb.status["fetches"][key]["fingerprint"]
+
+    _catalog(root, lgtm, {"name": "k6", "source": "./k6"})
+
+    assert kb.refresh() == [key]
+    assert kb.status["fetches"][key]["fingerprint"] != before
+    assert await _skills(kb) == [
+        "skill://obs/load/SKILL.md",
+        "skill://obs/loki/SKILL.md",
+    ]
+
+
+async def test_nothing_under_claude_plugin_is_harvested_or_served(tmp_path):
+    """The fingerprint walk sees that directory; the harvest must not. A
+    `marketplace.json` and a `plugin.json` say *what* to serve and are not
+    themselves a skill, a prompt or a library file -- not even under the
+    widest globs a config can write."""
+    root = tmp_path / "tree"
+    _skill(root, "skills/real", "real")
+    _write(root, "prompts/ok.md", "---\ndescription: Fine.\n---\nFine.\n")
+    _catalog(root, {"name": "x", "source": "./"})
+    _write(root, ".claude-plugin/plugin.json", json.dumps({"keywords": ["k"]}))
+    _skill(root, ".claude-plugin/skills/sneaky", "sneaky")
+    _write(root, ".claude-plugin/prompts/sneaky.md", "---\ndescription: d\n---\nNo.\n")
+    config = Config.model_validate(
+        {
+            "plugins": [
+                {
+                    "name": "p",
+                    "source": f"file://{root}",
+                    "skills": ["**/SKILL.md"],
+                    "prompts": ["prompts/**/*.md"],
+                    "files": ["**/*"],
+                }
+            ],
+            "libraries": [{"name": "lib", "plugins": ["p"]}],
+        }
+    )
+    kb = KnowledgeBase(config, tmp_path / "cache")
+
+    assert [s.name for s in kb.index.visible()] == ["real"]
+    assert [p.name for p in kb.snapshot.prompts] == ["lib_ok"]
+    assert kb.resources.files("lib") == ["prompts/ok.md"]
+    assert ".claude-plugin" not in json.dumps(await _health(kb))
