@@ -125,21 +125,16 @@ jobs:
         fetch-depth: 0
         token: ${{ steps.app-token.outputs.token }}
 
-    # Compute the next version WITHOUT changing anything, so we have it in hand
-    # before the real bump below.
-    - name: Compute next version
-      id: next
-      uses: duplocloud/version-bump@main
-      with:
-        version: ${{ inputs.action }}
-        push: false
-        token: ${{ steps.app-token.outputs.token }}
-
+    # One call, given the bump keyword. It computes the next version either way
+    # and emits it, so a dry run (push: false) already answers "what would this
+    # be" without a second invocation — and a second one fed its own `tag` back
+    # in as `version` would be asking the action to parse a git tag as a semver,
+    # which is not what that input is for.
     - name: Bump Version
       id: bump
       uses: duplocloud/version-bump@main
       with:
-        version: ${{ steps.next.outputs.tag }}
+        version: ${{ inputs.action }}
         push: ${{ inputs.push }}
         token: ${{ steps.app-token.outputs.token }}
 
