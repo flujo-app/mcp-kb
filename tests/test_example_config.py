@@ -223,12 +223,12 @@ def test_a_marketplace_entry_brings_its_own_plugin_and_its_own_words(tmp_path):
     ]
     entry = knowledge_base.status["plugins"]["grafana-lgtm@grafana"]
     assert (entry["category"], entry["tags"]) == ("observability", ["lgtm"])
-    # An entry that says nothing about itself carries nothing: a manifest is
-    # read for the components a plugin ships, not for the words it is selected
-    # by, so superpowers is reached by ?library=superpowers alone.
+    # An entry that says nothing about itself is completed by its manifest: the
+    # keywords plugin.json declares are what a scope can select superpowers by,
+    # since its marketplace entry carries no category and no tags.
     superpowers = knowledge_base.status["plugins"]["superpowers@superpowers"]
     assert (superpowers["category"], superpowers["tags"], superpowers["keywords"]) == (
-        None, [], [],
+        None, [], ["planning", "tdd"],
     )
 
 
