@@ -16,6 +16,7 @@ Two quirks of the server under test:
 """
 
 import json
+import logging
 import socket
 import threading
 import time
@@ -116,6 +117,35 @@ async def test_a_live_prompt_renders_the_edited_body(webdav, tmp_path):
 
     prompt = await provider.get_prompt("notes_p")
     assert "the second body" in await prompt.render({})
+
+
+async def test_a_live_prompt_saved_mid_edit_serves_the_last_good_body(
+    webdav, tmp_path, caplog
+):
+    """A frontmatter block that does not parse raises `yaml.YAMLError`, which
+    is not a `ValueError`: left out of the fallback, a file somebody is
+    halfway through saving turns `prompts/get` into an internal error instead
+    of serving the body last harvested, which is what live mode promises."""
+    webdav.write("prompts/p.md", PROMPT.format(body="the harvested body"))
+    knowledge_base = _knowledge_base(webdav, tmp_path)
+    provider = PromptProvider(lambda: knowledge_base.snapshot)
+
+    # An unquoted `[a] [b]` is two flow sequences in a row, which no YAML
+    # parser accepts -- the mistake `wiki/Prompts.md` warns about, and exactly
+    # what a half-typed hint looks like.
+    webdav.write(
+        "prompts/p.md",
+        "---\ndescription: A prompt.\nargument-hint: [a] [b]\n---\n\nthe edited body\n",
+    )
+
+    # `get_prompt` is what revalidates, so the invalid file is on disk by the
+    # time `render` re-reads it -- the shape the test above establishes.
+    with caplog.at_level(logging.WARNING, logger="kubed.mcp_kb.catalogue.prompts"):
+        prompt = await provider.get_prompt("notes_p")
+        rendered = await prompt.render({})
+
+    assert "the harvested body" in rendered
+    assert "re-reading prompt" in caplog.text
 
 
 # -- and what it does not ------------------------------------------------------

@@ -105,12 +105,18 @@ class FilePrompt:
         A file that has become unreadable or lost its frontmatter falls back to
         the body last harvested -- the same rule the rest of live mode follows,
         that a server in trouble degrades to the copy already known good.
+
+        ``yaml.YAMLError`` is in that list because it is the likeliest of them:
+        a file saved mid-edit has a frontmatter block that does not parse, and
+        that is not a ``ValueError``. Serving the last good template is the
+        promise above; raising out of ``render`` would make ``prompts/get`` an
+        internal error until somebody finished typing.
         """
         if not self.live:
             return self.template
         try:
             return _split(self.path.read_text(encoding="utf-8"))[1]
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, yaml.YAMLError) as exc:
             log.warning("re-reading prompt %s: %s", self.path, exc)
             return self.template
 
