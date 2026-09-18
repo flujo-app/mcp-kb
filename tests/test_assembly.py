@@ -285,6 +285,105 @@ async def test_a_refresh_of_a_marketplace_fetch_serves_an_entry_it_gained(
     assert kb.generation == 1
 
 
+@pytest.fixture
+def manifested(tmp_path):
+    """A repository whose one entry is bare -- no tags, no category -- while
+    the plugin's own `plugin.json` carries the keywords, a description and a
+    version, the way obra/superpowers publishes."""
+    root = tmp_path / "market"
+    _skill(root, "sp/skills/tdd", "tdd")
+    _write(
+        root,
+        "sp/.claude-plugin/plugin.json",
+        json.dumps(
+            {"keywords": ["tdd", "testing"], "description": "From the manifest.",
+             "version": "9.9"}
+        ),
+    )
+    _catalog(root, {"name": "sp", "source": "./sp", "version": "1.0"})
+    _commit(root)
+    return root
+
+
+async def test_a_manifests_keywords_join_the_plugins_labels(manifested, tmp_path):
+    """Tagged nowhere but in its plugin.json, the plugin is still selectable:
+    a `pluginSelector` on the keyword picks it, `?tags=` on a real request
+    admits it, and /health shows the merged labels. The entry's version beats
+    the manifest's; the description it left empty is the manifest's."""
+    import threading
+
+    import uvicorn
+    from fastmcp.client.transports import StreamableHttpTransport
+
+    from tests.test_header_scope import _free_port
+
+    config = _config(
+        tmp_path,
+        libraries=[
+            {"name": "obs", "source": "lab://market"},
+            {"name": "tests", "pluginSelector": {"tags": ["tdd"]}},
+        ],
+    )
+    kb = KnowledgeBase(config, tmp_path / "cache")
+    health = await _health(kb)
+
+    entry = health["plugins"]["sp@obs"]
+    assert entry["keywords"] == ["tdd", "testing"] and entry["tags"] == []
+    assert entry["version"] == "1.0", "the marketplace entry is never overridden"
+    assert health["libraries"]["tests"]["plugins"] == ["sp@obs"]
+    assert kb._plugins[0].description == "From the manifest."
+
+    port = _free_port()
+    server = uvicorn.Server(
+        uvicorn.Config(kb.mcp.http_app(), host="127.0.0.1", port=port, log_level="error")
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    for _ in range(100):
+        if server.started:
+            break
+        threading.Event().wait(0.05)
+    try:
+        async with Client(
+            StreamableHttpTransport(f"http://127.0.0.1:{port}/mcp?tags=tdd")
+        ) as client:
+            names = sorted(r.name for r in await client.list_resources())
+        async with Client(
+            StreamableHttpTransport(f"http://127.0.0.1:{port}/mcp?tags=testing,tdd")
+        ) as client:
+            both = sorted(r.name for r in await client.list_resources())
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)
+    assert names == ["obs/_index.md", "tests/_index.md"]
+    assert both == names
+
+
+async def test_a_declared_plugin_keeps_its_own_words_over_the_manifests(
+    manifested, tmp_path
+):
+    """A declared value always wins; the manifest only fills what is empty."""
+    config = _config(
+        tmp_path,
+        plugins=[
+            {
+                "name": "mine",
+                "source": "lab://market//sp",
+                "description": "Mine.",
+                "keywords": ["own"],
+            }
+        ],
+        libraries=[{"name": "own", "plugins": ["mine"]}],
+    )
+    kb = KnowledgeBase(config, tmp_path / "cache")
+    health = await _health(kb)
+
+    (mine,) = kb._plugins
+    assert mine.description == "Mine."
+    assert health["plugins"]["mine"]["keywords"] == ["own", "tdd", "testing"]
+    assert health["plugins"]["mine"]["version"] == "9.9", "left empty, so filled"
+
+
 async def test_a_cold_start_reuses_the_index_and_re_reads_the_marketplace(
     market, tmp_path, monkeypatch
 ):

@@ -63,10 +63,10 @@ from .catalogue.snapshot import (
     build_fetch,
     build_plugin,
     build_snapshot,
-    effective_globs,
     failed_plugin,
     log_changes,
     unrooted,
+    with_manifest,
 )
 from .catalogue.uris import Catalogue
 from .config import Config
@@ -308,14 +308,19 @@ class KnowledgeBase:
         for key in [key for key in fetches if key not in needed]:
             del fetches[key]
 
-        records = {
-            plugin.id: self._plugin_record(plugin, fetches[plugin.fetch.key], reusable)
-            for plugin in plugins
-        }
+        # Each plugin comes back completed by its manifest, so the selectors,
+        # the scopes and /health all see the labels the publisher declared.
+        completed: list[Plugin] = []
+        records: dict[str, PluginRecord] = {}
+        for plugin in plugins:
+            plugin, records[plugin.id] = self._plugin_record(
+                plugin, fetches[plugin.fetch.key], reusable
+            )
+            completed.append(plugin)
         libraries = assemble_libraries(
-            self.config, plugins, errors=errors, skipped=skipped
+            self.config, completed, errors=errors, skipped=skipped
         )
-        return plugins, libraries, records
+        return completed, libraries, records
 
     def _fetch_record(
         self, fetches: dict[str, FetchRecord], fetch: Fetch, refusal_is_fatal: bool
@@ -329,25 +334,30 @@ class KnowledgeBase:
 
     def _plugin_record(
         self, plugin: Plugin, fetch: FetchRecord, reusable: dict[str, PluginRecord]
-    ) -> PluginRecord:
-        """The plugin's harvest: reused when it can be, rebuilt otherwise."""
-        kept = reusable.get(plugin.id)
-        if kept is not None and kept.fetch == fetch.key and _serving(kept):
-            return kept
+    ) -> tuple[Plugin, PluginRecord]:
+        """The plugin completed by its manifest, and its harvest: reused when
+        it can be, rebuilt otherwise.
+
+        The manifest is read whenever the root is there, reused record or not:
+        it is one small file, and the labels it adds are not in the index.
+        """
         if not _serving(fetch):
-            return failed_plugin(plugin, fetch.error or "the fetch failed")
+            return plugin, failed_plugin(plugin, fetch.error or "the fetch failed")
         root = Path(fetch.root or "")
         if plugin.subdir:
             root = root / plugin.subdir
         if not root.is_dir():
-            return failed_plugin(
+            return plugin, failed_plugin(
                 plugin, f"{plugin.subdir or '/'} is not a directory in {fetch.key}"
             )
         try:
-            globs = effective_globs(plugin, root)
+            plugin, globs = with_manifest(plugin, root)
         except ValueError as exc:
-            return failed_plugin(plugin, str(exc))
-        return build_plugin(plugin, root, globs=globs)
+            return plugin, failed_plugin(plugin, str(exc))
+        kept = reusable.get(plugin.id)
+        if kept is not None and kept.fetch == fetch.key and _serving(kept):
+            return plugin, kept
+        return plugin, build_plugin(plugin, root, globs=globs)
 
     def _build(self, generation: int) -> Snapshot:
         return build_snapshot(

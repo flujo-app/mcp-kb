@@ -156,22 +156,39 @@ def build_fetch(
     )
 
 
-def effective_globs(plugin: Plugin, root: Path) -> Globs:
-    """What the plugin serves: its own lists, else its manifest's, else None.
+def with_manifest(plugin: Plugin, root: Path) -> tuple[Plugin, Globs]:
+    """The plugin completed by its own manifest, and the globs it serves.
 
-    Per kind, so a plugin may name its skills and leave its commands to the
-    manifest. ``None`` for a kind is ``harvest.DEFAULTS``. A manifest that does
-    not parse raises: that is the plugin's failure, not a reason to guess.
+    A ``plugin.json`` is the publisher's word on the plugin, read once here.
+    Its ``keywords`` join the plugin's labels -- obra/superpowers is tagged
+    nowhere but there -- and its ``description`` and ``version`` fill in only
+    what the entry or the config left empty: a declared value always wins,
+    and a marketplace entry is completed, never overridden. The globs are per
+    kind, so a plugin may name its skills and leave its commands to the
+    manifest; ``None`` for a kind is ``harvest.DEFAULTS``. A manifest that
+    does not parse raises: that is the plugin's failure, not a reason to guess.
     """
     manifest = read_manifest(root)
     if manifest is None:
-        return plugin.globs
+        return plugin, plugin.globs
     own = plugin.globs
-    return Globs(
+    completed = replace(
+        plugin,
+        description=plugin.description or manifest.description or "",
+        version=plugin.version or manifest.version,
+        keywords=tuple(dict.fromkeys((*plugin.keywords, *manifest.keywords))),
+    )
+    globs = Globs(
         skills=own.skills if own.skills is not None else manifest.skills,
         prompts=own.prompts if own.prompts is not None else manifest.commands,
         files=own.files,
     )
+    return completed, globs
+
+
+def effective_globs(plugin: Plugin, root: Path) -> Globs:
+    """What the plugin serves: its own lists, else its manifest's, else None."""
+    return with_manifest(plugin, root)[1]
 
 
 def build_plugin(plugin: Plugin, root: Path, *, globs: Globs) -> PluginRecord:
