@@ -1,6 +1,6 @@
 # The image is the wheel plus an example config — nothing is fetched at build
-# time. A source is read at container START, into the cache volume; see
-# examples/config.yaml for the `github://` sources the example points at, and
+# time. What the config names is read at container START, into the cache volume;
+# see examples/config.yaml for the marketplaces the example points at, and
 # README.md for the scheme reference.
 #
 # Two stages, and the thing that passes between them is a VIRTUALENV.
@@ -81,8 +81,8 @@ FROM python:${PY_VERSION}-slim AS runner
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 
-# A worked example, not the deployed catalogue: `github://` sources that
-# reproduce what this image used to bake. A real deployment mounts its own.
+# A worked example, not the deployed catalogue: four pinned marketplaces on
+# GitHub. A real deployment mounts its own.
 COPY examples/config.yaml /etc/mcp-kb/config.yaml
 
 # The venv is copied to the SAME path it was created at, which is the one rule.

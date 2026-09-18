@@ -6,14 +6,19 @@ rather than only through the tools that call it.
 
 import pytest
 
-from kubed.mcp_kb.catalogue.skills import LibraryFiles, SkillIndex, load_skills
+from kubed.mcp_kb.catalogue.skills import LibraryFiles, Skill, SkillIndex, load_skills
 from kubed.mcp_kb.mcp.scope import Scope
-from tests.conftest import build_library_files, load_all_skills
+from tests.conftest import build_library_files, fake_plugin, load_all_skills
 
 
 @pytest.fixture
 def index(skills_dir):
     return SkillIndex(load_all_skills(skills_dir))
+
+
+def _tags(*groups):
+    """A tag scope: each argument is one comma-group, written as a set."""
+    return frozenset(frozenset(group) for group in groups)
 
 
 @pytest.mark.unit
@@ -34,50 +39,47 @@ def test_visible_is_everything_when_unpinned(index):
 
 
 @pytest.mark.unit
-def test_visible_honours_a_library_or_a_folder_path(index):
+def test_visible_honours_a_library_and_a_library_alone(index):
+    """A folder name is not a selector: ``deepsource/plugin-a`` names no library."""
     assert {s.name for s in index.visible(Scope("flatsource"))} == {"alpha", "beta"}
-    assert {s.name for s in index.visible(Scope("deepsource/plugin-a"))} == {"gamma"}
+    assert index.visible(Scope("deepsource/plugin-a")) == []
     assert index.visible(Scope("plugin-a")) == []
 
 
 @pytest.mark.unit
-def test_a_folder_selector_admits_the_skills_beneath_it_too(tmp_path):
-    """`grafana/a` covers `a/b/x` as well as `a/x`, and never a folder `ab`."""
+def test_visible_honours_the_plugins_category_and_labels(tmp_path):
+    """A scope narrows by what the plugin declared: its category, its tags and
+    keywords together -- a comma group is all of, separate groups any of."""
     skills = [
-        _skill_in(tmp_path, folder, name)
-        for folder, name in (("a", "x"), ("a/b", "y"), ("ab", "z"), ("", "w"))
+        _skill_in(tmp_path, "x", category="ops", tags=frozenset({"lgtm", "oncall"})),
+        _skill_in(tmp_path, "y", category="ops", tags=frozenset({"k6"})),
+        _skill_in(tmp_path, "z", category="design", tags=frozenset({"lgtm"})),
     ]
     index = SkillIndex(skills)
-    assert {s.name for s in index.visible(Scope("grafana/a"))} == {"x", "y"}
-    assert {s.name for s in index.visible(Scope("grafana/a/b"))} == {"y"}
-    assert index.sources(Scope("grafana")) is None
-    assert index.sources(Scope("grafana/ab")) == {"src-z"}
+
+    def names(scope):
+        return {s.name for s in index.visible(scope)}
+
+    assert names(Scope(categories=frozenset({"ops"}))) == {"x", "y"}
+    assert names(Scope(tags=_tags({"lgtm"}))) == {"x", "z"}
+    assert names(Scope(tags=_tags({"lgtm", "oncall"}))) == {"x"}
+    assert names(Scope(tags=_tags({"oncall"}, {"k6"}))) == {"x", "y"}
+    assert names(Scope(categories=frozenset({"ops"}), tags=_tags({"lgtm"}))) == {"x"}
+    assert names(Scope("grafana", categories=frozenset({"nope"}))) == set()
 
 
-def _skill_in(root, folder, name):
-    from kubed.mcp_kb.catalogue.skills import Skill
-
+def _skill_in(root, name, *, category=None, tags=frozenset()):
     return Skill(
         name=name,
         library="grafana",
-        folder=folder,
+        folder="",
         description="",
         path=root / name,
-        source=f"src-{name}",
-        tags=frozenset({"grafana"}),
+        plugin=f"plugin-{name}",
+        root=root,
+        category=category,
+        tags=tags,
     )
-
-
-@pytest.mark.unit
-def test_selectors_are_scoped_to_the_pin(index):
-    """Suggestions must not leak the other libraries' names."""
-    assert "deepsource" not in index.selectors(Scope("flatsource"))
-    assert index.selectors() == [
-        "deepsource",
-        "deepsource/plugin-a",
-        "deepsource/plugin-b",
-        "flatsource",
-    ]
 
 
 @pytest.mark.unit
@@ -86,6 +88,7 @@ def test_get_hides_out_of_scope_skills(index):
     assert index.get("deepsource/plugin-a/gamma") is not None
     assert index.get("deepsource/plugin-a/gamma", Scope("flatsource")) is None
     assert index.get("flatsource/alpha", Scope("flatsource")) is not None
+    assert index.get("flatsource/alpha", Scope(tags=_tags({"deep"}))) is None
 
 
 @pytest.mark.unit
@@ -128,6 +131,16 @@ def test_unknown_library_is_empty(resources):
 def test_read_library_file(resources):
     assert resources.read("deepsource", "shared/guide.md") == "shared guidance\n"
     assert resources.read("deepsource", "shared/nested/schema.json") == "{}\n"
+
+
+@pytest.mark.unit
+def test_library_files_follow_the_plugins_labels(resources):
+    """A file has no row of its own; it is in scope when its plugin is."""
+    deep, flat = Scope(tags=_tags({"deep"})), Scope(tags=_tags({"flat"}))
+    assert "shared/guide.md" in resources.files("deepsource", deep)
+    assert resources.files("deepsource", flat) == []
+    assert resources.read("deepsource", "shared/guide.md", deep) == "shared guidance\n"
+    assert resources.read("deepsource", "shared/guide.md", flat) is None
 
 
 @pytest.mark.unit
@@ -180,26 +193,31 @@ def test_a_dot_directory_above_the_catalogue_hides_nothing(tmp_path):
 
 
 @pytest.mark.unit
-def test_a_skill_carries_its_library_source_and_kind_as_tags(tmp_path):
-    """Source and "skill" ride along with the library as tags, and any extras."""
+def test_a_skill_carries_its_plugins_labels_and_nothing_implicit(tmp_path):
+    """The plugin's tags and keywords, its category, its id and root -- and no
+    library name, plugin name or "skill" smuggled in as a tag."""
     skill_dir = tmp_path / "loki"
     skill_dir.mkdir()
     (skill_dir / "SKILL.md").write_text("---\nname: loki\ndescription: d\n---\n")
-    skills = load_skills(
-        [skill_dir],
-        library="grafana",
-        source="grafana-skills",
-        root=tmp_path,
-        tags=["upstream"],
+    plugin = fake_plugin(
+        "grafana-skills",
+        tmp_path,
+        category="observability",
+        tags=("upstream",),
+        keywords=("logs",),
     )
-    assert skills[0].tags == frozenset(
-        {"grafana", "grafana-skills", "skill", "upstream"}
-    )
+    skills = load_skills([skill_dir], library="grafana", plugin=plugin, root=tmp_path)
+
+    assert skills[0].tags == frozenset({"upstream", "logs"})
+    assert skills[0].category == "observability"
+    assert skills[0].plugin == "grafana-skills"
+    assert skills[0].root == tmp_path
+    assert skills[0].library == "grafana"
 
 
 @pytest.mark.unit
-def test_two_sources_can_serve_library_files_into_one_library(tmp_path):
-    """Several sources can join one library; files() concatenates their roots."""
+def test_two_plugins_can_serve_library_files_into_one_library(tmp_path):
+    """Several plugins can join one library; files() concatenates their roots."""
     root_a, root_b = tmp_path / "a", tmp_path / "b"
     root_a.mkdir()
     root_b.mkdir()
@@ -207,8 +225,8 @@ def test_two_sources_can_serve_library_files_into_one_library(tmp_path):
     (root_b / "b.md").write_text("from b\n")
 
     resources = LibraryFiles()
-    resources.add("lib", root_a, ["a.md"], [])
-    resources.add("lib", root_b, ["b.md"], [])
+    resources.add("lib", root_a, ["a.md"], [], plugin=fake_plugin("a", root_a))
+    resources.add("lib", root_b, ["b.md"], [], plugin=fake_plugin("b", root_b))
 
     assert resources.files("lib") == ["a.md", "b.md"]
     assert resources.read("lib", "b.md") == "from b\n"
@@ -219,11 +237,13 @@ def test_read_only_serves_the_harvested_list(tmp_path):
     """The list add() was given is the contract, not anything else on disk."""
     (tmp_path / "shared").mkdir()
     (tmp_path / "shared" / "guide.md").write_text("guidance\n")
-    (tmp_path / "README.md").write_text("exists, but a narrower include skips it\n")
+    (tmp_path / "README.md").write_text("exists, but a narrower glob skips it\n")
     (tmp_path / ".env").write_text("SECRET=1\n")
 
     resources = LibraryFiles()
-    resources.add("lib", tmp_path, ["shared/guide.md"], [])
+    resources.add(
+        "lib", tmp_path, ["shared/guide.md"], [], plugin=fake_plugin("lib", tmp_path)
+    )
 
     assert resources.read("lib", "shared/guide.md") == "guidance\n"
     # Both exist on disk and are neither dotfiles-inside-a-skill nor traversal
@@ -239,7 +259,7 @@ def test_read_refuses_an_unregistered_file_that_exists_on_disk(tmp_path):
     (tmp_path / ".gitkeep").write_text("")
 
     resources = LibraryFiles()
-    resources.add("lib", tmp_path, [], [])
+    resources.add("lib", tmp_path, [], [], plugin=fake_plugin("lib", tmp_path))
 
     assert resources.read("lib", ".gitkeep") is None
 
@@ -254,20 +274,13 @@ def test_add_refuses_a_file_that_resolves_inside_a_skill_dir(tmp_path):
 
     resources = LibraryFiles()
     with pytest.raises(ValueError, match="skill directory"):
-        resources.add("lib", tmp_path, ["loki/SKILL.md"], [skill_dir])
-
-
-@pytest.mark.unit
-def test_load_skills_drops_an_empty_source_tag(tmp_path):
-    """``source=""`` must not put an empty-string tag in the set."""
-    skill_dir = tmp_path / "loki"
-    skill_dir.mkdir()
-    (skill_dir / "SKILL.md").write_text("---\nname: loki\ndescription: d\n---\n")
-
-    skills = load_skills([skill_dir], library="grafana", source="", root=tmp_path)
-
-    assert "" not in skills[0].tags
-    assert skills[0].tags == frozenset({"grafana", "skill"})
+        resources.add(
+            "lib",
+            tmp_path,
+            ["loki/SKILL.md"],
+            [skill_dir],
+            plugin=fake_plugin("lib", tmp_path),
+        )
 
 
 @pytest.mark.unit
@@ -280,6 +293,6 @@ def test_read_refuses_a_registered_path_whose_target_escapes_the_root(tmp_path):
     (root / "escape.md").symlink_to(tmp_path / "outside.md")
 
     resources = LibraryFiles()
-    resources.add("lib", root, ["escape.md"], [])
+    resources.add("lib", root, ["escape.md"], [], plugin=fake_plugin("lib", root))
 
     assert resources.read("lib", "escape.md") is None

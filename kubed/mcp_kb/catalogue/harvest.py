@@ -1,15 +1,16 @@
-"""Turn a source directory into the things the catalogue serves.
+"""Turn a plugin's directory into the things the catalogue serves.
 
-A source is a directory (``sources/`` produced it); what to serve out of it is
-a set of globs per kind, and the conventions below are the defaults. Setting a
-kind *replaces* its default rather than appending to it -- an append would
-leave no way to stop serving a convention -- and an empty list turns a kind
-off.
+A plugin root is a directory (``sources/`` materialised the tree it sits in);
+what to serve out of it is a set of globs per kind, and the conventions below
+are the defaults. Setting a kind *replaces* its default rather than appending
+to it -- an append would leave no way to stop serving a convention -- and an
+empty list turns a kind off.
 
 Everything found is resolved and checked to lie inside the root, the same
 guard ``uris.py`` applies on read, so a glob like ``../**`` finds nothing.
 Dot directories are skipped, except the three that agent tooling conventionally
-lives in.
+lives in. A backend's *fingerprint* walk sees one more of them --
+``FINGERPRINTED_DOTDIRS`` below says which, and why the two sets differ.
 
 ``dir/**`` and ``dir/**/*`` mean the same thing here: ``patterns`` normalises
 the first into the second, because a trailing ``**`` matches directories only
@@ -19,10 +20,12 @@ running it.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from ..config import Include
+if TYPE_CHECKING:
+    from ..plugins import Globs
 
 MAIN_FILE = "SKILL.md"
 
@@ -34,13 +37,6 @@ DEFAULTS: dict[str, tuple[str, ...]] = {
         ".agents/skills/*/SKILL.md",
     ),
     "prompts": ("prompts/**/*.md", ".github/prompts/*.prompt.md", "commands/*.md"),
-    "instructions": (
-        ".github/copilot-instructions.md",
-        ".github/instructions/*.instructions.md",
-        "AGENTS.md",
-        "CLAUDE.md",
-    ),
-    "agents": (".github/agents/*.agent.md", "agents/*.md"),
     "files": (),
 }
 
@@ -56,9 +52,24 @@ SKILL_ROOTS: tuple[str, ...] = (
 
 CONVENTIONAL_DOTDIRS: frozenset[str] = frozenset({".github", ".claude", ".agents"})
 
+# Where this server's own metadata files live: a `marketplace.json` and a
+# `plugin.json` (`plugins/marketplace.py`, `plugins/manifest.py`). Deliberately
+# *not* in CONVENTIONAL_DOTDIRS, and the two sets differ for one reason --
+# `hidden` keeps these out of every listing, because a catalogue and a manifest
+# are what say *what* to serve and are not themselves a skill, a prompt or a
+# library file, while a backend's fingerprint walk has to see them or editing a
+# local marketplace never looks like a change and a configured `refresh:` never
+# re-reads it.
+METADATA_DOTDIRS: frozenset[str] = frozenset({".claude-plugin"})
 
-def patterns(kind: str, include: Include) -> tuple[str, ...]:
-    explicit = getattr(include, kind)
+# What a fingerprint descends into: everything a harvest reads, plus the
+# directories holding the files that decide what a harvest reads.
+FINGERPRINTED_DOTDIRS: frozenset[str] = CONVENTIONAL_DOTDIRS | METADATA_DOTDIRS
+
+
+def patterns(kind: str, globs: Globs) -> tuple[str, ...]:
+    """The globs for one kind: what ``globs`` says, else the conventions."""
+    explicit = getattr(globs, kind)
     chosen = tuple(explicit) if explicit is not None else DEFAULTS[kind]
     return tuple(_globstar(p) for p in chosen)
 
@@ -82,7 +93,7 @@ def _globstar(pattern: str) -> str:
 
 
 def hidden(rel: Path) -> bool:
-    """Whether a path relative to a source root is one this project ignores."""
+    """Whether a path relative to a plugin root is one this project ignores."""
     return any(
         part.startswith(".") and part not in CONVENTIONAL_DOTDIRS for part in rel.parts
     )
@@ -105,7 +116,7 @@ def _matches(base: Path, pattern: str) -> Iterator[Path]:
         # A pattern like "../**" can walk out of base and straight back in
         # -- resolve() then quietly collapses the ".." and the hit looks
         # like a plain interior file. Reject the escape before resolving.
-        # config.py's Include validator refuses such a pattern before it
+        # PluginConfig's glob validator refuses such a pattern before it
         # ever reaches here; this is defence in depth, not the first line.
         if ".." in hit.relative_to(base).parts:
             continue
@@ -136,20 +147,42 @@ def inside(path: Path, base: Path) -> Path | None:
     return target if target.is_relative_to(base) else None
 
 
-def files(root: Path, kind: str, include: Include) -> list[Path]:
-    """Every regular file matching the kind's globs, inside root, sorted."""
+def readable(base: Path, rel: str | Path) -> Path | None:
+    """``base / rel`` resolved, when it is a regular file inside ``base``.
+
+    The guard every read shares -- a skill's own file, its plugin root's, and a
+    library file (``uris.py``, ``skills.py``). Resolving before comparing is
+    what refuses a ``..`` that climbs out and a symlink pointing out of the
+    tree; a directory and a missing path are refused because neither is a body.
+    """
+    root = base.resolve()
+    target = inside(root / rel, root)
+    return target if target is not None and target.is_file() else None
+
+
+def matching(root: Path, globs: Iterable[str]) -> set[Path]:
+    """Every regular file inside ``root`` that one of ``globs`` selects.
+
+    Separate from ``files`` because a pattern set is not always a kind: the
+    command patterns a manifest declared are matched against the prompts
+    already harvested, to tell which of them the plugin called a command.
+    """
     base = root.resolve()
-    found = {
+    return {
         hit
-        for pattern in patterns(kind, include)
-        for hit in _matches(base, pattern)
+        for pattern in globs
+        for hit in _matches(base, _globstar(pattern))
         if hit.is_file()
     }
-    return sorted(found)
 
 
-def skill_dirs(root: Path, include: Include) -> list[Path]:
-    """The skill directories a source's ``include.skills`` globs select.
+def files(root: Path, kind: str, globs: Globs) -> list[Path]:
+    """Every regular file matching the kind's globs, inside root, sorted."""
+    return sorted(matching(root, patterns(kind, globs)))
+
+
+def skill_dirs(root: Path, globs: Globs) -> list[Path]:
+    """The skill directories a plugin's ``skills`` globs select.
 
     A glob may name either the ``SKILL.md`` or the *directory*, because both
     spellings mean the same thing to whoever writes the config:
@@ -166,7 +199,7 @@ def skill_dirs(root: Path, include: Include) -> list[Path]:
     """
     base = root.resolve()
     found: set[Path] = set()
-    for pattern in patterns("skills", include):
+    for pattern in patterns("skills", globs):
         for hit in _matches(base, pattern):
             if hit.is_file():
                 if hit.name == MAIN_FILE:
@@ -182,29 +215,27 @@ def skill_dirs(root: Path, include: Include) -> list[Path]:
     return sorted(found)
 
 
-def prompt_files(root: Path, include: Include) -> list[Path]:
-    return files(root, "prompts", include)
+def prompt_files(root: Path, globs: Globs) -> list[Path]:
+    return files(root, "prompts", globs)
 
 
-def library_files(
-    root: Path, include: Include, skill_dirs: Sequence[Path]
-) -> list[str]:
+def library_files(root: Path, globs: Globs, skill_dirs: Sequence[Path]) -> list[str]:
     """Library-level files as root-relative posix paths, never one inside a skill."""
     base = root.resolve()
     skills = tuple(skill_dirs)
     return [
         f.relative_to(base).as_posix()
-        for f in files(root, "files", include)
+        for f in files(root, "files", globs)
         if not any(f == d or d in f.parents for d in skills)
     ]
 
 
 def folder_of(skill_dir: Path, root: Path) -> str:
-    """The folders between a skill and its source's skill root, as a posix path.
+    """The folders between a skill and its plugin's skill root, as a posix path.
 
     Empty for a skill that sits directly in a root. The deepest root wins, so
     ``skills/grafana-lgtm/loki`` is in ``grafana-lgtm`` and not in
-    ``skills/grafana-lgtm``: every skill of a source loses the same leading
+    ``skills/grafana-lgtm``: every skill of a plugin loses the same leading
     segments, which keeps a sibling reference like ``../other/SKILL.md``
     pointing at the sibling's address.
     """

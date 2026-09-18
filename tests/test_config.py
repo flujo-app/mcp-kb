@@ -1,5 +1,6 @@
-"""The config file schema: sources, libraries, includes, and what gets refused."""
+"""The config file schema: sources, plugins, libraries, and what gets refused."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -9,12 +10,58 @@ from kubed.mcp_kb.config import (
     Config,
     ConfigError,
     EnvRef,
-    FileSource,
-    GitSource,
-    Include,
-    WebdavSource,
+    PluginConfig,
+    Selector,
+    SourceConfig,
     load_config,
+    schema,
 )
+
+SKETCH = """
+sources:
+- name: nextcloud
+  url: webdav+http://nextcloud.cloud.svc.cluster.local:8080/remote.php/dav/files
+  cache: live
+  refresh: 15m
+  auth:
+    username: {env: NEXTCLOUD_USER}
+    password: {env: NEXTCLOUD_PASSWORD}
+- name: github
+  url: git+https://github.com
+  refresh: 1h
+
+plugins:
+- name: drive
+  description: The ai Team folder in Nextcloud.
+  category: homelab
+  source: nextcloud://mcp-kb/ai
+- name: team-notes
+  category: engineering
+  tags: [runbooks, oncall]
+  source: github://my-team/my-repo//foo?ref=main
+  skills: [runbooks/*]
+  prompts: [prompts/*.md]
+  files: [shared/**]
+- name: homelab-prompts
+  category: observability
+  source: file:///srv/prompts/grafana
+  prompts: ["*.md"]
+
+libraries:
+- name: penpot
+  source: github://penpot/penpot-ai-kit?ref=efbefc935ee43804502976aa5ec9659a8bb7e207
+- name: grafana
+  source: github://grafana/skills?ref=51d33e71e191b409bbd25fc7be2684c610d18166
+  plugins: [homelab-prompts]
+- name: kubed
+  description: This homelab's own skills, prompts and agents.
+  plugins: [drive]
+- name: oncall
+  description: Oncall runbooks and notes.
+  pluginSelector:
+    categories: [engineering, observability]
+    tags: ["runbooks,oncall", lgtm]
+"""
 
 
 def write(tmp_path: Path, text: str) -> Path:
@@ -23,45 +70,108 @@ def write(tmp_path: Path, text: str) -> Path:
     return path
 
 
-def test_a_file_source_loads_with_conventional_includes(tmp_path):
+def _sources(*extra: str) -> str:
+    return "sources:\n- name: gh\n  url: git+https://github.com\n" + "".join(extra)
+
+
+def _webdav(*extra: str) -> str:
+    return (
+        "sources:\n- name: nc\n  url: webdav+https://h/dav\n"
+        "  auth: {username: me, password: {env: P}}\n" + "".join(extra)
+    )
+
+
+# -- the sketch ----------------------------------------------------------------
+
+
+def test_the_sketch_config_parses(tmp_path):
+    """The shape §C1.30 settled on: named sources, plugins, libraries."""
+    config = load_config(write(tmp_path, SKETCH))
+
+    assert [s.name for s in config.sources] == ["nextcloud", "github"]
+    assert [p.name for p in config.plugins] == ["drive", "team-notes", "homelab-prompts"]
+    assert [lib.name for lib in config.libraries] == [
+        "penpot",
+        "grafana",
+        "kubed",
+        "oncall",
+    ]
+
+
+def test_a_source_carries_its_backend_cache_and_refresh(tmp_path):
+    config = load_config(write(tmp_path, SKETCH))
+
+    nextcloud = config.source("nextcloud")
+    assert nextcloud.backend == "webdav"
+    assert nextcloud.cache == "live"
+    assert nextcloud.refresh_seconds == 900
+    assert config.source("github").backend == "git"
+    assert config.source("github").cache == "snapshot"
+
+
+def test_a_plugin_source_is_an_address_with_a_subdir_and_a_ref(tmp_path):
+    config = load_config(write(tmp_path, SKETCH))
+    address = config.plugins[1].address
+
+    assert (address.scheme, address.path) == ("github", "my-team/my-repo")
+    assert (address.subdir, address.ref) == ("foo", "main")
+
+
+def test_a_plugin_carries_the_marketplace_entry_fields_and_its_globs(tmp_path):
+    config = load_config(write(tmp_path, SKETCH))
+    plugin = config.plugins[1]
+
+    assert plugin.category == "engineering"
+    assert plugin.tags == ["runbooks", "oncall"]
+    assert plugin.skills == ["runbooks/*"]
+    assert plugin.prompts == ["prompts/*.md"]
+    assert plugin.files == ["shared/**"]
+    assert plugin.dialect == "auto"
+    assert config.plugins[0].skills is None  # None means "use the conventions"
+
+
+def test_a_library_selector_reads_categories_as_any_and_commas_as_all(tmp_path):
+    config = load_config(write(tmp_path, SKETCH))
+    selector = config.library("oncall").plugin_selector
+
+    assert selector.category_set == frozenset({"engineering", "observability"})
+    assert selector.tag_groups == frozenset(
+        {frozenset({"runbooks", "oncall"}), frozenset({"lgtm"})}
+    )
+
+
+def test_an_undeclared_library_is_none_not_an_implicit_one(tmp_path):
+    """A library is declared or it does not exist: `plugins` name real plugins."""
+    config = load_config(write(tmp_path, SKETCH))
+
+    assert config.library("grafana").name == "grafana"
+    assert config.library("nope") is None
+
+
+def test_an_undeclared_source_name_is_a_key_error(tmp_path):
+    config = load_config(write(tmp_path, SKETCH))
+    with pytest.raises(KeyError):
+        config.source("nope")
+
+
+# -- sources -------------------------------------------------------------------
+
+
+def test_a_file_source_needs_no_auth_and_no_scheme_entry(tmp_path):
     config = load_config(
-        write(tmp_path, "sources:\n- name: kubed\n  url: file:///srv/prompts\n")
+        write(tmp_path, "sources:\n- name: local\n  url: file:///srv\n")
     )
-    [source] = config.sources
-    assert isinstance(source, FileSource)
-    assert source.path == Path("/srv/prompts")
-    assert source.include == Include()
-    assert source.include.skills is None  # None means "use the conventions"
+    assert config.source("local").backend == "file"
 
 
-def test_a_source_joins_its_own_library_by_default(tmp_path):
-    config = load_config(write(tmp_path, "sources:\n- name: kubed\n  url: file:///a\n"))
-    assert config.sources[0].library_name == "kubed"
-    assert config.library("kubed").name == "kubed"
-    assert config.library("kubed").tags == []
+def test_a_source_may_not_be_named_for_a_builtin_scheme(tmp_path):
+    """`file://` is built in, so a source called `file` could never be addressed."""
+    with pytest.raises(ConfigError, match="file"):
+        load_config(write(tmp_path, "sources:\n- name: file\n  url: file:///srv\n"))
 
 
-def test_a_source_may_join_a_declared_library(tmp_path):
-    text = (
-        "libraries:\n- name: grafana\n  description: LGTM\n  tags: [observability]\n"
-        "sources:\n- name: grafana-skills\n  library: grafana\n  url: file:///a\n  tags: [upstream]\n"
-    )
-    config = load_config(write(tmp_path, text))
-    assert config.sources[0].library_name == "grafana"
-    assert config.library("grafana").description == "LGTM"
-    assert config.library("grafana").tags == ["observability"]
-    assert config.sources[0].tags == ["upstream"]
-
-
-def test_an_unknown_key_is_refused_not_ignored(tmp_path):
-    with pytest.raises(ConfigError, match="inculde"):
-        load_config(
-            write(tmp_path, "sources:\n- name: a\n  url: file:///a\n  inculde: {}\n")
-        )
-
-
-def test_an_unknown_scheme_names_the_schemes_that_exist(tmp_path):
-    with pytest.raises(ConfigError, match="file://"):
+def test_an_unknown_source_scheme_names_the_schemes_that_exist(tmp_path):
+    with pytest.raises(ConfigError, match="webdav\\+https"):
         load_config(write(tmp_path, "sources:\n- name: a\n  url: ftp://a\n"))
 
 
@@ -78,66 +188,65 @@ def test_a_bad_source_name_is_rejected_not_slugged(tmp_path, name):
         load_config(write(tmp_path, f"sources:\n- name: '{name}'\n  url: file:///a\n"))
 
 
-def test_duplicate_source_names_are_refused(tmp_path):
-    text = "sources:\n- name: a\n  url: file:///a\n- name: a\n  url: file:///b\n"
-    with pytest.raises(ConfigError, match="duplicate"):
-        load_config(write(tmp_path, text))
-
-
-def test_duplicate_library_names_are_refused(tmp_path):
-    text = "libraries:\n- name: a\n- name: a\nsources: []\n"
-    with pytest.raises(ConfigError, match="duplicate"):
-        load_config(write(tmp_path, text))
-
-
-def test_a_missing_file_is_a_config_error(tmp_path):
-    with pytest.raises(ConfigError, match="cannot read"):
-        load_config(tmp_path / "nope.yaml")
-
-
-def test_an_absolute_include_pattern_is_refused(tmp_path):
-    text = "sources:\n- name: a\n  url: file:///a\n  include:\n    files: ['/etc/**']\n"
-    with pytest.raises(ConfigError, match="relative"):
-        load_config(write(tmp_path, text))
-
-
-def test_a_parent_relative_include_pattern_is_refused(tmp_path):
-    text = "sources:\n- name: a\n  url: file:///a\n  include:\n    skills: ['../**']\n"
+@pytest.mark.parametrize("name", ['"valid\\n"', '"va\\nlid"'])
+def test_a_name_carrying_a_newline_is_refused_here_too(tmp_path, name):
+    """`NAME` is anchored at both ends, and pydantic-core matches it with the
+    Rust engine, whose `$` is the end of the string and nothing else. Python's
+    `re` also matches before a *final* newline, which is how the same pattern
+    accepted `"valid\n"` in `marketplace.py`. This pins the engine: these
+    names stay refused whatever `regex_engine` a later pydantic defaults to."""
     with pytest.raises(ConfigError):
+        load_config(write(tmp_path, f"sources:\n- name: {name}\n  url: file:///a\n"))
+
+
+def test_live_caching_is_refused_on_a_git_source(tmp_path):
+    """Revalidation is WebDAV's; on git it would be silently nothing."""
+    with pytest.raises(ConfigError, match="webdav"):
+        load_config(write(tmp_path, _sources("  cache: live\n")))
+
+
+def test_live_caching_parses_on_a_webdav_source(tmp_path):
+    text = _webdav("  cache: live\n")
+    config = load_config(write(tmp_path, text))
+    assert config.source("nc").cache == "live"
+
+
+def test_a_webdav_source_without_auth_is_refused(tmp_path):
+    """WebDAV is an authenticated backend; an anonymous one is a typo, not a
+    mode -- and one that would only show up as a 401 at cold start."""
+    text = "sources:\n- name: nc\n  url: webdav+https://cloud.example/dav/notes\n"
+    with pytest.raises(ConfigError, match="auth"):
         load_config(write(tmp_path, text))
 
 
-def test_a_normal_include_pattern_still_loads(tmp_path):
-    text = (
-        "sources:\n- name: a\n  url: file:///a\n  include:\n    files: ['shared/**']\n"
-    )
-    config = load_config(write(tmp_path, text))
-    assert config.sources[0].include.files == ["shared/**"]
+def test_an_unknown_cache_mode_is_refused(tmp_path):
+    text = _webdav("  cache: sometimes\n")
+    with pytest.raises(ConfigError, match="cache"):
+        load_config(write(tmp_path, text))
 
 
-def test_a_refresh_interval_in_minutes_is_seconds(tmp_path):
-    text = "sources:\n- name: a\n  url: file:///a\n  refresh: 5m\n"
-    config = load_config(write(tmp_path, text))
-    assert config.sources[0].refresh_seconds == 300
-
-
-def test_a_refresh_interval_in_hours_is_seconds(tmp_path):
-    text = "sources:\n- name: a\n  url: file:///a\n  refresh: 2h\n"
-    config = load_config(write(tmp_path, text))
-    assert config.sources[0].refresh_seconds == 7200
-
-
-def test_no_refresh_interval_means_no_refresh(tmp_path):
-    config = load_config(write(tmp_path, "sources:\n- name: a\n  url: file:///a\n"))
-    assert config.sources[0].refresh is None
-    assert config.sources[0].refresh_seconds is None
+def test_an_unknown_key_is_refused_not_ignored(tmp_path):
+    with pytest.raises(ConfigError, match="inculde"):
+        load_config(
+            write(tmp_path, "sources:\n- name: a\n  url: file:///a\n  inculde: {}\n")
+        )
 
 
 @pytest.mark.parametrize("refresh", ["0s", "5", "5d", "-5m", "5ms", ""])
 def test_a_malformed_refresh_interval_is_a_config_error(tmp_path, refresh):
-    text = f"sources:\n- name: a\n  url: file:///a\n  refresh: '{refresh}'\n"
     with pytest.raises(ConfigError):
-        load_config(write(tmp_path, text))
+        load_config(write(tmp_path, _sources(f"  refresh: '{refresh}'\n")))
+
+
+def test_a_refresh_interval_becomes_seconds(tmp_path):
+    config = load_config(write(tmp_path, _sources("  refresh: 2h\n")))
+    assert config.source("gh").refresh_seconds == 7200
+
+
+def test_no_refresh_interval_means_no_refresh(tmp_path):
+    config = load_config(write(tmp_path, _sources()))
+    assert config.source("gh").refresh is None
+    assert config.source("gh").refresh_seconds is None
 
 
 def test_min_refresh_seconds_is_the_smallest_among_sources(tmp_path):
@@ -147,18 +256,231 @@ def test_min_refresh_seconds_is_the_smallest_among_sources(tmp_path):
         "- name: b\n  url: file:///b\n"
         "- name: c\n  url: file:///c\n  refresh: 30s\n"
     )
-    config = load_config(write(tmp_path, text))
-    assert config.min_refresh_seconds == 30
+    assert load_config(write(tmp_path, text)).min_refresh_seconds == 30
 
 
 def test_min_refresh_seconds_is_none_when_no_source_has_one(tmp_path):
-    config = load_config(write(tmp_path, "sources:\n- name: a\n  url: file:///a\n"))
-    assert config.min_refresh_seconds is None
+    assert load_config(write(tmp_path, _sources())).min_refresh_seconds is None
 
 
-def test_config_constructs_from_source_model_instances_not_only_dicts():
-    config = Config(sources=[FileSource(name="a", url="file:///a")])
-    assert config.sources[0].url == "file:///a"
+def test_secrets_come_from_the_sources_auth(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXTCLOUD_USER", "service-account")
+    monkeypatch.setenv("NEXTCLOUD_PASSWORD", "hunter2")
+    config = load_config(write(tmp_path, SKETCH))
+
+    assert sorted(config.secrets()) == ["hunter2", "service-account"]
+
+
+def test_secrets_skip_a_reference_whose_variable_is_unset(tmp_path, monkeypatch):
+    monkeypatch.delenv("NEXTCLOUD_USER", raising=False)
+    monkeypatch.delenv("NEXTCLOUD_PASSWORD", raising=False)
+    assert load_config(write(tmp_path, SKETCH)).secrets() == []
+
+
+def test_a_credential_embedded_in_a_url_is_refused(tmp_path):
+    """`auth` is the one way a credential reaches a remote, and this is why.
+
+    pygit2 saves the clone's remote URL verbatim under the cache, and a source
+    URL is interpolated into the errors `/health` publishes -- so a token in the
+    URL is a token on disk and in a served body. Refused at the door instead,
+    and the refusal itself must not repeat it back.
+    """
+    text = "sources:\n- name: p\n  url: git+http://x-access-token:ghp-secret@h/x\n"
+
+    with pytest.raises(ConfigError, match="credential") as raised:
+        load_config(write(tmp_path, text))
+
+    assert "ghp-secret" not in str(raised.value)
+    assert "x-access-token" not in str(raised.value)
+
+
+def test_a_url_with_no_credential_in_it_is_reported_as_it_is(tmp_path):
+    """The redaction must not eat an ordinary URL out of an ordinary message:
+    a refusal an operator cannot match to a line of their config is no help."""
+    with pytest.raises(ConfigError, match="ftp") as raised:
+        load_config(write(tmp_path, "sources:\n- name: p\n  url: ftp://a\n"))
+
+    assert "ftp://a" in str(raised.value)
+
+
+def test_a_password_containing_an_at_is_not_half_echoed(tmp_path):
+    text = (
+        "sources:\n- name: notes\n  url: webdav+https://me:hun@ter2@cloud.example/dav\n"
+    )
+    with pytest.raises(ConfigError, match="credential") as raised:
+        load_config(write(tmp_path, text))
+    assert "ter2" not in str(raised.value)
+    assert "hun" not in str(raised.value)
+
+
+# -- plugins -------------------------------------------------------------------
+
+
+def test_a_plugin_scheme_with_no_source_names_the_declared_sources(tmp_path):
+    text = _sources() + "plugins:\n- name: p\n  source: nextcloud://a/b\n"
+    with pytest.raises(ConfigError, match="nextcloud") as raised:
+        load_config(write(tmp_path, text))
+    assert "gh" in str(raised.value)
+
+
+def test_the_builtin_file_scheme_needs_no_source(tmp_path):
+    text = "plugins:\n- name: p\n  source: file:///srv/prompts\n"
+    config = load_config(write(tmp_path, text))
+    assert config.plugins[0].address.path == "/srv/prompts"
+
+
+def test_a_malformed_plugin_address_is_a_config_error(tmp_path):
+    text = "plugins:\n- name: p\n  source: not-an-address\n"
+    with pytest.raises(ConfigError, match="address"):
+        load_config(write(tmp_path, text))
+
+
+def test_a_ref_on_a_non_git_source_is_refused(tmp_path):
+    """A ref is a git concept; on WebDAV it would be accepted and ignored."""
+    text = _webdav() + "plugins:\n- name: p\n  source: nc://folder?ref=main\n"
+    with pytest.raises(ConfigError, match="git"):
+        load_config(write(tmp_path, text))
+
+
+def test_a_ref_on_a_git_source_parses(tmp_path):
+    """A branch, with no `refresh:` on the source: accepted, not a config error.
+
+    A moving ref is supported on purpose -- a sha pins, a branch floats and a
+    restart re-fetches (§C1.17, §C1.18) -- and whether the source is asked "has
+    it moved?" on a timer is a separate choice the operator makes. A config
+    that refused this would have no way to track a branch at all.
+    """
+    text = _sources() + "plugins:\n- name: p\n  source: gh://o/r?ref=main\n"
+    config = load_config(write(tmp_path, text))
+    assert config.plugins[0].address.ref == "main"
+
+
+@pytest.mark.parametrize("patterns", ["['/etc/**']", "['../x']"])
+def test_a_glob_escaping_the_plugin_root_is_refused(tmp_path, patterns):
+    text = (
+        _sources() + f"plugins:\n- name: p\n  source: gh://o/r\n  files: {patterns}\n"
+    )
+    with pytest.raises(ConfigError, match="relative"):
+        load_config(write(tmp_path, text))
+
+
+def test_an_unknown_dialect_is_refused(tmp_path):
+    text = _sources() + "plugins:\n- name: p\n  source: gh://o/r\n  dialect: gemini\n"
+    with pytest.raises(ConfigError, match="dialect"):
+        load_config(write(tmp_path, text))
+
+
+# -- libraries -----------------------------------------------------------------
+
+
+def test_a_marketplace_library_with_a_selector_is_refused(tmp_path):
+    text = (
+        _sources() + "libraries:\n- name: lib\n  source: gh://o/r\n"
+        "  pluginSelector:\n    categories: [design]\n"
+    )
+    with pytest.raises(ConfigError, match="takes its shape from the marketplace"):
+        load_config(write(tmp_path, text))
+
+
+def test_a_marketplace_library_may_still_add_a_named_plugin(tmp_path):
+    text = (
+        _sources() + "plugins:\n- name: mine\n  source: gh://o/r\n"
+        "libraries:\n- name: lib\n  source: gh://o/r2\n  plugins: [mine]\n"
+    )
+    config = load_config(write(tmp_path, text))
+    assert config.library("lib").plugins == ["mine"]
+
+
+def test_a_library_that_selects_nothing_is_refused(tmp_path):
+    with pytest.raises(ConfigError, match="selects nothing"):
+        load_config(write(tmp_path, "libraries:\n- name: empty\n  description: x\n"))
+
+
+def test_a_library_naming_an_undeclared_plugin_is_refused(tmp_path):
+    text = "libraries:\n- name: lib\n  plugins: [ghost]\n"
+    with pytest.raises(ConfigError, match="ghost"):
+        load_config(write(tmp_path, text))
+
+
+def test_a_library_may_name_a_marketplace_plugin_which_is_checked_later(tmp_path):
+    """`entry@library` is resolved once the marketplace is read, not at load."""
+    text = (
+        _sources() + "libraries:\n- name: up\n  source: gh://o/r\n"
+        "- name: mine\n  plugins: [grafana-lgtm@up]\n"
+    )
+    config = load_config(write(tmp_path, text))
+    assert config.library("mine").plugins == ["grafana-lgtm@up"]
+
+
+def test_a_library_marketplace_scheme_with_no_source_is_refused(tmp_path):
+    with pytest.raises(ConfigError, match="nope"):
+        load_config(write(tmp_path, "libraries:\n- name: lib\n  source: nope://o/r\n"))
+
+
+# -- duplicates and the schema -------------------------------------------------
+
+
+def test_duplicate_source_names_are_refused(tmp_path):
+    text = "sources:\n- name: a\n  url: file:///a\n- name: a\n  url: file:///b\n"
+    with pytest.raises(ConfigError, match="duplicate"):
+        load_config(write(tmp_path, text))
+
+
+def test_duplicate_plugin_names_are_refused(tmp_path):
+    text = (
+        "plugins:\n- name: a\n  source: file:///a\n- name: a\n  source: file:///b\n"
+    )
+    with pytest.raises(ConfigError, match="duplicate"):
+        load_config(write(tmp_path, text))
+
+
+def test_duplicate_library_names_are_refused(tmp_path):
+    text = (
+        "plugins:\n- name: p\n  source: file:///a\n"
+        "libraries:\n- name: a\n  plugins: [p]\n- name: a\n  plugins: [p]\n"
+    )
+    with pytest.raises(ConfigError, match="duplicate"):
+        load_config(write(tmp_path, text))
+
+
+def test_a_comma_in_a_category_is_refused_with_the_reason(tmp_path):
+    text = (
+        "libraries:\n- name: lib\n  pluginSelector:\n"
+        "    categories: ['design,engineering']\n"
+    )
+    with pytest.raises(ConfigError, match="a plugin has one category"):
+        load_config(write(tmp_path, text))
+
+
+def test_the_published_schema_names_the_selector_by_its_alias():
+    """`config.schema.json` is what an editor validates against, and the file
+    says `pluginSelector` -- the field name behind it must not be what ships."""
+    published = json.dumps(schema())
+
+    assert "pluginSelector" in published
+    assert "plugin_selector" not in published
+
+
+def test_a_missing_file_is_a_config_error(tmp_path):
+    with pytest.raises(ConfigError, match="cannot read"):
+        load_config(tmp_path / "nope.yaml")
+
+
+def test_config_constructs_from_model_instances_not_only_dicts():
+    config = Config(
+        sources=[SourceConfig(name="a", url="file:///a")],
+        plugins=[PluginConfig(name="p", source="a://x")],
+    )
+    assert config.plugins[0].address.scheme == "a"
+
+
+def test_a_selector_defaults_to_selecting_without_constraint():
+    selector = Selector()
+    assert selector.category_set == frozenset()
+    assert selector.tag_groups == frozenset()
+
+
+# -- the pieces kept from before ------------------------------------------------
 
 
 def test_an_env_ref_resolves_to_a_secret(monkeypatch):
@@ -174,224 +496,10 @@ def test_an_unset_env_ref_is_a_config_error(monkeypatch):
         EnvRef(env="NOPE").resolve()
 
 
-def test_a_github_source_produces_the_clone_url(tmp_path):
-    config = load_config(
-        write(tmp_path, "sources:\n- name: skills\n  url: github://grafana/skills\n")
-    )
-    [source] = config.sources
-    assert isinstance(source, GitSource)
-    assert source.clone_url == "https://github.com/grafana/skills.git"
-
-
-def test_a_github_url_already_ending_in_git_is_not_double_suffixed(tmp_path):
-    config = load_config(
-        write(
-            tmp_path, "sources:\n- name: skills\n  url: github://grafana/skills.git\n"
-        )
-    )
-    assert config.sources[0].clone_url == "https://github.com/grafana/skills.git"
-
-
-def test_a_github_url_missing_the_repo_is_a_config_error(tmp_path):
-    with pytest.raises(ConfigError, match="github://org/repo"):
-        load_config(
-            write(tmp_path, "sources:\n- name: a\n  url: github://only-org\n")
-        )
-
-
-def test_a_git_plus_https_source_with_a_ref_parses(tmp_path):
-    config = load_config(
-        write(
-            tmp_path,
-            "sources:\n- name: a\n  url: git+https://x/y.git\n  ref: v1\n",
-        )
-    )
-    [source] = config.sources
-    assert isinstance(source, GitSource)
-    assert source.ref == "v1"
-    assert source.clone_url == "https://x/y.git"
-
-
-def test_git_plus_http_and_git_plus_file_clone_urls_drop_only_the_prefix(tmp_path):
-    text = (
-        "sources:\n"
-        "- name: a\n  url: git+http://x/y.git\n"
-        "- name: b\n  url: git+file:///srv/repo.git\n"
-    )
-    config = load_config(write(tmp_path, text))
-    assert config.sources[0].clone_url == "http://x/y.git"
-    assert config.sources[1].clone_url == "file:///srv/repo.git"
-
-
-def test_git_auth_password_must_be_an_env_ref_not_a_literal(tmp_path):
-    text = (
-        "sources:\n- name: a\n  url: github://o/r\n"
-        "  auth:\n    username: x-access-token\n    password: hunter2\n"
-    )
+def test_an_auth_password_must_be_an_env_ref_not_a_literal(tmp_path):
+    text = _sources("  auth:\n    username: x-access-token\n    password: hunter2\n")
     with pytest.raises(ConfigError):
         load_config(write(tmp_path, text))
-
-
-def test_git_auth_with_an_env_ref_password_parses(tmp_path):
-    text = (
-        "sources:\n- name: a\n  url: github://o/r\n"
-        "  auth:\n    username: x-access-token\n    password:\n      env: GITHUB_TOKEN\n"
-    )
-    config = load_config(write(tmp_path, text))
-    assert config.sources[0].auth.username == "x-access-token"
-    assert config.sources[0].auth.password == EnvRef(env="GITHUB_TOKEN")
-
-
-def test_refresh_is_still_accepted_on_a_git_source(tmp_path):
-    config = load_config(
-        write(tmp_path, "sources:\n- name: a\n  url: github://o/r\n  refresh: 5m\n")
-    )
-    assert config.sources[0].refresh_seconds == 300
-
-
-def test_a_file_source_with_a_ref_is_refused_extra_forbidden(tmp_path):
-    with pytest.raises(ConfigError):
-        load_config(
-            write(tmp_path, "sources:\n- name: a\n  url: file:///a\n  ref: v1\n")
-        )
-
-
-def test_a_git_subdirectory_escaping_the_export_is_refused(tmp_path):
-    text = "sources:\n- name: a\n  url: github://o/r\n  subdirectory: ../x\n"
-    with pytest.raises(ConfigError, match="relative"):
-        load_config(write(tmp_path, text))
-
-
-def test_a_git_subdirectory_that_stays_inside_parses(tmp_path):
-    text = "sources:\n- name: a\n  url: github://o/r\n  subdirectory: docs/skills\n"
-    config = load_config(write(tmp_path, text))
-    assert config.sources[0].subdirectory == "docs/skills"
-
-
-def test_min_refresh_seconds_considers_git_sources_too(tmp_path):
-    text = (
-        "sources:\n"
-        "- name: a\n  url: file:///a\n  refresh: 5m\n"
-        "- name: b\n  url: github://o/r\n  refresh: 10s\n"
-    )
-    config = load_config(write(tmp_path, text))
-    assert config.min_refresh_seconds == 10
-
-
-def test_a_credential_embedded_in_a_url_is_refused(tmp_path):
-    """`auth` is the one way a credential reaches a remote, and this is why.
-
-    pygit2 saves the clone's remote URL verbatim under `<cache>/git/<name>/config`,
-    and `source.url` is interpolated into the errors `/health` publishes — so a
-    token in the URL is a token on disk and in a served body. Refused at the
-    door instead, and the refusal itself must not repeat it back.
-    """
-    text = "sources:\n- name: p\n  url: git+http://x-access-token:ghp-secret@h/x.git\n"
-
-    with pytest.raises(ConfigError, match="credential") as raised:
-        load_config(write(tmp_path, text))
-
-    assert "ghp-secret" not in str(raised.value)
-    assert "x-access-token" not in str(raised.value)
-
-
-def test_a_url_with_no_credential_in_it_is_reported_as_it_is(tmp_path):
-    """The redaction must not eat an ordinary URL out of an ordinary message."""
-    with pytest.raises(ConfigError, match="github://org/repo") as raised:
-        load_config(write(tmp_path, "sources:\n- name: p\n  url: github://a/b/c\n"))
-
-    assert "github://a/b/c" in str(raised.value)
-
-
-# -- webdav --------------------------------------------------------------------
-
-
-def test_a_webdav_source_parses_with_auth(tmp_path):
-    text = (
-        "sources:\n- name: notes\n  url: webdav+https://cloud.example/remote.php/dav/files/me/notes\n"
-        "  auth:\n    username: me\n    password:\n      env: NEXTCLOUD_APP_PASSWORD\n"
-    )
-    config = load_config(write(tmp_path, text))
-    [source] = config.sources
-    assert isinstance(source, WebdavSource)
-    assert source.auth.username == "me"
-    assert source.auth.password == EnvRef(env="NEXTCLOUD_APP_PASSWORD")
-    assert source.cache == "snapshot"  # the dial's default: copied, read from disk
-
-
-def test_a_webdav_source_without_auth_is_refused(tmp_path):
-    """WebDAV is an authenticated backend; an anonymous one is a typo, not a mode."""
-    text = "sources:\n- name: notes\n  url: webdav+https://cloud.example/dav/notes\n"
-    with pytest.raises(ConfigError, match="auth"):
-        load_config(write(tmp_path, text))
-
-
-def test_the_cache_dial_accepts_live(tmp_path):
-    config = load_config(write(tmp_path, _webdav("  cache: live\n")))
-    assert config.sources[0].cache == "live"
-
-
-def test_an_unknown_cache_mode_is_refused(tmp_path):
-    with pytest.raises(ConfigError, match="cache"):
-        load_config(write(tmp_path, _webdav("  cache: sometimes\n")))
-
-
-def test_cache_is_not_a_field_on_a_git_source(tmp_path):
-    """The dial is WebDAV's alone in this epic -- on git it is silently nothing,
-    so it has to be refused rather than accepted and ignored."""
-    text = "sources:\n- name: a\n  url: github://o/r\n  cache: live\n"
-    with pytest.raises(ConfigError, match="cache"):
-        load_config(write(tmp_path, text))
-
-
-def test_the_base_url_drops_only_the_webdav_prefix(tmp_path):
-    text = (
-        "sources:\n"
-        "- name: a\n  url: webdav+https://h/dav/a\n"
-        "  auth: {username: u, password: {env: P}}\n"
-        "- name: b\n  url: webdav+http://h:8080/dav/b\n"
-        "  auth: {username: u, password: {env: P}}\n"
-    )
-    config = load_config(write(tmp_path, text))
-    assert config.sources[0].base_url == "https://h/dav/a"
-    assert config.sources[1].base_url == "http://h:8080/dav/b"
-
-
-def test_a_credential_embedded_in_a_webdav_url_is_refused(tmp_path):
-    """A WebDAV URL reaches httpx and the errors /health publishes; the password
-    belongs in `auth`, where it stays a reference to an environment variable."""
-    text = (
-        "sources:\n- name: notes\n  url: webdav+https://me:hunter2@cloud.example/dav\n"
-        "  auth: {username: me, password: {env: P}}\n"
-    )
-    with pytest.raises(ConfigError, match="credential") as raised:
-        load_config(write(tmp_path, text))
-    assert "hunter2" not in str(raised.value)
-
-
-def test_a_password_containing_an_at_is_not_half_echoed(tmp_path):
-    """The scrub used to stop at the *first* `@`, so the tail of a password with
-    an unencoded one came back in the error and hence in the startup log."""
-    text = (
-        "sources:\n- name: notes\n  url: webdav+https://me:hun@ter2@cloud.example/dav\n"
-        "  auth: {username: me, password: {env: P}}\n"
-    )
-    with pytest.raises(ConfigError, match="credential") as raised:
-        load_config(write(tmp_path, text))
-    assert "ter2" not in str(raised.value)
-    assert "hun" not in str(raised.value)
-
-
-def test_refresh_is_still_accepted_on_a_webdav_source(tmp_path):
-    config = load_config(write(tmp_path, _webdav("  refresh: 10m\n")))
-    assert config.sources[0].refresh_seconds == 600
-
-
-def _webdav(extra: str = "") -> str:
-    return (
-        "sources:\n- name: notes\n  url: webdav+https://cloud.example/dav/notes\n"
-        "  auth:\n    username: me\n    password:\n      env: P\n" + extra
-    )
 
 
 @pytest.mark.unit

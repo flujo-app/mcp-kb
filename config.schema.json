@@ -41,23 +41,23 @@
       "title": "EnvRef",
       "type": "object"
     },
-    "FileSource": {
+    "LibraryConfig": {
       "additionalProperties": false,
-      "description": "A directory on this machine, served in place.",
+      "description": "A library: a marketplace, plugins by name, or a query -- and their union.\n\nA library carries no tags and no category of its own. Tagging is what a\nplugin does, so ``?tags=`` reaches a library only through what its plugins\nsay, and the selector gets an unambiguous name of its own after\nKubernetes' ``selector``.",
       "properties": {
         "name": {
           "pattern": "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$",
           "title": "Name",
           "type": "string"
         },
-        "url": {
-          "title": "Url",
+        "description": {
+          "default": "",
+          "title": "Description",
           "type": "string"
         },
-        "library": {
+        "source": {
           "anyOf": [
             {
-              "pattern": "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$",
               "type": "string"
             },
             {
@@ -65,130 +65,19 @@
             }
           ],
           "default": null,
-          "title": "Library"
+          "title": "Source"
         },
-        "tags": {
+        "plugins": {
           "items": {
             "type": "string"
           },
-          "title": "Tags",
+          "title": "Plugins",
           "type": "array"
         },
-        "include": {
-          "$ref": "#/$defs/Include",
-          "default": {
-            "skills": null,
-            "prompts": null,
-            "instructions": null,
-            "agents": null,
-            "files": null
-          }
-        },
-        "refresh": {
+        "pluginSelector": {
           "anyOf": [
             {
-              "pattern": "^[1-9]\\d*[smh]$",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Refresh"
-        }
-      },
-      "required": [
-        "name",
-        "url"
-      ],
-      "title": "FileSource",
-      "type": "object"
-    },
-    "GitSource": {
-      "additionalProperties": false,
-      "description": "A git repository, cloned bare and shallow, exported at a ref.",
-      "properties": {
-        "name": {
-          "pattern": "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$",
-          "title": "Name",
-          "type": "string"
-        },
-        "url": {
-          "title": "Url",
-          "type": "string"
-        },
-        "library": {
-          "anyOf": [
-            {
-              "pattern": "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Library"
-        },
-        "tags": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Tags",
-          "type": "array"
-        },
-        "include": {
-          "$ref": "#/$defs/Include",
-          "default": {
-            "skills": null,
-            "prompts": null,
-            "instructions": null,
-            "agents": null,
-            "files": null
-          }
-        },
-        "refresh": {
-          "anyOf": [
-            {
-              "pattern": "^[1-9]\\d*[smh]$",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Refresh"
-        },
-        "ref": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Ref"
-        },
-        "subdirectory": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Subdirectory"
-        },
-        "auth": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/BasicAuth"
+              "$ref": "#/$defs/Selector"
             },
             {
               "type": "null"
@@ -198,16 +87,67 @@
         }
       },
       "required": [
-        "name",
-        "url"
+        "name"
       ],
-      "title": "GitSource",
+      "title": "LibraryConfig",
       "type": "object"
     },
-    "Include": {
+    "PluginConfig": {
       "additionalProperties": false,
-      "description": "Globs per kind, relative to the source root. None means the conventions.",
+      "description": "A folder of skills and prompts: a path under a source, plus its metadata.\n\nThe metadata fields are Claude's marketplace-entry fields, so a plugin\ndeclared here and one read out of a ``marketplace.json`` carry the same\nshape and a selector cannot tell them apart. The glob lists are this\nserver's own: omitted, a kind falls to the plugin's manifest and then to\nthe conventions.",
       "properties": {
+        "name": {
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$",
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "category": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Category"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "keywords": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Keywords",
+          "type": "array"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
         "skills": {
           "anyOf": [
             {
@@ -238,36 +178,6 @@
           "default": null,
           "title": "Prompts"
         },
-        "instructions": {
-          "anyOf": [
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Instructions"
-        },
-        "agents": {
-          "anyOf": [
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Agents"
-        },
         "files": {
           "anyOf": [
             {
@@ -282,24 +192,36 @@
           ],
           "default": null,
           "title": "Files"
+        },
+        "dialect": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "mcp-kb",
+            "claude",
+            "copilot"
+          ],
+          "title": "Dialect",
+          "type": "string"
         }
       },
-      "title": "Include",
+      "required": [
+        "name",
+        "source"
+      ],
+      "title": "PluginConfig",
       "type": "object"
     },
-    "Library": {
+    "Selector": {
       "additionalProperties": false,
-      "description": "A named grouping several sources can join, carrying its own tags.",
+      "description": "A query over plugins: categories narrow first, then tag groups.\n\nAcross the two fields it is AND, as in every faceted search. Within\n``categories`` it can only be OR -- a plugin has exactly one category --\nand within ``tags`` a comma means *all of* while separate items mean *any\nof*, which is the same comma rule a request's ``?tags=`` carries.",
       "properties": {
-        "name": {
-          "pattern": "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$",
-          "title": "Name",
-          "type": "string"
-        },
-        "description": {
-          "default": "",
-          "title": "Description",
-          "type": "string"
+        "categories": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Categories",
+          "type": "array"
         },
         "tags": {
           "items": {
@@ -309,15 +231,12 @@
           "type": "array"
         }
       },
-      "required": [
-        "name"
-      ],
-      "title": "Library",
+      "title": "Selector",
       "type": "object"
     },
-    "WebdavSource": {
+    "SourceConfig": {
       "additionalProperties": false,
-      "description": "A WebDAV folder -- Nextcloud above all -- copied into the cache.\n\nThe URL names the folder itself, so ``base_url`` is the client's root and\nevery path under it is relative: a Nextcloud share is\n``webdav+https://cloud/remote.php/dav/files/<user>/<folder>``. ``auth`` is\nrequired, because WebDAV has no useful anonymous mode and an omitted\ncredential is a typo rather than a choice -- a Nextcloud *app password*,\nnever the account's own.\n\n``cache`` is the dial. ``snapshot`` is every other mirrored source: the\nfolder is copied at index time and read from disk thereafter, so a request\ntouches no network at all. ``live`` keeps that copy and revalidates a file\nagainst the server by ETag as it is read, so an edit made in Nextcloud is\nserved on the next read -- a file that did not exist at index time still\nneeds a refresh, because a URI only exists for what was harvested.",
+      "description": "A named backend: where bytes come from and how to log in, declared once.",
       "properties": {
         "name": {
           "pattern": "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$",
@@ -328,35 +247,25 @@
           "title": "Url",
           "type": "string"
         },
-        "library": {
+        "auth": {
           "anyOf": [
             {
-              "pattern": "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$",
-              "type": "string"
+              "$ref": "#/$defs/BasicAuth"
             },
             {
               "type": "null"
             }
           ],
-          "default": null,
-          "title": "Library"
+          "default": null
         },
-        "tags": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Tags",
-          "type": "array"
-        },
-        "include": {
-          "$ref": "#/$defs/Include",
-          "default": {
-            "skills": null,
-            "prompts": null,
-            "instructions": null,
-            "agents": null,
-            "files": null
-          }
+        "cache": {
+          "default": "snapshot",
+          "enum": [
+            "snapshot",
+            "live"
+          ],
+          "title": "Cache",
+          "type": "string"
         },
         "refresh": {
           "anyOf": [
@@ -370,54 +279,38 @@
           ],
           "default": null,
           "title": "Refresh"
-        },
-        "auth": {
-          "$ref": "#/$defs/BasicAuth"
-        },
-        "cache": {
-          "default": "snapshot",
-          "enum": [
-            "snapshot",
-            "live"
-          ],
-          "title": "Cache",
-          "type": "string"
         }
       },
       "required": [
         "name",
-        "url",
-        "auth"
+        "url"
       ],
-      "title": "WebdavSource",
+      "title": "SourceConfig",
       "type": "object"
     }
   },
   "additionalProperties": false,
-  "description": "The whole config file: the libraries declared and the sources that join them.",
+  "description": "The whole config file: the sources, the plugins under them, the libraries.",
   "properties": {
-    "libraries": {
-      "items": {
-        "$ref": "#/$defs/Library"
-      },
-      "title": "Libraries",
-      "type": "array"
-    },
     "sources": {
       "items": {
-        "oneOf": [
-          {
-            "$ref": "#/$defs/FileSource"
-          },
-          {
-            "$ref": "#/$defs/GitSource"
-          },
-          {
-            "$ref": "#/$defs/WebdavSource"
-          }
-        ]
+        "$ref": "#/$defs/SourceConfig"
       },
       "title": "Sources",
+      "type": "array"
+    },
+    "plugins": {
+      "items": {
+        "$ref": "#/$defs/PluginConfig"
+      },
+      "title": "Plugins",
+      "type": "array"
+    },
+    "libraries": {
+      "items": {
+        "$ref": "#/$defs/LibraryConfig"
+      },
+      "title": "Libraries",
       "type": "array"
     }
   },

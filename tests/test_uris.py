@@ -12,7 +12,11 @@ import pytest
 from kubed.mcp_kb.catalogue.skills import LibraryFiles, SkillIndex, load_skills
 from kubed.mcp_kb.catalogue.uris import Catalogue, parse, uri_for
 from kubed.mcp_kb.mcp.scope import Scope
-from tests.conftest import build_library_files, load_all_skills
+from tests.conftest import build_library_files, fake_plugin, load_all_skills
+
+
+def _tags(*groups):
+    return Scope(tags=frozenset(frozenset(group) for group in groups))
 
 
 @pytest.fixture
@@ -98,16 +102,26 @@ def test_entries_honour_the_pin(catalogue):
 
 
 @pytest.mark.unit
-def test_a_folder_pin_still_names_its_folder(catalogue):
-    uris = [e.uri for e in catalogue.entries(Scope("deepsource/plugin-a"))]
-    assert "skill://deepsource/plugin-a/_index.md" in uris
-    assert "skill://deepsource/plugin-b/_index.md" not in uris
+def test_a_tag_scope_lists_the_libraries_of_the_plugins_carrying_it(catalogue):
+    """The listing is always the library level and its top folders, whatever
+    the scope: a tag narrows which plugins count, never which rows a library
+    gets."""
+    uris = [e.uri for e in catalogue.entries(_tags({"deep"}))]
+    assert uris == [
+        "skill://deepsource/_index.md",
+        "skill://deepsource/plugin-a/_index.md",
+        "skill://deepsource/plugin-b/_index.md",
+        "skill://deepsource/_files.md",
+    ]
+    assert catalogue.entries(_tags({"nope"})) == []
 
 
 @pytest.mark.unit
-def test_a_bare_folder_name_selects_nothing(catalogue):
-    """Folder names repeat across libraries; only the path selects one."""
+def test_a_folder_name_selects_nothing(catalogue):
+    """A scope names a library and nothing below it: neither a bare folder
+    name nor a library/folder path is one."""
     assert catalogue.entries(Scope("plugin-a")) == []
+    assert catalogue.entries(Scope("deepsource/plugin-a")) == []
 
 
 # -- reading ------------------------------------------------------------------
@@ -245,7 +259,7 @@ def test_traversal_cannot_walk_out_of_a_skill(catalogue):
 def test_a_skill_file_is_not_reachable_as_a_library_file(catalogue):
     """The two spaces must not overlap, or skill scoping could be bypassed."""
     assert catalogue.read("skill://deepsource/plugin-a/gamma/SKILL.md") is not None
-    pinned = Scope("deepsource/plugin-b")
+    pinned = Scope("deepsource", categories=frozenset({"nope"}))
     assert catalogue.read("skill://deepsource/plugin-a/gamma/SKILL.md", pinned) is None
 
 
@@ -261,22 +275,13 @@ def test_the_pin_hides_another_library_entirely(catalogue):
 
 
 @pytest.mark.unit
-def test_a_folder_pin_cannot_read_a_sibling_folder(catalogue):
-    """Pinning to one folder must not widen to the whole library."""
-    pinned = Scope("deepsource/plugin-a")
-    assert catalogue.read("skill://deepsource/plugin-a/gamma/SKILL.md", pinned)
-    assert catalogue.read("skill://deepsource/plugin-b/delta/SKILL.md", pinned) is None
-    assert catalogue.read("skill://deepsource/plugin-b/_index.md", pinned) is None
-    assert "delta" not in catalogue.read("skill://deepsource/_index.md", pinned)
-
-
-@pytest.mark.unit
-def test_a_folder_pin_still_reaches_its_sources_shared_material(catalogue):
-    """Shared files come from the source whose skills cite them."""
-    body = catalogue.read(
-        "skill://deepsource/shared/guide.md", scope=Scope("deepsource/plugin-a")
-    )
-    assert body == "shared guidance\n"
+def test_a_tag_scope_reaches_the_shared_material_of_the_plugin_carrying_it(catalogue):
+    """Shared files come from the plugin whose skills cite them, and are in
+    scope exactly when that plugin is."""
+    guide = "skill://deepsource/shared/guide.md"
+    assert catalogue.read(guide, scope=_tags({"deep"})) == "shared guidance\n"
+    assert catalogue.read(guide, scope=_tags({"flat"})) is None
+    assert catalogue.read("skill://deepsource/_files.md", scope=_tags({"flat"})) is None
 
 
 @pytest.mark.unit
@@ -319,7 +324,7 @@ def test_an_index_row_is_tagged_with_its_library(tmp_path):
     skill_dir.mkdir()
     (skill_dir / "SKILL.md").write_text("---\nname: loki\ndescription: d\n---\n")
     skills = load_skills(
-        [skill_dir], library="grafana", source="grafana", root=tmp_path
+        [skill_dir], library="grafana", plugin=fake_plugin("g", tmp_path), root=tmp_path
     )
     resources = LibraryFiles()
     cat = Catalogue(SkillIndex(skills), resources)
@@ -327,10 +332,11 @@ def test_an_index_row_is_tagged_with_its_library(tmp_path):
 
 
 @pytest.mark.unit
-def test_a_full_row_carries_the_skills_own_tags(catalogue, skills_dir):
-    """The full listing is a per-skill row, so it carries that skill's tags."""
+def test_a_full_row_carries_the_skills_labels_and_its_library(catalogue, skills_dir):
+    """The full listing is a per-skill row: its plugin's labels, plus the
+    library so FastMCP's own tag filters can tell the libraries apart."""
     skill = next(s for s in load_all_skills(skills_dir) if s.name == "gamma")
     row = next(
         e for e in catalogue.entries(full=True) if e.uri == uri_for(skill)
     )
-    assert row.tags == tuple(sorted(skill.tags))
+    assert row.tags == ("deep", "deepsource")

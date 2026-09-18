@@ -14,13 +14,13 @@
 
 ## The whole idea, in one breath
 
-Your [Agent Skills](https://code.claude.com/docs/en/skills) and prompts are scattered — a repo on GitHub, a folder somebody edits in Nextcloud, a ConfigMap in the cluster. Name them in one config file and every agent reads them from one address space, over MCP.
+Your [Agent Skills](https://code.claude.com/docs/en/skills) and prompts are scattered — a plugin marketplace on GitHub, a folder somebody edits in Nextcloud, a ConfigMap in the cluster. Name them in one config file and every agent reads them from one address space, over MCP.
 
 ```
-sources (git · WebDAV · folders)  ──▶  mcp-kb  ──▶  agents (resources, or tools)
+sources (git · WebDAV · folders)  ──▶  plugins  ──▶  libraries  ──▶  agents (resources, or tools)
 ```
 
-**The image bakes nothing.** A source is a dependency — a URL, an optional pinned commit, and a credential that is a *reference* to an environment variable rather than a value — fetched at container start into a cache volume. 🪄
+**The image bakes nothing.** A source is a dependency — a URL and a credential that is a *reference* to an environment variable rather than a value — and a plugin is a folder under one, pinned to a commit, fetched at container start into a cache volume. Point a library at somebody's `marketplace.json` and its plugins arrive already split, with the categories and tags they publish. 🪄
 
 ---
 
@@ -70,9 +70,9 @@ A client can be given part of the catalogue and no more, and the narrowing is a 
 | On the MCP URL | Header | Sees |
 |---|---|---|
 | `?library=grafana` | `X-Skill-Library` | that whole library |
-| `?library=grafana/grafana-lgtm` | `X-Skill-Library` | one folder of it |
-| `?tags=ops,ui` | `X-Skill-Tags` | anything carrying **any** of the tags, across libraries |
-| `?library=grafana&tags=ops` | both | the tagged part of that one library |
+| `?categories=observability` | `X-Skill-Categories` | every plugin declaring that category, across libraries |
+| `?tags=oncall,runbooks` | `X-Skill-Tags` | what carries **both** tags; repeat the parameter for any-of |
+| `?library=grafana&tags=oncall` | all three | the tagged part of that one library |
 
 A header beats the URL, which is what makes a scope pinned inside a credential something the caller cannot edit away. It is a plumbed constant, never a tool argument — there is no way for a model to ask for material it was not given.
 
@@ -80,35 +80,44 @@ A header beats the URL, which is what makes a scope pinned inside a credential s
 
 ---
 
-## 🔌 Sources
+## 🔌 Sources, plugins, libraries
 
-A source is a dependency, declared like one:
+Three lists. A **source** is a backend named once. A **plugin** is a folder of skills and prompts at a path under it. A **library** is the first segment of every URI, and is a marketplace, a list of plugins, or a query:
 
 ```yaml
 sources:
-- name: superpowers
-  url: github://obra/superpowers
-  ref: b36e0829c6d0140e93cfef2ca599b1b07d4a7797
-  include:
-    skills: ["skills/*"]
-    prompts: []
+- name: github
+  url: git+https://github.com
+
+plugins:
+- name: house-prompts
+  category: operations
+  source: file:///srv/prompts
+  prompts: ["*.md"]
+
+libraries:
+- name: grafana
+  source: github://grafana/skills?ref=51d33e71e191b409bbd25fc7be2684c610d18166
+  plugins: [house-prompts]
 ```
 
 | Scheme | Backend |
 |---|---|
 | `file:///path` | a directory on this machine, served in place — ConfigMap mounts included |
-| `github://org/repo`, `git+https://`, `git+http://`, `git+file://` | a git remote, cloned bare — shallow over the network, whole for `git+file://` (libgit2's local transport refuses a shallow fetch) — and exported at a commit |
+| `git+https://`, `git+http://`, `git+file://` | a git remote, cloned bare — shallow over the network, whole for `git+file://` (libgit2's local transport refuses a shallow fetch) — and exported at a commit |
 | `webdav+https://`, `webdav+http://` | a WebDAV folder — Nextcloud above all — copied into the cache |
 
-Pin a `ref` and the image serves the same bytes in a year; track a branch and give it a `refresh:` and something goes and looks. `cache: live` on a WebDAV source revalidates a file by ETag as it is read, so **a file edited in Nextcloud is served on the next read**. A credential is always an `{env: NAME}` reference — a URL carrying its own `user:token@` is refused.
+A plugin's address is `<source>://<path>[//<subdir>][?ref=<ref>]`, go-getter's grammar, the one kustomize reads. Pin a `?ref=` and the image serves the same bytes in a year; track a branch, give the source a `refresh:`, and something goes and looks. `cache: live` on a WebDAV source revalidates a file by ETag as it is read, so **a file edited in Nextcloud is served on the next read**. A credential lives on the source and is always an `{env: NAME}` reference — a URL carrying its own `user:token@` is refused.
 
-📖 [Sources](https://github.com/kubed-io/mcp-kb/wiki/Sources) · [Configuration](https://github.com/kubed-io/mcp-kb/wiki/Configuration)
+Nothing about a marketplace's plugin is editable here: to change one, declare your own plugin against the same repository, which costs no second clone.
+
+📖 [Plugins](https://github.com/kubed-io/mcp-kb/wiki/Plugins) · [Sources](https://github.com/kubed-io/mcp-kb/wiki/Sources) · [Configuration](https://github.com/kubed-io/mcp-kb/wiki/Configuration)
 
 ---
 
 ## 💬 Prompts
 
-A skill is read by the model when it decides to. A **prompt** is picked by a person, who fills in a few arguments first — Claude Code lists them as slash commands. YAML frontmatter declares the arguments, the body carries `{{ placeholders }}`, and the same libraries, tags and scopes apply:
+A skill is read by the model when it decides to. A **prompt** is picked by a person, who fills in a few arguments first — Claude Code lists them as slash commands. Point the server at a Claude Code command, a Copilot `.prompt.md` or one of its own files and **the same MCP prompt comes out**, with the same libraries, tags and scopes as everything else:
 
 ```markdown
 ---
@@ -122,7 +131,7 @@ arguments:
 Investigate the logs of **{{ app }}** over the last {{ since }}.
 ```
 
-Double braces, because prompt bodies here are full of LogQL and JSON.
+Double braces, because prompt bodies here are full of LogQL and JSON. A Claude command's `$ARGUMENTS` and a Copilot file's `${input:name:hint}` become arguments the same way. `${CLAUDE_PLUGIN_ROOT}` is rendered as an address you can read; `${selection}` and friends name things only a client has, so they are served exactly as written, and nothing fetched is ever executed.
 
 📖 [Prompts](https://github.com/kubed-io/mcp-kb/wiki/Prompts)
 
@@ -163,8 +172,9 @@ Per request, on the MCP URL — each with a header form that beats it:
 |---|---|---|
 | `?resources=off` | `X-MCP-Resources` | Reveals the resource mirror tools |
 | `?prompts=off` | `X-MCP-Prompts` | Reveals the prompt mirror tools |
-| `?library=<name>` | `X-Skill-Library` | Restricts this client to one library, or `<library>/<folder>` to one folder of it |
-| `?tags=a,b` | `X-Skill-Tags` | Restricts it to anything carrying any of those tags |
+| `?library=<name>` | `X-Skill-Library` | Restricts this client to one library, by name |
+| `?categories=<name>` | `X-Skill-Categories` | Restricts it to the plugins declaring that category |
+| `?tags=a,b` | `X-Skill-Tags` | Restricts it to what carries all of those tags; repeat for any-of |
 | `?skills=full` | `X-Skill-Listing` | Lists every skill, for clients that sync them to disk |
 
 `mcp-kb schema` prints the config JSON Schema, which is also committed as `config.schema.json` for an editor to validate against live.
@@ -175,9 +185,9 @@ Per request, on the MCP URL — each with a header form that beats it:
 
 ## 🩺 Operations
 
-`GET /health` reports the generation being served, the libraries, the skill and prompt counts, and each source's own status — `ok`, `stale` or `failed`. It needs no credentials and answers 200 whenever the process is serving, *including* when a source failed to load: one unreachable remote must not take a working catalogue down.
+`GET /health` reports the generation being served, the skill and prompt counts, and three maps: the **libraries** and what each serves, the **plugins** and what each yielded, and the **fetches** — one per materialised tree — each `ok`, `stale` or `failed`. It needs no credentials and answers 200 whenever the process is serving, *including* when a fetch failed to load: one unreachable remote must not take a working catalogue down.
 
-`POST /reindex` rebuilds every source now and answers with the same body plus what it rebuilt. `GET /openapi.yaml` is the machine-readable contract for both.
+`POST /reindex` rebuilds every fetch now and answers with the same body plus what it rebuilt. `GET /openapi.yaml` is the machine-readable contract for both.
 
 📖 [Operations](https://github.com/kubed-io/mcp-kb/wiki/Operations) · [Endpoints](https://github.com/kubed-io/mcp-kb/wiki/Endpoints)
 

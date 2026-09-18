@@ -13,8 +13,12 @@ A prompt file is YAML frontmatter plus a body::
     ---
     Investigate {{ app }} over the last {{ since }}.
 
-Placeholders are ``{{ name }}`` rather than ``str.format``'s ``{name}`` because
-these bodies are full of LogQL, PromQL and JSON, which all use single braces.
+That is this server's own dialect, and it is one of three. Point the server at
+a Claude Code command or a VS Code Copilot ``.prompt.md`` and the same MCP
+prompt comes out: ``detect.py`` decides which dialect a file is written in and
+``mcpkb.py``, ``claude.py`` and ``copilot.py`` each read one of them into the
+same ``Parsed`` and render it back. None of them invents a schema -- the
+target is the MCP prompt itself (§C1.34).
 
 The exposed name is ``<library>_<file stem>``. Prompt names are one flat
 namespace per server, and two libraries shipping a ``debug.md`` must not
@@ -30,7 +34,6 @@ something FastMCP can serve.
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,18 +41,26 @@ from pathlib import Path
 import frontmatter
 import yaml
 
+from .. import placeholders
+from . import claude, copilot, detect, mcpkb
+from .mcpkb import PLACEHOLDER
+from .shape import Argument, Parsed
+
 log = logging.getLogger(__name__)
 
-PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+DIALECTS = {module.NAME: module for module in (mcpkb, claude, copilot)}
 
-
-@dataclass(frozen=True)
-class Argument:
-    """One declared placeholder: FastMCP-free twin of ``PromptArgument``."""
-
-    name: str
-    description: str | None = None
-    required: bool = False
+__all__ = [
+    "DIALECTS",
+    "PLACEHOLDER",
+    "Argument",
+    "FilePrompt",
+    "MissingArguments",
+    "Parsed",
+    "load_prompt",
+    "load_prompts",
+    "stem",
+]
 
 
 @dataclass
@@ -58,42 +69,73 @@ class FilePrompt:
 
     ``path`` is where it was read from. It is carried on the prompt rather than
     only known to the harvester so a rebuild can record it in the index and
-    re-parse exactly the files a source yielded last time.
+    re-parse exactly the files a plugin yielded last time.
+
+    ``plugin``, ``category`` and ``tags`` are the plugin's: what a scope matches
+    a prompt on, since a prompt has no library of its own beyond the one that
+    named it.
 
     ``live`` says the file is revalidated against its server as it is rendered,
     so the *body* is re-read from disk instead of taken from ``template``. The
     arguments are not re-read: they are what the harvest recorded, so declaring
     a new one still needs a refresh.
+
+    ``dialect`` is which module renders it, decided once at load: the body's
+    placeholders mean different things in each, so it travels with the prompt
+    rather than being sniffed again per render.
     """
 
     path: Path
     name: str
     library: str
-    source: str = ""
+    plugin: str = ""
     template: str = ""
     description: str | None = None
+    title: str | None = None
     arguments: list[Argument] = field(default_factory=list)
     tags: set[str] = field(default_factory=set)
+    category: str | None = None
     live: bool = False
     defaults: dict[str, str] = field(default_factory=dict)
+    dialect: str = mcpkb.NAME
 
     def body(self) -> str:
         """The template to render: off disk for a live prompt, memory otherwise.
 
         A file that has become unreadable or lost its frontmatter falls back to
         the body last harvested -- the same rule the rest of live mode follows,
-        that a source in trouble degrades to the copy already known good.
+        that a server in trouble degrades to the copy already known good.
+
+        ``yaml.YAMLError`` is in that list because it is the likeliest of them:
+        a file saved mid-edit has a frontmatter block that does not parse, and
+        that is not a ``ValueError``. Serving the last good template is the
+        promise above; raising out of ``render`` would make ``prompts/get`` an
+        internal error until somebody finished typing.
         """
         if not self.live:
             return self.template
         try:
             return _split(self.path.read_text(encoding="utf-8"))[1]
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, yaml.YAMLError) as exc:
             log.warning("re-reading prompt %s: %s", self.path, exc)
             return self.template
 
-    def render(self, arguments: dict[str, object] | None = None) -> str:
+    def render(
+        self,
+        arguments: dict[str, object] | None = None,
+        *,
+        plugin_root: str | None = None,
+    ) -> str:
         """Fill in the placeholders, raising ``MissingArguments`` on a missing one.
+
+        ``values`` is built from ``self.arguments`` rather than from what was
+        passed, so it holds every declared argument, in the order the file
+        declared them: Claude's `$1` is the first declared name, and that order
+        is knowable nowhere else.
+
+        Given ``plugin_root``, the placeholders naming this server's own
+        material are resolved after the dialect's own (§C1.37); every other
+        `${…}` is the client's and stays as written.
 
         Plain and synchronous: the FastMCP-facing wrapper is what turns this
         into the async ``render`` a ``Prompt`` subclass must provide, and what
@@ -112,8 +154,14 @@ class FilePrompt:
         ]
         if missing:
             raise MissingArguments(self.name, missing)
-        values = {**self.defaults, **given}
-        return PLACEHOLDER.sub(lambda m: values.get(m.group(1), ""), self.body())
+        values = {
+            arg.name: given.get(arg.name, self.defaults.get(arg.name, ""))
+            for arg in self.arguments
+        }
+        text = DIALECTS[self.dialect].substitute(self.body(), values)
+        if plugin_root is not None:
+            text = placeholders.substitute(text, plugin_root=plugin_root)
+        return text
 
 
 class MissingArguments(ValueError):
@@ -153,54 +201,65 @@ def _split(text: str) -> tuple[dict, str]:
     return meta, text[start:]
 
 
+def stem(path: Path) -> str:
+    """The file's name without its extension, ``.prompt.md`` counting as one.
+
+    ``investigate.prompt.md`` is Copilot's spelling of ``investigate``: the
+    ``.prompt`` is the convention that marks the file, not part of what the
+    prompt is called.
+    """
+    if path.name.endswith(detect.COPILOT_SUFFIX):
+        return path.name[: -len(detect.COPILOT_SUFFIX)]
+    return path.stem
+
+
 def load_prompt(
     path: Path,
     library: str,
     *,
-    source: str = "",
+    plugin: str = "",
     tags: Sequence[str] = (),
+    category: str | None = None,
     live: bool = False,
+    dialect: str = detect.AUTO,
 ) -> FilePrompt:
     """Parse one prompt file, raising ValueError on anything malformed.
 
-    ``library`` is the library this prompt joins; ``source`` and ``tags`` (the
-    library's tags plus the source's, concatenated by the caller) become part
-    of every prompt's own tags. An undeclared placeholder is an error rather
-    than an empty substitution: it is almost always a typo, and rendered blank
-    it produces a prompt that reads fine and asks the model for the wrong thing.
+    ``library`` is the library this prompt joins; ``plugin``, ``tags`` and
+    ``category`` are the plugin's, carried as given -- nothing is added to
+    them. ``dialect`` is what the config says the file is written in, and
+    ``"auto"`` -- the usual answer -- leaves it to ``detect``.
     """
     meta, body = _split(path.read_text(encoding="utf-8"))
 
-    arguments: list[Argument] = []
-    defaults: dict[str, str] = {}
-    for raw in meta.get("arguments") or []:
-        if not isinstance(raw, dict) or not raw.get("name"):
-            raise ValueError(f"argument without a name: {raw!r}")
-        name = str(raw["name"])
-        required = bool(raw.get("required", False))
-        if required and "default" in raw:
-            raise ValueError(f"required argument '{name}' cannot have a default")
-        arguments.append(
-            Argument(name=name, description=raw.get("description"), required=required)
-        )
-        if "default" in raw:
-            defaults[name] = str(raw["default"])
+    name = detect.dialect_for(path, meta, body, dialect)
+    if name is None:
+        raise ValueError(f"not a prompt: has `{detect.not_a_prompt(meta)}`")
+    if name not in DIALECTS:
+        raise ValueError(f"unknown dialect '{name}'")
 
-    undeclared = sorted(set(PLACEHOLDER.findall(body)) - {a.name for a in arguments})
-    if undeclared:
-        raise ValueError(f"placeholders with no argument: {', '.join(undeclared)}")
+    parsed = DIALECTS[name].parse(meta, body)
+    if parsed.dropped:
+        log.debug(
+            "prompt %s: ignoring %s (no meaning over MCP)",
+            path,
+            ", ".join(parsed.dropped),
+        )
 
     return FilePrompt(
         path=path,
         live=live,
-        name=f"{library}_{path.stem}",
-        description=" ".join(str(meta.get("description", "")).split()) or None,
-        arguments=arguments,
-        tags={t for t in (library, source, "prompt", *tags) if t},
+        name=f"{library}_{stem(path)}",
+        description=parsed.description,
+        title=parsed.title,
+        arguments=parsed.arguments,
+        tags=set(tags),
         library=library,
-        source=source,
+        plugin=plugin,
+        category=category,
         template=body,
-        defaults=defaults,
+        defaults=parsed.defaults,
+        dialect=name,
     )
 
 
@@ -208,12 +267,14 @@ def load_prompts(
     files: Sequence[Path],
     *,
     library: str,
-    source: str,
+    plugin: str = "",
     tags: Sequence[str] = (),
+    category: str | None = None,
     live: bool = False,
+    dialect: str = detect.AUTO,
     skipped: list[tuple[Path, str]] | None = None,
 ) -> list[FilePrompt]:
-    """Every prompt file ``harvest`` already found for one source, joined to a library.
+    """Every prompt file ``harvest`` already found for one plugin, joined to a library.
 
     ``library`` is the library the prompts join. A broken file is skipped
     rather than raised: a bad prompt must not take the skills down with it.
@@ -225,7 +286,15 @@ def load_prompts(
     for path in sorted(files):
         try:
             prompts.append(
-                load_prompt(path, library, source=source, tags=tags, live=live)
+                load_prompt(
+                    path,
+                    library,
+                    plugin=plugin,
+                    tags=tags,
+                    category=category,
+                    live=live,
+                    dialect=dialect,
+                )
             )
         except (OSError, ValueError, yaml.YAMLError) as exc:
             if skipped is None:

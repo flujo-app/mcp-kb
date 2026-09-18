@@ -26,9 +26,22 @@ DEFAULT_CONFIG = Path("/etc/mcp-kb/config.yaml")
 DEFAULT_CACHE_DIR = Path("/var/cache/mcp-kb")
 LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
-# The loggers that arrive with a handler of their own. Each is emptied and made
-# to propagate, so one line format reaches the collector whoever wrote it.
-THIRD_PARTY_LOGGERS = ("fastmcp", "mcp", "uvicorn", "uvicorn.error", "uvicorn.access")
+# The loggers that arrive with a handler or a level of their own. Each is
+# emptied, reset and made to propagate, so one line format and one level reach
+# the collector whoever wrote it.
+THIRD_PARTY_LOGGERS = (
+    "fastmcp",
+    "mcp",
+    "uvicorn",
+    "uvicorn.error",
+    "uvicorn.access",
+    "httpx",
+)
+
+# The loggers whose INFO is traffic, not what the server did: a line per MCP
+# call and per probe from uvicorn, a line per WebDAV request from httpx. Held
+# at WARNING below DEBUG.
+TRAFFIC_LOGGERS = ("uvicorn.access", "httpx")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -93,11 +106,11 @@ def configure_logging(level: str) -> None:
     only on this package would leave most of what the process writes untouched.
     Each is emptied and sent to the root handler instead.
 
-    uvicorn's access log is the exception: a line per MCP call and per probe
-    is traffic, not what the server did, so it is written only at ``DEBUG``.
-    Its own level is what holds it back -- a record that propagates is not
-    measured against the root's level again -- so it is never set below the
-    level asked for.
+    The traffic loggers are the exception: a line per MCP call and per probe,
+    or per WebDAV request, is traffic, not what the server did, so those are
+    written only at ``DEBUG``. Each one's own level is what holds it back -- a
+    record that propagates is not measured against the root's level again --
+    so it is never set below the level asked for.
     """
     handler = logging.StreamHandler(sys.stderr)
     formatter = logging.Formatter(
@@ -114,9 +127,10 @@ def configure_logging(level: str) -> None:
         logger.propagate = True
         logger.setLevel(logging.NOTSET)
     if level != "DEBUG":
-        logging.getLogger("uvicorn.access").setLevel(
-            max(logging.WARNING, logging.getLevelName(level))
-        )
+        for name in TRAFFIC_LOGGERS:
+            logging.getLogger(name).setLevel(
+                max(logging.WARNING, logging.getLevelName(level))
+            )
 
 
 def main(argv: list[str] | None = None) -> None:

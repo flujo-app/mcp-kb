@@ -25,7 +25,8 @@ import pygit2
 import pytest
 
 from kubed.mcp_kb import KnowledgeBase
-from kubed.mcp_kb.config import Config, GitSource
+from kubed.mcp_kb.config import Config
+from kubed.mcp_kb.plugins import Fetch, fetch_for
 from kubed.mcp_kb.sources import AccessRefused, SourceError, fingerprint, materialise
 from kubed.mcp_kb.sources import export as exports
 from kubed.mcp_kb.sources.git import COMMIT_FILE, resolve
@@ -68,24 +69,44 @@ def origin(tmp_path_factory):
     )
 
 
-def _source(origin, **kwargs):
-    return GitSource(name="library", url=origin.url, **kwargs)
+def _config(origin, ref=None, subdir="", auth=None, **plugin):
+    """A one-plugin config over ``origin``.
 
-
-def _config(origin, **kwargs):
-    """A one-source config over ``origin``, for the tests that need a whole server."""
+    The source is the repository's parent directory, the way a git host is a
+    source and a repository is a path under it; the plugin names the repository
+    and carries the subdir and the ref. ``plugin`` is anything else the plugin
+    should say.
+    """
+    address = f"lab://{origin.path.name}"
+    address += f"//{subdir}" if subdir else ""
+    address += f"?ref={ref}" if ref else ""
+    source = {"name": "lab", "url": f"git+file://{origin.path.parent}"}
+    if auth is not None:
+        source["auth"] = auth
     return Config.model_validate(
         {
-            "sources": [
+            "sources": [source],
+            "plugins": [
                 {
                     "name": "library",
-                    "url": origin.url,
-                    "include": {"skills": ["skills/*/SKILL.md"]},
-                    **kwargs,
+                    "source": address,
+                    "skills": ["skills/*/SKILL.md"],
+                    **plugin,
                 }
-            ]
+            ],
+            "libraries": [{"name": "library", "plugins": ["library"]}],
         }
     )
+
+
+def _fetch(origin, **kwargs) -> Fetch:
+    """The fetch ``_config``'s plugin resolves to, through the real resolution."""
+    config = _config(origin, **kwargs)
+    return fetch_for(config, config.plugins[0].address)
+
+
+def _key(origin, **kwargs) -> str:
+    return _fetch(origin, **kwargs).key
 
 
 def _body(root):
@@ -102,19 +123,20 @@ def _advance(origin, body="third"):
 
 
 @pytest.mark.unit
-def test_a_git_source_exports_the_tree_at_the_default_branch(origin, tmp_path):
-    root = materialise(_source(origin), tmp_path)
+def test_a_git_fetch_exports_the_tree_at_the_default_branch(origin, tmp_path):
+    fetch = _fetch(origin)
+    root = materialise(fetch, tmp_path)
 
-    assert root == tmp_path / "src" / "library" / origin.second
+    assert root == tmp_path / "src" / fetch.slug / origin.second
     assert "second" in _body(root)
     assert (root / "docs" / "guide.md").is_file()
-    assert (tmp_path / "git" / "library").is_dir()
+    assert (tmp_path / "git" / fetch.slug).is_dir()
     assert (root / COMMIT_FILE).read_text().split()[0] == origin.second
 
 
 @pytest.mark.unit
 def test_a_pinned_commit_is_exported_even_when_it_is_not_the_tip(origin, tmp_path):
-    root = materialise(_source(origin, ref=origin.first), tmp_path)
+    root = materialise(_fetch(origin, ref=origin.first), tmp_path)
 
     assert "first" in _body(root)
     assert root.name == origin.first
@@ -123,11 +145,11 @@ def test_a_pinned_commit_is_exported_even_when_it_is_not_the_tip(origin, tmp_pat
 
 @pytest.mark.unit
 def test_a_tag_and_a_branch_resolve(origin, tmp_path):
-    tagged = _source(origin, ref="v1")
+    tagged = _fetch(origin, ref="v1")
     assert "first" in _body(materialise(tagged, tmp_path))
     assert resolve(tagged, tmp_path) == origin.first
 
-    branch = _source(origin, ref="main")
+    branch = _fetch(origin, ref="main")
     assert "second" in _body(materialise(branch, tmp_path))
     assert resolve(branch, tmp_path) == origin.second
 
@@ -135,35 +157,49 @@ def test_a_tag_and_a_branch_resolve(origin, tmp_path):
 @pytest.mark.unit
 def test_an_unknown_ref_is_a_source_error(origin, tmp_path):
     with pytest.raises(SourceError, match="'nope' not found"):
-        materialise(_source(origin, ref="nope"), tmp_path)
+        materialise(_fetch(origin, ref="nope"), tmp_path)
 
 
 @pytest.mark.unit
 def test_an_unknown_commit_is_a_source_error(origin, tmp_path):
     with pytest.raises(SourceError, match="is not in"):
-        materialise(_source(origin, ref="0" * 40), tmp_path)
+        materialise(_fetch(origin, ref="0" * 40), tmp_path)
 
 
 @pytest.mark.unit
-def test_a_subdirectory_narrows_the_harvest_root(origin, tmp_path):
-    root = materialise(_source(origin, subdirectory="skills"), tmp_path)
+def test_a_subdirectory_is_the_plugins_root_and_not_the_fetchs(origin, tmp_path):
+    """``lab://repo//skills`` exports the whole repository once and roots the
+    plugin at ``skills`` inside it, so the skill sits at the library's top."""
+    config = _config(origin, subdir="skills", skills=["*/SKILL.md"])
+    knowledge_base = KnowledgeBase(config, tmp_path / "cache")
 
-    assert root == tmp_path / "src" / "library" / origin.second / "skills"
-    assert (root / "x" / "SKILL.md").is_file()
+    fetch = knowledge_base.status["plugins"]["library"]["fetch"]
+    assert fetch == _key(origin)
+    assert knowledge_base.status["plugins"]["library"]["root"] == "skills"
+    assert "second" in knowledge_base.catalogue.read("skill://library/x/SKILL.md")
+    assert (tmp_path / "cache" / "src" / _fetch(origin).slug / origin.second).is_dir()
 
 
 @pytest.mark.unit
-def test_a_subdirectory_that_is_not_in_the_tree_is_a_source_error(origin, tmp_path):
-    with pytest.raises(SourceError, match="subdirectory 'nowhere'"):
-        materialise(_source(origin, subdirectory="nowhere"), tmp_path)
+def test_a_subdirectory_that_is_not_in_the_tree_fails_the_plugin(origin, tmp_path):
+    knowledge_base = KnowledgeBase(_config(origin, subdir="nowhere"), tmp_path / "cache")
+
+    plugin = knowledge_base.status["plugins"]["library"]
+    assert plugin["status"] == "failed"
+    assert plugin["error"] == f"nowhere is not a directory in {_key(origin)}"
+    assert knowledge_base.status["fetches"][_key(origin)]["status"] == "ok"
 
 
 @pytest.mark.unit
 def test_an_unreachable_remote_is_a_source_error(tmp_path):
-    source = GitSource(name="library", url=f"git+file://{tmp_path / 'nothing-here'}")
+    fetch = Fetch(
+        key="lab://nothing-here",
+        backend="git",
+        url=f"file://{tmp_path / 'nothing-here'}",
+    )
 
-    with pytest.raises(SourceError, match="clone failed"):
-        materialise(source, tmp_path / "cache")
+    with pytest.raises(SourceError, match="lab://nothing-here: clone failed"):
+        materialise(fetch, tmp_path / "cache")
 
 
 # -- an export is never written where one is being served ----------------------
@@ -176,7 +212,7 @@ def test_a_new_export_leaves_the_old_one_whole(origin, tmp_path):
     Each commit gets its own directory, so the export a reader is part way
     through is never the export the refresh is writing.
     """
-    source = _source(origin, ref="main")
+    source = _fetch(origin, ref="main")
     old = materialise(source, tmp_path)
     _advance(origin)
 
@@ -195,7 +231,7 @@ def test_a_read_in_flight_survives_a_refresh_that_moved_the_ref(origin, tmp_path
     serving = knowledge_base.snapshot
     _advance(origin)
 
-    assert knowledge_base.refresh() == ["library"]
+    assert knowledge_base.refresh() == [_key(origin, ref="main")]
     assert "second" in serving.catalogue.read("skill://library/x/SKILL.md")
     assert "third" in knowledge_base.catalogue.read("skill://library/x/SKILL.md")
 
@@ -218,7 +254,7 @@ def test_an_export_is_complete_before_it_is_visible(origin, tmp_path, monkeypatc
         return real(self, target)
 
     monkeypatch.setattr(Path, "rename", spy)
-    root = materialise(_source(origin), tmp_path)
+    root = materialise(_fetch(origin), tmp_path)
 
     assert whole[str(root)] is True
 
@@ -230,7 +266,7 @@ def test_a_stamped_export_missing_its_files_is_rebuilt(origin, tmp_path):
     This is the tree that used to be reused forever: the stamp named the right
     commit, the directory existed, and the skills were gone.
     """
-    source = _source(origin)
+    source = _fetch(origin)
     root = materialise(source, tmp_path)
     (root / "skills" / "x" / "SKILL.md").unlink()
 
@@ -246,13 +282,13 @@ def test_a_truncated_export_is_rebuilt_across_a_restart(origin, tmp_path):
     cache = tmp_path / "cache"
     config = _config(origin, ref="main")
     KnowledgeBase(config, cache)
-    export = next((cache / "src" / "library").iterdir())
+    export = next((cache / "src" / _fetch(origin, ref="main").slug).iterdir())
     (export / "skills" / "x" / "SKILL.md").unlink()
 
     restarted = KnowledgeBase(config, cache)
     restarted.refresh()
 
-    assert restarted.status["library"]["status"] == "ok"
+    assert restarted.status["fetches"][_key(origin, ref="main")]["status"] == "ok"
     assert "second" in restarted.catalogue.read("skill://library/x/SKILL.md")
 
 
@@ -264,7 +300,7 @@ def test_a_rebuild_never_interrupts_a_reader_of_the_served_tree(origin, tmp_path
     export that lost files means rebuilding at the path the live snapshot is
     serving out of. The repair is right; doing it there is not.
     """
-    source = _source(origin, ref="main")
+    source = _fetch(origin, ref="main")
     root = materialise(source, tmp_path)
     served = root / "skills" / "x" / "SKILL.md"
     errors: list[str] = []
@@ -302,8 +338,8 @@ def test_a_rebuild_never_interrupts_a_reader_of_the_served_tree(origin, tmp_path
 def test_a_crashed_export_leaves_nothing_at_a_commit_path(origin, tmp_path):
     """What a crash may leave behind is an unreferenced work directory, and
     never a half tree at the name of the commit a later export would trust."""
-    source = _source(origin)
-    home = tmp_path / "src" / "library"
+    source = _fetch(origin)
+    home = tmp_path / "src" / source.slug
     half = home / (exports.WORK_PREFIX + origin.second)
     (half / "skills").mkdir(parents=True)
     (half / "skills" / "leftover.md").write_text("never finished\n")
@@ -322,7 +358,7 @@ def test_superseded_exports_are_collected_once_nothing_can_be_reading_them(
     """The cache holds the commits a source moved through recently, not every
     commit it ever saw -- but the one the previous snapshot was built against
     stays, however old it is."""
-    source = _source(origin, ref="main")
+    source = _fetch(origin, ref="main")
     oldest = materialise(source, tmp_path)
     _advance(origin, "third")
     previous = materialise(source, tmp_path)
@@ -333,14 +369,14 @@ def test_superseded_exports_are_collected_once_nothing_can_be_reading_them(
 
     newest = materialise(source, tmp_path)
 
-    assert sorted(p.name for p in (tmp_path / "src" / "library").iterdir()) == sorted(
-        [previous.name, newest.name]
+    assert sorted(p.name for p in (tmp_path / "src" / source.slug).iterdir()) == (
+        sorted([previous.name, newest.name])
     )
 
 
 @pytest.mark.unit
 def test_a_second_materialise_reuses_the_clone(origin, tmp_path, monkeypatch):
-    source = _source(origin)
+    source = _fetch(origin)
     materialise(source, tmp_path)
 
     def must_not_clone(*args, **kwargs):
@@ -354,13 +390,68 @@ def test_a_second_materialise_reuses_the_clone(origin, tmp_path, monkeypatch):
 @pytest.mark.unit
 def test_an_export_is_not_repeated_for_a_commit_already_exported(origin, tmp_path):
     """/reindex must not delete and rewrite a tree the snapshot is serving."""
-    source = _source(origin)
+    source = _fetch(origin)
     root = materialise(source, tmp_path)
     (root / "skills" / "x" / "SKILL.md").write_text("proof this file was not rewritten")
 
     materialise(source, tmp_path)
 
     assert _body(root) == "proof this file was not rewritten"
+
+
+def _repository_holding(root, name):
+    """A one-commit repository at ``root`` whose only skill is ``name``."""
+    skill = root / "skills" / name
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: The {name} repository.\n---\n\n{name}\n"
+    )
+    repo = pygit2.init_repository(str(root), bare=False, initial_head="main")
+    repo.index.add_all()
+    repo.index.write()
+    repo.create_commit(
+        "refs/heads/main", SIGNATURE, SIGNATURE, "one", repo.index.write_tree(), []
+    )
+    return root
+
+
+def _pointing_at(base):
+    """A config whose `lab` source is ``base``: same plugin, same fetch key."""
+    return Config.model_validate(
+        {
+            "sources": [{"name": "lab", "url": f"git+file://{base}"}],
+            "plugins": [
+                {
+                    "name": "library",
+                    "source": "lab://repo",
+                    "skills": ["skills/*/SKILL.md"],
+                }
+            ],
+            "libraries": [{"name": "library", "plugins": ["library"]}],
+        }
+    )
+
+
+@pytest.mark.unit
+def test_a_source_remapped_to_another_repository_serves_the_new_one(tmp_path):
+    """The slug is a digest of the fetch key, and the key -- `lab://repo` --
+    says nothing about where `lab` points. Change the source's url and the
+    same key resolves to a different repository at the same slug, so opening
+    whatever clone is there went on serving the old one for as long as the
+    cache volume lived. Both repositories are named `repo` under a different
+    parent, which is exactly what remapping a host looks like."""
+    _repository_holding(tmp_path / "a" / "repo", "alpha")
+    _repository_holding(tmp_path / "b" / "repo", "beta")
+    cache = tmp_path / "cache"
+
+    first = KnowledgeBase(_pointing_at(tmp_path / "a"), cache)
+    assert [s.name for s in first.index.visible()] == ["alpha"]
+
+    second = KnowledgeBase(_pointing_at(tmp_path / "b"), cache)
+
+    assert [s.name for s in second.index.visible()] == ["beta"]
+    assert "beta" in second.catalogue.read("skill://library/beta/SKILL.md")
+    assert second.status["plugins"]["library"]["status"] == "ok"
 
 
 # -- fingerprint ---------------------------------------------------------------
@@ -370,7 +461,7 @@ def test_an_export_is_not_repeated_for_a_commit_already_exported(origin, tmp_pat
 def test_the_fingerprint_is_the_exported_commit_and_moves_with_the_tip(
     origin, tmp_path
 ):
-    source = _source(origin, ref="main")
+    source = _fetch(origin, ref="main")
     root = materialise(source, tmp_path)
     before = fingerprint(source, tmp_path, root)
 
@@ -391,7 +482,7 @@ def test_the_fingerprint_is_the_exported_commit_and_moves_with_the_tip(
 
 @pytest.mark.unit
 def test_the_fingerprint_of_the_default_branch_follows_head(origin, tmp_path):
-    source = _source(origin)
+    source = _fetch(origin)
     root = materialise(source, tmp_path)
 
     assert fingerprint(source, tmp_path, root)["remote"] == origin.second
@@ -404,7 +495,7 @@ def test_a_pinned_sha_fingerprints_without_touching_the_remote(
     origin, tmp_path, monkeypatch
 ):
     """A pinned commit cannot move, so asking the remote about it is pure cost."""
-    source = _source(origin, ref=origin.first)
+    source = _fetch(origin, ref=origin.first)
     root = materialise(source, tmp_path)
 
     def must_not_connect(*args, **kwargs):
@@ -423,7 +514,7 @@ def test_a_pinned_sha_fingerprints_without_touching_the_remote(
 
 @pytest.mark.unit
 def test_a_ref_that_vanished_from_the_remote_is_a_source_error(origin, tmp_path):
-    source = _source(origin, ref="v1")
+    source = _fetch(origin, ref="v1")
     root = materialise(source, tmp_path)
     origin.repo.references["refs/tags/v1"].delete()
 
@@ -440,7 +531,7 @@ def test_a_token_is_resolved_from_the_environment_and_never_written_down(
 ):
     """The remote saved in the clone is the URL from the config, credentials apart."""
     monkeypatch.setenv("GIT_TOKEN", "ghp-not-a-real-token")
-    source = _source(
+    source = _fetch(
         origin,
         auth={"username": "x-access-token", "password": {"env": "GIT_TOKEN"}},
     )
@@ -449,7 +540,7 @@ def test_a_token_is_resolved_from_the_environment_and_never_written_down(
 
     written = [
         p.read_bytes()
-        for p in (tmp_path / "git" / "library").rglob("*")
+        for p in (tmp_path / "git" / source.slug).rglob("*")
         if p.is_file()
     ]
     assert not any(b"ghp-not-a-real-token" in blob for blob in written)
@@ -458,7 +549,7 @@ def test_a_token_is_resolved_from_the_environment_and_never_written_down(
 @pytest.mark.unit
 def test_an_unset_credential_is_a_source_error(origin, tmp_path, monkeypatch):
     monkeypatch.delenv("GIT_TOKEN", raising=False)
-    source = _source(
+    source = _fetch(
         origin,
         auth={"username": "x-access-token", "password": {"env": "GIT_TOKEN"}},
     )
@@ -473,25 +564,16 @@ def test_an_unset_credential_is_a_source_error(origin, tmp_path, monkeypatch):
 @pytest.mark.unit
 def test_a_git_source_is_served_without_naming_git_anywhere(origin, tmp_path):
     """A backend is config-only: nothing it leaves in the cache may be served."""
-    config = Config.model_validate(
-        {
-            "sources": [
-                {
-                    "name": "library",
-                    "url": origin.url,
-                    "include": {"skills": ["skills/*/SKILL.md"], "files": ["**/*"]},
-                }
-            ]
-        }
-    )
+    config = _config(origin, files=["**/*"])
     knowledge_base = KnowledgeBase(config, tmp_path / "cache")
 
     assert [s.name for s in knowledge_base.index.visible()] == ["x"]
-    assert knowledge_base.status["library"]["status"] == "ok"
+    assert knowledge_base.status["plugins"]["library"]["status"] == "ok"
     rows = "\n".join(str(entry) for entry in knowledge_base.catalogue.entries())
     assert COMMIT_FILE not in rows
     assert "cache" not in rows
     assert origin.second not in rows
+    assert "lab" not in rows
     assert knowledge_base.resources.files("library") == ["docs/guide.md"]
 
 
@@ -598,8 +680,19 @@ def private(tmp_path_factory):
         server.server_close()
 
 
-def _private(private, **kwargs):
-    return GitSource(name="library", url=private.url, auth=CREDENTIAL, **kwargs)
+def _private(private, ref=None) -> Fetch:
+    """The fetch for the private remote, through a `private` source that
+    carries the credential."""
+    host, _, repo = private.url.rpartition("/")
+    address = f"private://{repo}" + (f"?ref={ref}" if ref else "")
+    config = Config.model_validate(
+        {
+            "sources": [{"name": "private", "url": host, "auth": CREDENTIAL}],
+            "plugins": [{"name": "library", "source": address}],
+            "libraries": [{"name": "library", "plugins": ["library"]}],
+        }
+    )
+    return fetch_for(config, config.plugins[0].address)
 
 
 @pytest.mark.unit
@@ -651,9 +744,10 @@ def test_a_remote_is_cloned_bare_and_shallow(private, tmp_path, monkeypatch):
     it: libgit2 refuses a shallow fetch over ``file://``."""
     monkeypatch.setenv("GIT_TOKEN", PASSWORD)
 
-    materialise(_private(private), tmp_path)
+    fetch = _private(private)
+    materialise(fetch, tmp_path)
 
-    clone = tmp_path / "git" / "library"
+    clone = tmp_path / "git" / fetch.slug
     assert pygit2.Repository(str(clone)).is_bare
     assert not (clone / ".git").exists()
     assert (clone / "shallow").is_file()
@@ -677,17 +771,23 @@ def test_a_pin_below_the_shallow_tip_is_fetched_by_sha(private, tmp_path, monkey
 @pytest.mark.skipif(
     not os.environ.get("MCP_KB_NETWORK"), reason="needs GitHub over the network"
 )
-def test_github_shorthand_against_the_real_thing(tmp_path):
-    source = GitSource(
-        name="superpowers",
-        url="github://obra/superpowers",
-        ref="b36e0825a2f1c0e2c0b4d7a0e3c7b1f2a4d6e8c0",
-    )
+def test_a_github_source_against_the_real_thing(tmp_path):
+    def github(ref=None):
+        address = "github://obra/superpowers" + (f"?ref={ref}" if ref else "")
+        config = Config.model_validate(
+            {
+                "sources": [{"name": "github", "url": "git+https://github.com"}],
+                "plugins": [{"name": "superpowers", "source": address}],
+                "libraries": [{"name": "superpowers", "plugins": ["superpowers"]}],
+            }
+        )
+        return fetch_for(config, config.plugins[0].address)
+
     with pytest.raises(SourceError):
         # A sha that does not exist: proves the pin is fetched, not guessed.
-        materialise(source, tmp_path)
+        materialise(github("b36e0825a2f1c0e2c0b4d7a0e3c7b1f2a4d6e8c0"), tmp_path)
 
-    floating = GitSource(name="superpowers", url="github://obra/superpowers")
+    floating = github()
     root = materialise(floating, tmp_path)
 
     assert (root / "skills").is_dir()
@@ -697,11 +797,7 @@ def test_github_shorthand_against_the_real_thing(tmp_path):
     # The GitHub-specific path the plan singles out: a pin far below the tip,
     # which a depth-1 clone cannot contain and has to fetch by sha. A floating
     # HEAD never exercises it, and neither does a pin that happens to be HEAD.
-    old = GitSource(
-        name="superpowers",
-        url="github://obra/superpowers",
-        ref="00029480418050a896d8b41e9f10cae8bb4320ab",
-    )
+    old = github("00029480418050a896d8b41e9f10cae8bb4320ab")
     older = materialise(old, tmp_path)
 
     assert older != root

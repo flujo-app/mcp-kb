@@ -2,23 +2,24 @@
 
 Assembles a FastMCP instance from the catalogue a config file describes -- the
 address space, the resources, the mirror tools, the routes -- and runs it on a
-transport. Turning a config source into a directory is ``sources``'s job;
-deciding what in it counts as a skill, a prompt or a library-level file is
+transport. Turning a fetch into a directory is ``sources``'s job; resolving
+the config's plugins and reading a marketplace is ``plugins``'s; deciding what
+in a plugin counts as a skill, a prompt or a library-level file is
 ``catalogue/harvest.py``'s; building one immutable view of all of it is
 ``catalogue/snapshot.py``'s; the catalogue itself lives in
-``catalogue/skills.py``, ``catalogue/prompts.py`` and ``catalogue/uris.py``; and
-deciding when a source is looked at again is ``catalogue/refresh.py``'s. This
-module walks the config in source order, connects the pieces, and owns the
+``catalogue/skills.py``, ``catalogue/prompts/`` and ``catalogue/uris.py``; and
+deciding when a fetch is looked at again is ``catalogue/refresh.py``'s. This
+module runs the resolution phases in order, connects the pieces, and owns the
 one mutable thing in the process: which ``Snapshot`` is current.
 
 Three rules follow from that, and every change here has to keep them:
 
 - **Start from the index, not from the sources.** ``<cache>/index.json`` holds
-  what each source yielded last time. If it was built from this same config,
-  boot reuses every record whose tree is still on disk and rebuilds only the
-  rest. A pod restart is then milliseconds and touches no network, and the
-  question "has anything changed?" is deferred to the background pass that runs
-  a moment later.
+  what each fetch and each plugin yielded last time. If it was built from this
+  same config, boot reuses every record whose tree is still on disk and
+  rebuilds only the rest. A pod restart is then milliseconds and touches no
+  network, and the question "has anything changed?" is deferred to the
+  background pass that runs a moment later.
 - **Swap, never mutate.** A rebuild constructs a whole new ``Snapshot`` beside
   the live one and replaces it with a single assignment. The old snapshot keeps
   serving until that instant, so there is no window in which the server has a
@@ -43,16 +44,30 @@ from pathlib import Path
 from fastmcp import FastMCP
 
 from . import routes
-from .catalogue.index import INDEX_VERSION, Index, SourceRecord, config_hash, now
+from .catalogue.harvest import inside
+from .catalogue.index import (
+    INDEX_VERSION,
+    FetchRecord,
+    Index,
+    PluginRecord,
+    config_hash,
+    now,
+)
 from .catalogue.prompts import FilePrompt
 from .catalogue.refresh import Schedule, keep_last_good, loop, moved, same_failure
 from .catalogue.skills import LibraryFiles, SkillIndex
 from .catalogue.snapshot import (
+    SERVABLE,
+    Library,
     Snapshot,
+    assemble_libraries,
+    build_fetch,
+    build_plugin,
     build_snapshot,
-    build_source,
+    failed_plugin,
     log_changes,
-    record_from_index,
+    unrooted,
+    with_manifest,
 )
 from .catalogue.uris import Catalogue
 from .config import Config
@@ -60,6 +75,8 @@ from .mcp import prompts, resources, tools
 from .mcp.announce import AnnounceChanges
 from .mcp.pins import RefuseEmptyScope, what_is_wrong
 from .mcp.request import client_reads_resources, client_uses_prompts
+from .plugins import Fetch, Plugin, declared_plugins, marketplace_fetches
+from .plugins.marketplace import find_marketplace, read_marketplace
 
 log = logging.getLogger(__name__)
 
@@ -88,7 +105,7 @@ nothing.
 
 
 class KnowledgeBase:
-    """An MCP server over the sources a config file names.
+    """An MCP server over the libraries a config file names.
 
     The catalogue is served twice, because MCP clients are not all alike. As
     ``skill://`` **resources**, which is what it is; and as two **tools** that
@@ -104,15 +121,19 @@ class KnowledgeBase:
         self.config = config
         self.cache = cache
         self.index_path = cache / INDEX_FILE
-        # Every write of self._records and self.snapshot happens under this,
-        # so two refreshes triggered at once still swap in a single order.
+        # Every write of the records and self.snapshot happens under this, so
+        # two refreshes triggered at once still swap in a single order.
         self._lock = threading.Lock()
-        # When each source was last examined; see catalogue/refresh.py, which
+        # When each fetch was last examined; see catalogue/refresh.py, which
         # decides what that means and when one comes due again.
         self.schedule = Schedule()
 
-        self._records = self._cold_start()
-        self.snapshot: Snapshot = build_snapshot(config, self._records, generation=0)
+        self._fetches: dict[str, FetchRecord] = {}
+        self._records: dict[str, PluginRecord] = {}
+        self._plugins: list[Plugin] = []
+        self._libraries: list[Library] = []
+        self._cold_start()
+        self.snapshot: Snapshot = self._build(generation=0)
         log_changes({}, self.snapshot.status)
         self._write_index()
 
@@ -168,46 +189,185 @@ class KnowledgeBase:
     def status(self) -> dict[str, dict]:
         return self.snapshot.status
 
+    @property
+    def fetches(self) -> list[Fetch]:
+        """This generation's fetches: the marketplaces', then every plugin's.
+
+        Derived from the plugins rather than stored, so a marketplace that
+        gained an entry on another repository brings that repository's fetch
+        into the next pass by itself.
+        """
+        found: dict[str, Fetch] = {}
+        for _, fetch, _ in marketplace_fetches(self.config).values():
+            found.setdefault(fetch.key, fetch)
+        for plugin in self._plugins:
+            found.setdefault(plugin.fetch.key, plugin.fetch)
+        return list(found.values())
+
     # -- building it ---------------------------------------------------------
 
-    def _cold_start(self) -> dict[str, SourceRecord]:
-        """Every source's record, reusing the on-disk index wherever it holds.
+    def _cold_start(self) -> None:
+        """Resolve everything, reusing the on-disk index wherever it holds.
 
-        A source built here whose server refuses its credentials stops the
+        A fetch built here whose server refuses its credentials stops the
         process: ``AccessRefused`` escapes, and ``main`` exits naming it. A
         refusal is the one failure a wait does not fix -- a wrong password, an
         account not yet let in -- and a pod that exits is restarted, visibly,
         until it is fixed, where one that serves on looks healthy with a
-        library missing. Every other failure stays a failed source, so an
+        library missing. Every other failure stays a failed fetch, so an
         unreachable remote at boot never takes the libraries that did load down
-        with it; and a refusal on a later refresh, of a source already serving,
+        with it; and a refusal on a later refresh, of a fetch already serving,
         makes it stale and is logged.
 
-        No fingerprint is taken here. Checking one means walking every source
-        tree, which is the cost this whole file exists to move off the boot
-        path; the verification pass the lifespan runs immediately afterwards
-        does it instead, and until it finishes the server serves last boot's
-        answer -- which is almost always still the right one.
+        No fingerprint is taken here. Checking one means walking every tree,
+        which is the cost this whole file exists to move off the boot path;
+        the verification pass the lifespan runs immediately afterwards does it
+        instead, and until it finishes the server serves last boot's answer --
+        which is almost always still the right one.
         """
         stored = Index.read(self.index_path)
-        reusable: dict[str, SourceRecord] = {}
+        fetches: dict[str, FetchRecord] = {}
+        records: dict[str, PluginRecord] = {}
         if stored is not None and stored.config_hash == config_hash(self.config):
-            reusable = stored.sources
+            fetches = {
+                key: record
+                for key, record in stored.fetches.items()
+                if _serving(record)
+            }
+            records = {
+                pid: record
+                for pid, record in stored.plugins.items()
+                if record.fetch in fetches and _serving(record)
+            }
         elif stored is not None:
             log.info("config changed since %s was written; rebuilding", self.index_path)
+        self._fetches = fetches
+        self._plugins, self._libraries, self._records = self._assemble(
+            fetches, records, refusal_is_fatal=True
+        )
 
-        records: dict[str, SourceRecord] = {}
-        for source in self.config.sources:
-            kept = reusable.get(source.name)
-            from_index = (
-                record_from_index(self.config, source, kept)
-                if kept is not None
-                else None
+    def _assemble(
+        self,
+        fetches: dict[str, FetchRecord],
+        reusable: dict[str, PluginRecord],
+        *,
+        refusal_is_fatal: bool = False,
+    ) -> tuple[list[Plugin], list[Library], dict[str, PluginRecord]]:
+        """The resolution phases: marketplaces, fetches, plugins, then libraries.
+
+        ``fetches`` is the records already in hand -- reused from the index or
+        left alone by a refresh -- and is *added to*: every fetch a marketplace
+        or a plugin needs that is not in it is built here, and every record
+        nothing needs any more is dropped, so on return it holds exactly this
+        generation's fetches. ``reusable`` is the plugin records whose fetch was
+        not rebuilt; a plugin not in it is harvested again, which is cheap and
+        touches no network.
+
+        A marketplace's plugins are re-derived by re-reading its
+        ``marketplace.json`` off the tree on disk every time: cheap, and the
+        only way a refresh of that fetch can serve an entry it gained.
+        """
+        declared = declared_plugins(self.config)
+        markets = marketplace_fetches(self.config)
+
+        derived: list[Plugin] = []
+        errors: dict[str, str] = {}
+        skipped: dict[str, tuple[dict[str, str], ...]] = {}
+        for name, (library, fetch, address) in markets.items():
+            record = self._fetch_record(fetches, fetch, refusal_is_fatal)
+            if not _serving(record):
+                errors[name] = record.error or "the marketplace could not be fetched"
+                continue
+            root = _root(Path(record.root or ""), address.subdir)
+            if root is None:
+                errors[name] = _not_in(address.subdir, fetch)
+                continue
+            if find_marketplace(root) is None:
+                errors[name] = f"no marketplace.json under {address.subdir or '/'}"
+                continue
+            try:
+                market = read_marketplace(
+                    root,
+                    library=library,
+                    fetch=fetch,
+                    address=address,
+                    config=self.config,
+                )
+            except ValueError as exc:
+                # An unreadable file's error quotes its absolute path, which
+                # is a cache path: stripped, as every harvest string is.
+                errors[name] = unrooted(str(exc), root)
+                continue
+            derived += market.plugins
+            if market.skipped:
+                skipped[name] = market.skipped
+
+        plugins = [*declared, *derived]
+        for plugin in plugins:
+            self._fetch_record(fetches, plugin.fetch, refusal_is_fatal)
+        needed = {p.fetch.key for p in plugins}
+        needed |= {fetch.key for _, fetch, _ in markets.values()}
+        for key in [key for key in fetches if key not in needed]:
+            del fetches[key]
+
+        # Each plugin comes back completed by its manifest, so the selectors,
+        # the scopes and /health all see the labels the publisher declared.
+        completed: list[Plugin] = []
+        records: dict[str, PluginRecord] = {}
+        for plugin in plugins:
+            plugin, records[plugin.id] = self._plugin_record(
+                plugin, fetches[plugin.fetch.key], reusable
             )
-            records[source.name] = from_index or build_source(
-                self.config, source, self.cache, refusal_is_fatal=True
-            )
-        return records
+            completed.append(plugin)
+        libraries = assemble_libraries(
+            self.config, completed, errors=errors, skipped=skipped
+        )
+        return completed, libraries, records
+
+    def _fetch_record(
+        self, fetches: dict[str, FetchRecord], fetch: Fetch, refusal_is_fatal: bool
+    ) -> FetchRecord:
+        """The record for ``fetch``, built now if there is none in hand."""
+        record = fetches.get(fetch.key)
+        if record is None:
+            record = build_fetch(fetch, self.cache, refusal_is_fatal=refusal_is_fatal)
+            fetches[fetch.key] = record
+        return record
+
+    def _plugin_record(
+        self, plugin: Plugin, fetch: FetchRecord, reusable: dict[str, PluginRecord]
+    ) -> tuple[Plugin, PluginRecord]:
+        """The plugin completed by its manifest, and its harvest: reused when
+        it can be, rebuilt otherwise.
+
+        The manifest is read whenever the root is there, reused record or not:
+        it is one small file, and the labels it adds are not in the index.
+        """
+        if not _serving(fetch):
+            return plugin, failed_plugin(plugin, fetch.error or "the fetch failed")
+        root = _root(Path(fetch.root or ""), plugin.subdir)
+        if root is None:
+            return plugin, failed_plugin(plugin, _not_in(plugin.subdir, plugin.fetch))
+        try:
+            plugin, globs = with_manifest(plugin, root)
+        except ValueError as exc:
+            # An OSError behind the read quotes the cache path; /health is
+            # published, so the root comes back out of it here as everywhere.
+            return plugin, failed_plugin(plugin, unrooted(str(exc), root))
+        kept = reusable.get(plugin.id)
+        if kept is not None and kept.fetch == fetch.key and _serving(kept):
+            return plugin, kept
+        return plugin, build_plugin(plugin, root, globs=globs)
+
+    def _build(self, generation: int) -> Snapshot:
+        return build_snapshot(
+            self.config,
+            self._plugins,
+            self._libraries,
+            self._fetches,
+            self._records,
+            generation,
+        )
 
     def _write_index(self) -> None:
         """Persist the current records, or log why the next boot will be slow.
@@ -220,7 +380,8 @@ class KnowledgeBase:
             version=INDEX_VERSION,
             built=now(),
             config_hash=config_hash(self.config),
-            sources=self._records,
+            fetches=self._fetches,
+            plugins=self._records,
         )
         try:
             self.cache.mkdir(parents=True, exist_ok=True)
@@ -233,52 +394,68 @@ class KnowledgeBase:
     ) -> list[str]:
         """Rebuild whatever has changed and swap in a new snapshot. Blocking.
 
-        Returns the names actually rebuilt, in config order -- empty when
-        nothing moved, which is the common case and the reason the generation
-        does not advance on every pass. ``only`` narrows the sweep to the
-        sources the caller already knows are due; ``force`` skips the
+        Returns the fetch keys actually rebuilt, in this generation's order --
+        empty when nothing moved, which is the common case and the reason the
+        generation does not advance on every pass. ``only`` narrows the sweep
+        to the fetches the caller already knows are due; ``force`` skips the
         fingerprint check and rebuilds them regardless.
+
+        A rebuilt fetch re-harvests every plugin that reads it, and every
+        marketplace on it is re-read, so an entry it gained is served; the
+        plugins of untouched fetches keep their records.
 
         Synchronous and serialised: this walks trees, hashes files and writes
         ``index.json``, and two of them at once would race for the index's
         temporary file. Call it from the event loop through ``refresh_async``.
         """
-        names = None if only is None else set(only)
+        keys = None if only is None else set(only)
         checked_at = time.monotonic()
         with self._lock:
-            records = dict(self._records)
+            fetches = dict(self._fetches)
             rebuilt: list[str] = []
-            for source in self.config.sources:
-                if names is not None and source.name not in names:
+            for fetch in self.fetches:
+                if keys is not None and fetch.key not in keys:
                     continue
-                current = records.get(source.name)
+                current = fetches.get(fetch.key)
                 # Examined, whether or not it turns out stale -- the schedule
                 # runs off this, so it must move on every check and not only
                 # on a rebuild.
-                self.schedule.examined(source.name, checked_at)
+                self.schedule.examined(fetch.key, checked_at)
                 if (
                     not force
                     and current is not None
-                    and not moved(source, self.cache, current)
+                    and not moved(fetch, self.cache, current)
                 ):
                     continue
-                built = build_source(self.config, source, self.cache)
+                built = build_fetch(fetch, self.cache)
                 fresh = keep_last_good(current, built)
                 if same_failure(current, fresh):
                     continue
-                records[source.name] = fresh
-                rebuilt.append(source.name)
+                fetches[fetch.key] = fresh
+                rebuilt.append(fetch.key)
 
             if not rebuilt:
                 return []
-            snapshot = build_snapshot(
-                self.config, records, generation=self.snapshot.generation + 1
-            )
-            self._records = records
+            reusable = {
+                pid: record
+                for pid, record in self._records.items()
+                if record.fetch not in rebuilt
+            }
+            known = set(fetches)
+            plugins, libraries, records = self._assemble(fetches, reusable)
+            # A marketplace re-read above may have gained an entry on another
+            # repository, which `_assemble` materialises -- after the loop,
+            # which only ever sees the fetches this generation already had. It
+            # was built, so it belongs in what was rebuilt; otherwise
+            # `/reindex` and the log both omit a clone that really happened.
+            rebuilt += [key for key in fetches if key not in known]
+            self._fetches, self._plugins = fetches, plugins
+            self._libraries, self._records = libraries, records
+            snapshot = self._build(generation=self.snapshot.generation + 1)
             log_changes(self.snapshot.status, snapshot.status)
             self.snapshot = snapshot
             # Best-effort and therefore last: a raise here must not leave
-            # _records advanced while snapshot still holds the old generation.
+            # the records advanced while snapshot still holds the old generation.
             self._write_index()
             return rebuilt
 
@@ -321,3 +498,48 @@ class KnowledgeBase:
                 show_banner=False,
                 uvicorn_config={"log_config": None},
             )
+
+
+def _root(fetch_root: Path, subdir: str) -> Path | None:
+    """The plugin or marketplace root inside a materialised fetch, or None.
+
+    ``inside`` is the guard the harvest and every read use, and it belongs
+    here too: a subdir that is a *symlink* out of the fetch makes ``is_dir()``
+    true for an arbitrary directory, which then becomes the harvest's base --
+    so everything under it is "contained" relative to the escaped root and is
+    served. ``..`` never gets this far (``parse_address`` refuses it), and a
+    link inside the fetch still resolves, which is what makes a ConfigMap
+    mount -- every path of which is a symlink -- servable.
+
+    The path handed back is the one that was asked for rather than its
+    target, because that is what a ``skill://`` address and an index row are
+    built from; containment is decided on the resolved one and nothing else.
+    """
+    root = fetch_root / subdir
+    if inside(root, fetch_root.resolve()) is None or not root.is_dir():
+        return None
+    return root
+
+
+def _not_in(subdir: str, fetch: Fetch) -> str:
+    """Why a root was refused: the subdir and the fetch, and no cache path.
+
+    One message for both refusals, because from outside they are one thing --
+    the fetch holds no directory this plugin or marketplace can be served
+    from, whether because there is nothing there or because what is there
+    leads out of the tree.
+    """
+    return f"{subdir or '/'} is not a directory in {fetch.key}"
+
+
+def _serving(record: FetchRecord | PluginRecord) -> bool:
+    """Whether a record still names a tree on disk worth serving from.
+
+    ``stale`` counts for a fetch -- its tree is the last good one -- and a
+    plugin has no stale state, so for one this is simply ``ok``.
+    """
+    return (
+        record.status in SERVABLE
+        and record.root is not None
+        and Path(record.root).is_dir()
+    )

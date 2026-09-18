@@ -81,3 +81,26 @@ def test_one_level_and_one_handler_reach_fastmcp_and_uvicorn_too():
             logger = logging.getLogger(name)
             logger.handlers[:], logger.propagate = handlers, propagate
             logger.setLevel(level)
+
+
+def test_the_httpx_logger_is_held_at_warning_below_debug():
+    """httpx logs one INFO line per WebDAV request: traffic, held like uvicorn's."""
+    import logging
+
+    from kubed.mcp_kb.main import configure_logging
+
+    root = logging.getLogger()
+    httpx_logger = logging.getLogger("httpx")
+    saved = (root.handlers[:], root.level, httpx_logger.level)
+    try:
+        configure_logging("INFO")
+        assert not httpx_logger.isEnabledFor(logging.INFO)
+        assert httpx_logger.isEnabledFor(logging.WARNING)
+
+        # Back to DEBUG in the same process: the hold must come off again.
+        configure_logging("DEBUG")
+        assert httpx_logger.isEnabledFor(logging.INFO)
+    finally:
+        root.handlers[:] = saved[0]
+        root.setLevel(saved[1])
+        httpx_logger.setLevel(saved[2])

@@ -1,18 +1,18 @@
-"""What one source ships but cannot serve: skipped, and named in ``/health``.
+"""What one plugin ships but cannot serve: skipped, and named in ``/health``.
 
-A source whose tree holds something the address space has no room for keeps
+A plugin whose tree holds something the address space has no room for keeps
 serving everything else. The one thing is left out and listed under
-``skipped`` in that source's ``/health`` entry, with the reason, so it is
+``skipped`` in that plugin's ``/health`` entry, with the reason, so it is
 visible rather than silently shadowed:
 
-- a library file whose address lies inside one of the source's own skills,
+- a library file whose address lies inside one of the plugin's own skills,
   or that is named like the server's own indexes;
 - a skill whose frontmatter ``name`` is not one valid segment matching its
   directory, or whose address a skill before it already has;
 - a prompt whose name a prompt before it already has.
 
-Across two sources the rule is the older one in ``test_conflicts.py``: the
-later source fails whole.
+Across two plugins of one library the rule is the one in ``test_conflicts.py``:
+the later plugin fails in that library.
 """
 
 import httpx
@@ -39,17 +39,17 @@ def _skill(root, rel, name, description):
     )
 
 
-def _kb(tmp_path, build, include):
+def _kb(tmp_path, build, globs):
     root = tmp_path / "src"
     root.mkdir()
     build(root)
-    source = {
-        "name": "src",
-        "library": "lib",
-        "url": f"file://{root}",
-        "include": include,
-    }
-    return KnowledgeBase(Config.model_validate({"sources": [source]}), tmp_path / "c")
+    config = Config.model_validate(
+        {
+            "plugins": [{"name": "src", "source": f"file://{root}", **globs}],
+            "libraries": [{"name": "lib", "plugins": ["src"]}],
+        }
+    )
+    return KnowledgeBase(config, tmp_path / "c")
 
 
 async def _health(knowledge_base):
@@ -69,7 +69,7 @@ async def _read(knowledge_base, uri):
 
 
 def _skipped(health):
-    return {row["path"]: row["reason"] for row in health["sources"]["src"]["skipped"]}
+    return {row["path"]: row["reason"] for row in health["plugins"]["src"]["skipped"]}
 
 
 # -- library files --------------------------------------------------------------
@@ -86,19 +86,20 @@ def _overlapping(root):
     _write(root, "shared/ok.md", "fine\n")
 
 
-OVERLAP_INCLUDE = {"files": ["shared/**", "grafana-lgtm/**", "docs/**", "_index.md"]}
+OVERLAP_GLOBS = {"files": ["shared/**", "grafana-lgtm/**", "docs/**", "_index.md"]}
 
 
-async def test_a_library_file_inside_one_of_its_own_sources_skills_is_skipped(tmp_path):
-    kb = _kb(tmp_path, _overlapping, OVERLAP_INCLUDE)
+async def test_a_library_file_inside_one_of_its_own_plugins_skills_is_skipped(tmp_path):
+    kb = _kb(tmp_path, _overlapping, OVERLAP_GLOBS)
     health = await _health(kb)
 
-    entry = health["sources"]["src"]
+    entry = health["plugins"]["src"]
     assert entry["status"] == "ok"
     assert entry["files"] == 1
+    assert health["libraries"]["lib"]["files"] == 1
     skipped = _skipped(health)
-    assert "skill://lib/grafana-lgtm/loki" in skipped["grafana-lgtm/loki/notes.md"]
-    assert "skill://lib/grafana-lgtm/tempo" in skipped["grafana-lgtm/tempo/SKILL.md"]
+    assert "grafana-lgtm/loki" in skipped["grafana-lgtm/loki/notes.md"]
+    assert "grafana-lgtm/tempo" in skipped["grafana-lgtm/tempo/SKILL.md"]
 
     files = await _read(kb, "skill://lib/_files.md")
     assert "skill://lib/shared/ok.md" in files
@@ -106,12 +107,12 @@ async def test_a_library_file_inside_one_of_its_own_sources_skills_is_skipped(tm
     assert await _read(kb, "skill://lib/grafana-lgtm/loki/notes.md") is None
     assert "Query traces." in await _read(kb, "skill://lib/grafana-lgtm/tempo/SKILL.md")
     # One URI, one answer: a scope that hides the skill does not uncover the file.
-    pinned = Scope.parse("lib/grafana-k6")
+    pinned = Scope.parse("lib", categories=["nope"])
     assert kb.catalogue.read("skill://lib/grafana-lgtm/tempo/SKILL.md", pinned) is None
 
 
 async def test_a_library_file_named_like_an_index_is_skipped(tmp_path):
-    kb = _kb(tmp_path, _overlapping, OVERLAP_INCLUDE)
+    kb = _kb(tmp_path, _overlapping, OVERLAP_GLOBS)
     health = await _health(kb)
 
     skipped = _skipped(health)
@@ -122,13 +123,13 @@ async def test_a_library_file_named_like_an_index_is_skipped(tmp_path):
     assert "_index.md" not in await _read(kb, "skill://lib/_files.md")
 
 
-async def test_a_source_with_nothing_skipped_reports_no_skipped_list(tmp_path):
+async def test_a_plugin_with_nothing_skipped_reports_no_skipped_list(tmp_path):
     kb = _kb(
         tmp_path,
         lambda r: (_skill(r, "skills/a", "a", "A."), _write(r, "shared/x.md", "x\n")),
         {"files": ["shared/**"]},
     )
-    assert "skipped" not in (await _health(kb))["sources"]["src"]
+    assert "skipped" not in (await _health(kb))["plugins"]["src"]
 
 
 # -- skills -----------------------------------------------------------------------
@@ -150,14 +151,14 @@ async def test_a_skill_that_cannot_be_one_address_segment_is_skipped(tmp_path):
     kb = _kb(tmp_path, _misnamed, {})
     health = await _health(kb)
 
-    entry = health["sources"]["src"]
+    entry = health["plugins"]["src"]
     assert entry["status"] == "ok"
     assert entry["skills"] == 2
     skipped = _skipped(health)
     for path in ("skills/f/dotdot", "skills/f/slash", "skills/f/Upper", "skills/f/idx"):
         assert "naming rule" in skipped[path], path
     assert "directory" in skipped["skills/f/mismatch"]
-    assert "skill://lib/dup" in skipped["skills/dup"]
+    assert skipped["skills/dup"] == "dup is already served by .claude/skills/dup"
     assert set(skipped) == {
         "skills/f/dotdot",
         "skills/f/slash",
@@ -185,18 +186,18 @@ async def test_a_skill_that_cannot_be_one_address_segment_is_skipped(tmp_path):
         assert await _read(kb, uri) is None, uri
 
 
-async def test_a_source_that_is_one_skill_need_not_match_its_cache_directory(tmp_path):
-    """A git source's root is a directory named for a commit, not for the skill."""
+async def test_a_plugin_that_is_one_skill_need_not_match_its_cache_directory(tmp_path):
+    """A git fetch's root is a directory named for a commit, not for the skill."""
     kb = _kb(
         tmp_path,
-        lambda r: _skill(r, ".", "whole", "The whole source."),
+        lambda r: _skill(r, ".", "whole", "The whole plugin."),
         {"skills": ["SKILL.md"]},
     )
     health = await _health(kb)
 
-    assert health["sources"]["src"]["skills"] == 1
-    assert "skipped" not in health["sources"]["src"]
-    assert "The whole source." in await _read(kb, "skill://lib/whole/SKILL.md")
+    assert health["plugins"]["src"]["skills"] == 1
+    assert "skipped" not in health["plugins"]["src"]
+    assert "The whole plugin." in await _read(kb, "skill://lib/whole/SKILL.md")
 
 
 @pytest.mark.parametrize(
@@ -225,7 +226,7 @@ def test_the_agent_skills_naming_rule(name, valid):
 # -- prompts ----------------------------------------------------------------------
 
 
-async def test_a_second_prompt_with_one_name_in_a_source_is_skipped(tmp_path):
+async def test_a_second_prompt_with_one_name_in_a_plugin_is_skipped(tmp_path):
     def build(root):
         _write(root, "prompts/debug.md", "---\ndescription: 1\n---\nfirst\n")
         _write(root, "prompts/sub/debug.md", "---\ndescription: 2\n---\nsecond\n")
@@ -233,8 +234,10 @@ async def test_a_second_prompt_with_one_name_in_a_source_is_skipped(tmp_path):
     kb = _kb(tmp_path, build, {})
     health = await _health(kb)
 
-    assert health["sources"]["src"]["prompts"] == 1
-    assert "lib_debug" in _skipped(health)["prompts/sub/debug.md"]
+    assert health["plugins"]["src"]["prompts"] == 1
+    assert _skipped(health)["prompts/sub/debug.md"] == (
+        "prompt debug is already served by prompts/debug.md"
+    )
     async with Client(kb.mcp) as client:
         prompts = await client.list_prompts()
         rendered = await client.get_prompt("lib_debug")
@@ -244,19 +247,14 @@ async def test_a_second_prompt_with_one_name_in_a_source_is_skipped(tmp_path):
     assert mirrored.content[0].text.count("lib_debug") == 1
 
 
-async def test_a_skipped_skills_own_files_neither_serve_nor_fail_the_source(tmp_path):
-    """A `files:` glob that reaches into a skill the source then skips.
+async def test_a_skipped_skills_own_files_neither_serve_nor_fail_the_plugin(tmp_path):
+    """A `files:` glob that reaches into a skill the plugin then skips.
 
     Skill directories and library files come from one harvest, and library files
     never include anything inside a harvested skill — valid or not — so the
-    skipped skill's files are simply not served. The source stays `ok`, lists the
+    skipped skill's files are simply not served. The plugin stays `ok`, lists the
     skill under `skipped`, and serves its valid skill.
     """
-    from fastmcp import Client
-
-    from kubed.mcp_kb import KnowledgeBase
-    from kubed.mcp_kb.config import Config
-
     root = tmp_path / "src"
     (root / "skills" / "good").mkdir(parents=True)
     (root / "skills" / "good" / "SKILL.md").write_text(
@@ -269,17 +267,14 @@ async def test_a_skipped_skills_own_files_neither_serve_nor_fail_the_source(tmp_
     (root / "skills" / "bad" / "notes.md").write_text("never served\n")
     config = Config.model_validate(
         {
-            "sources": [
-                {
-                    "name": "lib",
-                    "url": f"file://{root}",
-                    "include": {"files": ["skills/bad/**/*"]},
-                }
-            ]
+            "plugins": [
+                {"name": "lib", "source": f"file://{root}", "files": ["skills/bad/**/*"]}
+            ],
+            "libraries": [{"name": "lib", "plugins": ["lib"]}],
         }
     )
     kb = KnowledgeBase(config, tmp_path / "cache")
-    status = kb.snapshot.status["lib"]
+    status = kb.snapshot.status["plugins"]["lib"]
 
     assert status["status"] == "ok"
     assert [entry["path"] for entry in status["skipped"]] == ["skills/bad"]

@@ -106,7 +106,9 @@ mcp-kb = "kubed.mcp_kb.main:main"
 packages = [
   "kubed.mcp_kb",
   "kubed.mcp_kb.catalogue",
+  "kubed.mcp_kb.catalogue.prompts",
   "kubed.mcp_kb.mcp",
+  "kubed.mcp_kb.plugins",
   "kubed.mcp_kb.sources",
   "kubed.mcp_kb.spec",
 ]

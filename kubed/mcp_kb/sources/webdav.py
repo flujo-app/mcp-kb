@@ -1,9 +1,9 @@
 """``webdav+https://`` and ``webdav+http://`` -- a WebDAV folder, Nextcloud above all.
 
 The configured URL *is* the folder, so it is the client's base and every path
-under it is relative. The folder is copied into ``<cache>/src/<name>/<version>``
+under it is relative. The folder is copied into ``<cache>/src/<slug>/<version>``
 and everything downstream sees a plain directory, exactly as a ``file://``
-source hands it one: nothing about WebDAV, the cache or the server's address
+fetch hands it one: nothing about WebDAV, the cache or the server's address
 reaches a URI, a listing row or a resource body.
 
 Three things this module is careful about:
@@ -16,7 +16,7 @@ Three things this module is careful about:
   tree being served rather than over it (``export.py``, shared with git).
 - **A credential is a reference until the client exists.** The password is
   resolved from the environment into the httpx auth pair inside ``client`` and
-  nowhere else. It is never part of the URL -- ``SourceBase`` refuses one that
+  nowhere else. It is never part of the URL -- ``SourceConfig`` refuses one that
   is -- so nothing that lands under the cache, in a log line or in the errors
   ``/health`` publishes can carry it. An HTTP failure is reported as its status
   and nothing more.
@@ -27,7 +27,7 @@ Three things this module is careful about:
   end, and a download that is killed half way through leaves nothing inside
   the export for the next pass to read as a missing file.
 
-Read-only throughout: a source is copied from and never written to.
+Read-only throughout: a fetch is copied from and never written to.
 """
 
 from __future__ import annotations
@@ -46,7 +46,8 @@ from urllib.parse import quote, urlsplit
 from webdav4.client import Client, ClientError, HTTPError
 from webdav4.fsspec import WebdavFileSystem
 
-from ..config import ConfigError, WebdavSource
+from ..config import ConfigError
+from ..plugins import Fetch
 from .errors import AccessRefused, SourceError
 from .export import WORK_PREFIX, Exports, workspace
 
@@ -82,8 +83,8 @@ class _Client(Client):
         )
 
 
-def client(source: WebdavSource, *, timeout: float | None = None) -> WebdavFileSystem:
-    """A client for this source, credentials resolved at the moment of building it.
+def client(fetch: Fetch, *, timeout: float | None = None) -> WebdavFileSystem:
+    """A client for this fetch, credentials resolved at the moment of building it.
 
     ``skip_instance_cache`` keeps it out of fsspec's global instance cache:
     nothing carrying a password belongs in a process-wide dictionary, and a
@@ -94,38 +95,42 @@ def client(source: WebdavSource, *, timeout: float | None = None) -> WebdavFileS
     an index-time copy of a large folder is allowed to take its time. A read
     is not, and ``live.py`` passes one; see ``REVALIDATE_TIMEOUT``.
     """
+    if fetch.auth is None:
+        # SourceConfig refuses an anonymous webdav source; a Fetch built by
+        # hand could still arrive without one, and that is its own failure.
+        raise SourceError(f"{fetch.key}: a webdav fetch needs auth")
     try:
-        user, password = source.auth.pair()
+        user, password = fetch.auth.pair()
     except ConfigError as exc:
         # Config, not authentication: the variable was never set, so there is
         # nothing to ask the server and no 401 to report. Outside this guard one
-        # unset variable aborts the pass instead of failing its own source.
-        raise SourceError(f"{source.name}: {exc}") from exc
+        # unset variable aborts the pass instead of failing its own fetch.
+        raise SourceError(f"{fetch.key}: {exc}") from exc
     opts = {} if timeout is None else {"timeout": timeout}
     return WebdavFileSystem(
-        source.base_url,
-        client=_Client(source.base_url, auth=(user, password), **opts),
+        fetch.url,
+        client=_Client(fetch.url, auth=(user, password), **opts),
         skip_instance_cache=True,
     )
 
 
-def materialise_webdav(source: WebdavSource, cache: Path) -> Path:
+def materialise_webdav(fetch: Fetch, cache: Path) -> Path:
     """Copy the folder into the cache under the digest of its ETags, and return it."""
-    fs = client(source)
-    etags = _etags(source, fs)
+    fs = client(fetch)
+    etags = _etags(fetch, fs)
 
     def build(tmp: Path) -> None:
-        with _reporting(source, "copy"):
+        with _reporting(fetch, "copy"):
             fs.get("", str(tmp), recursive=True)
         tmp.mkdir(parents=True, exist_ok=True)
         (tmp / ETAGS_FILE).write_text(
             json.dumps(etags, indent=1, sort_keys=True) + "\n", encoding="utf-8"
         )
 
-    return _exports(source, cache).ensure(_version(etags), build)
+    return _exports(fetch, cache).ensure(_version(etags), build)
 
 
-def fingerprint_webdav(source: WebdavSource, cache: Path, root: Path) -> dict:
+def fingerprint_webdav(fetch: Fetch, cache: Path, root: Path) -> dict:
     """What the folder is upstream right now, and what the local copy holds.
 
     ``remote`` is the digest of every file's ETag and ``remote_files`` how many
@@ -140,14 +145,14 @@ def fingerprint_webdav(source: WebdavSource, cache: Path, root: Path) -> dict:
     answer: a tree that lost files since it was written has moved as surely as
     the server has, and a rebuild is what puts it back. The two halves are
     named as git's are -- ``exported``/``files`` for the tree being served,
-    ``remote`` for what the source says now -- and they are equal when the copy
+    ``remote`` for what the server says now -- and they are equal when the copy
     is level with the folder.
     """
-    exports = _exports(source, cache)
+    exports = _exports(fetch, cache)
     exported = exports.exported(root)
     if exported is None:
-        raise SourceError(f"{source.name}: nothing exported under the cache")
-    etags = _etags(source, client(source))
+        raise SourceError(f"{fetch.key}: nothing exported under the cache")
+    etags = _etags(fetch, client(fetch))
     return {
         "exported": exported[0],
         "files": exports.count(root),
@@ -157,7 +162,7 @@ def fingerprint_webdav(source: WebdavSource, cache: Path, root: Path) -> dict:
 
 
 def fetch_file(
-    source: WebdavSource,
+    fetch: Fetch,
     root: Path,
     rel: str,
     etag: str | None = None,
@@ -170,13 +175,13 @@ def fetch_file(
     it, or the export's own if the caller has none. Returns the ETag the file
     has now, which is the same object when nothing changed, or None when the
     file is gone upstream: a deleted file is not a deleted skill, and the local
-    copy goes on being served until a refresh rebuilds the source without it.
+    copy goes on being served until a refresh rebuilds the fetch without it.
 
     ``fs`` lets a caller reuse one client across many reads, which is the whole
-    difference between a live source and a slow one.
+    difference between a live fetch and a slow one.
     """
-    target = _inside(source, root, rel)
-    fs = fs or client(source)
+    target = _inside(fetch, root, rel)
+    fs = fs or client(fetch)
     recorded = etag if etag is not None else recorded_etags(root).get(rel)
 
     try:
@@ -184,7 +189,7 @@ def fetch_file(
     except FileNotFoundError:
         return None
     except Exception as exc:
-        raise SourceError(f"{source.name}: {_failure(exc)} for {rel}") from exc
+        raise SourceError(f"{fetch.key}: {_failure(exc)} for {rel}") from exc
 
     current = _etag(info)
     if current == recorded and target.is_file():
@@ -199,7 +204,7 @@ def fetch_file(
     os.close(handle)
     tmp = Path(name)
     try:
-        with _reporting(source, f"fetch of {rel}"):
+        with _reporting(fetch, f"fetch of {rel}"):
             fs.get_file(rel, str(tmp))
         # Atomic: a reader that already opened the old file reads the old file
         # to its end, and no reader ever sees a half-written one.
@@ -212,12 +217,12 @@ def fetch_file(
 # -- the folder ----------------------------------------------------------------
 
 
-def _exports(source: WebdavSource, cache: Path) -> Exports:
-    """This source's export space: one directory per ETag set, stamped with it."""
-    return Exports.under(cache, source.name, stamp=VERSION_FILE, version=VERSION)
+def _exports(fetch: Fetch, cache: Path) -> Exports:
+    """This fetch's export space: one directory per ETag set, stamped with it."""
+    return Exports.under(cache, fetch.slug, stamp=VERSION_FILE, version=VERSION)
 
 
-def _etags(source: WebdavSource, fs: WebdavFileSystem) -> dict[str, str]:
+def _etags(fetch: Fetch, fs: WebdavFileSystem) -> dict[str, str]:
     """``{path: etag}`` for every file in the folder, in path order.
 
     One recursive listing, which is one PROPFIND per directory -- webdav4
@@ -225,7 +230,7 @@ def _etags(source: WebdavSource, fs: WebdavFileSystem) -> dict[str, str]:
     children, so a listing prices every file's freshness for free. Sorted, so
     two equal folders produce two equal dicts and one digest.
     """
-    with _reporting(source, "listing"):
+    with _reporting(fetch, "listing"):
         try:
             fs.info("")
         except FileNotFoundError:
@@ -233,7 +238,7 @@ def _etags(source: WebdavSource, fs: WebdavFileSystem) -> dict[str, str]:
             # not an error to webdav4: it is an empty folder, and the copy
             # that follows fails on it with nothing an operator can act on.
             raise SourceError(
-                f"{source.name}: the folder {_folder(source)} does not exist"
+                f"{fetch.key}: the folder {_folder(fetch)} does not exist"
             ) from None
         found = fs.find("", detail=True)
     return {
@@ -280,7 +285,7 @@ def recorded_etags(root: Path) -> dict[str, str]:
         return {}
 
 
-def _inside(source: WebdavSource, root: Path, rel: str) -> Path:
+def _inside(fetch: Fetch, root: Path, rel: str) -> Path:
     """``root/rel``, refused if it leaves the export.
 
     ``rel`` comes from a listing the server controls, and a live read is the
@@ -288,7 +293,7 @@ def _inside(source: WebdavSource, root: Path, rel: str) -> Path:
     """
     target = (root / rel).resolve()
     if not target.is_relative_to(root.resolve()):
-        raise SourceError(f"{source.name}: {rel!r} is outside the source")
+        raise SourceError(f"{fetch.key}: {rel!r} is outside the export")
     return target
 
 
@@ -296,8 +301,8 @@ def _inside(source: WebdavSource, root: Path, rel: str) -> Path:
 
 
 @contextlib.contextmanager
-def _reporting(source: WebdavSource, doing: str) -> Iterator[None]:
-    """Turn whatever the transport raises into a SourceError naming this source.
+def _reporting(fetch: Fetch, doing: str) -> Iterator[None]:
+    """Turn whatever the transport raises into a SourceError naming this fetch.
 
     A 401 or a 403 is ``AccessRefused``: the server is there and said no to
     this account, which no amount of retrying changes.
@@ -307,7 +312,7 @@ def _reporting(source: WebdavSource, doing: str) -> Iterator[None]:
     except SourceError:
         raise
     except Exception as exc:
-        message = f"{source.name}: {doing} failed: {_failure(exc)}"
+        message = f"{fetch.key}: {doing} failed: {_failure(exc)}"
         if isinstance(exc, HTTPError) and exc.status_code in REFUSED:
             raise AccessRefused(message) from exc
         raise SourceError(message) from exc
@@ -335,10 +340,10 @@ def _failure(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
-def _folder(source: WebdavSource) -> str:
+def _folder(fetch: Fetch) -> str:
     """The folder's path on its server: the URL without its scheme and host.
 
     The host is left out with the rest of the URL for the same reason the URL
     always is, and the path is what names the folder to create.
     """
-    return urlsplit(source.base_url).path or "/"
+    return urlsplit(fetch.url).path or "/"

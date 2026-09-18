@@ -1,10 +1,14 @@
-"""The refresh policy: when a source is looked at again, and what the answer is worth.
+"""The refresh policy: when a fetch is looked at again, and what the answer is worth.
 
 ``KnowledgeBase`` owns the transaction -- the lock, the records, the one
 assignment that swaps the snapshot -- and this module owns the decisions it
-makes along the way: which sources are due, whether one has moved since its
-record was built, whether a failed rebuild is worth serving over the harvest
+makes along the way: which fetches are due, whether one has moved since its
+record was built, whether a failed rebuild is worth serving over the tree
 already on disk, and whether the result counts as a change at all.
+
+The unit is the fetch, not the plugin: a plugin is a harvest of a tree, and a
+tree that has not moved yields the same harvest, so only the tree is worth
+asking about.
 
 The background loop lives here too, because all it does per tick is apply that
 policy; what to do with what it finds is still the server's. It drives the
@@ -22,9 +26,10 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..config import Source, redact
+from ..config import redact
+from ..plugins import Fetch
 from ..sources import SourceError, fingerprint
-from .index import SourceRecord
+from .index import FetchRecord
 from .snapshot import SERVABLE, stale
 
 if TYPE_CHECKING:
@@ -33,39 +38,46 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 # How often the background loop wakes to ask what is due. A source's own
-# ``refresh`` decides when it is actually rebuilt; this only bounds how late
-# that can be, and a short tick costs nothing because a tick with nothing due
-# does no work at all.
+# ``refresh`` decides when its fetches are actually rebuilt; this only bounds
+# how late that can be, and a short tick costs nothing because a tick with
+# nothing due does no work at all.
 TICK_SECONDS = 5
 
 
 class Schedule:
-    """When each source was last examined, and which are due to be again.
+    """When each fetch was last examined, and which are due to be again.
 
-    Keyed by monotonic time rather than by a record's ``built``: ``built`` only
-    moves when a rebuild actually replaces a record, so scheduling off it brings
-    an unchanged -- or persistently failing -- source due on every tick forever.
+    Keyed by fetch key and monotonic time rather than by a record's ``built``:
+    ``built`` only moves when a rebuild actually replaces a record, so
+    scheduling off it brings an unchanged -- or persistently failing -- fetch
+    due on every tick forever.
     """
 
     def __init__(self) -> None:
         self._checked: dict[str, float] = {}
 
-    def examined(self, name: str, at: float) -> None:
-        """Note that ``name`` was looked at, whether or not it was rebuilt."""
-        self._checked[name] = at
+    def examined(self, key: str, at: float) -> None:
+        """Note that the fetch ``key`` was looked at, whether or not it was rebuilt."""
+        self._checked[key] = at
 
-    def due(self, sources: Iterable[Source]) -> list[str]:
-        """The sources whose own refresh interval has elapsed since the last look.
+    def due(self, fetches: Iterable[Fetch]) -> list[str]:
+        """The fetch keys whose refresh interval has elapsed since the last look.
 
-        A source never checked (``-inf``) is due immediately.
+        A fetch never checked (``-inf``) is due immediately. ``fetches`` is the
+        current generation's whole set, so a key no longer in it -- a
+        marketplace entry that went away -- is forgotten here rather than
+        remembered forever.
         """
+        current = list(fetches)
+        keys = {fetch.key for fetch in current}
+        self._checked = {k: at for k, at in self._checked.items() if k in keys}
         now = time.monotonic()
         return [
-            source.name
-            for source in sources
-            if source.refresh_seconds is not None
-            and now - self._checked.get(source.name, float("-inf"))
-            >= source.refresh_seconds
+            fetch.key
+            for fetch in current
+            if fetch.refresh_seconds is not None
+            and now - self._checked.get(fetch.key, float("-inf"))
+            >= fetch.refresh_seconds
         ]
 
 
@@ -84,11 +96,11 @@ def tick_seconds(shortest_refresh: int | None) -> float:
     return min(TICK_SECONDS, shortest_refresh)
 
 
-def moved(source: Source, cache: Path, record: SourceRecord) -> bool:
-    """Whether ``source`` has moved on since ``record`` was built.
+def moved(fetch: Fetch, cache: Path, record: FetchRecord) -> bool:
+    """Whether ``fetch`` has moved on since ``record`` was built.
 
     Anything not ``"ok"`` is due unconditionally, a record already marked stale
-    included. Its fingerprint is the last good one, so a source that came back
+    included. Its fingerprint is the last good one, so a fetch that came back
     without changing would still match it and would go on being reported stale
     forever; only an actual rebuild can clear that.
     """
@@ -98,22 +110,22 @@ def moved(source: Source, cache: Path, record: SourceRecord) -> bool:
     if not root.is_dir():
         return True
     try:
-        return fingerprint(source, cache, root) != record.fingerprint
+        return fingerprint(fetch, cache, root) != record.fingerprint
     except SourceError:
         return True
 
 
-def keep_last_good(old: SourceRecord | None, new: SourceRecord) -> SourceRecord:
-    """``new``, unless it is a failure over a harvest worth going on serving.
+def keep_last_good(old: FetchRecord | None, new: FetchRecord) -> FetchRecord:
+    """``new``, unless it is a failure over a tree worth going on serving.
 
-    A refresh reaching a source is a second chance to fail, and a remote that
+    A refresh reaching a fetch is a second chance to fail, and a remote that
     is momentarily unreachable -- a git remote most of all -- must not empty a
     catalogue that was complete a minute ago. So a failed *rebuild* over an
     existing record becomes that record, marked stale and carrying the error,
     and the skills keep being served from the tree already on disk.
 
     Only the cold start, which has no earlier record, treats a failure as a
-    failed source. The tree is checked because rows naming a directory that is
+    failed fetch. The tree is checked because rows naming a directory that is
     gone would serve nothing: at that point the failure is the better answer.
     """
     if new.status != "failed" or old is None or old.status not in SERVABLE:
@@ -123,13 +135,13 @@ def keep_last_good(old: SourceRecord | None, new: SourceRecord) -> SourceRecord:
     return stale(old, new.error or "refresh failed")
 
 
-def same_failure(old: SourceRecord | None, new: SourceRecord) -> bool:
+def same_failure(old: FetchRecord | None, new: FetchRecord) -> bool:
     """Whether a rebuild produced the same failure the record already carried.
 
-    A source that is still missing has not *changed*, and counting it as a
+    A fetch that is still missing has not *changed*, and counting it as a
     rebuild would advance the generation on every single pass -- announcing a
     new catalogue to every client, forever, because one directory is absent.
-    The same holds for a source that is still stale for the same reason.
+    The same holds for a fetch that is still stale for the same reason.
     """
     return (
         old is not None
@@ -144,14 +156,16 @@ async def loop(knowledge_base: KnowledgeBase) -> None:
 
     The first pass is the other half of the cold start: boot trusted the index
     without checking a fingerprint, and this is where that check happens. After
-    it, a source is re-examined only once its own ``refresh`` interval has
+    it, a fetch is re-examined only once its source's ``refresh`` interval has
     elapsed, and a config that declares no interval anywhere stops here --
-    nothing asked to be watched.
+    nothing asked to be watched. The fetches asked about are the current
+    generation's: a marketplace that gained an entry on another repository
+    brings that repository's fetch into the next pass by itself.
     """
     await _pass(knowledge_base)
     while (shortest := knowledge_base.config.min_refresh_seconds) is not None:
         await asyncio.sleep(tick_seconds(shortest))
-        due = knowledge_base.schedule.due(knowledge_base.config.sources)
+        due = knowledge_base.schedule.due(knowledge_base.fetches)
         if due:
             await _pass(knowledge_base, only=due)
 

@@ -4,20 +4,21 @@ A client's scope is set once, by whoever configures it: ``?library=grafana`` on
 its MCP URL, or an ``X-Skill-Library`` header. A typo there used to be served
 exactly as asked -- a catalogue with nothing in it, no error, nothing in any
 log -- which from the client looks like a server that has no skills. So a scope
-that names a library no source joins, a folder no skill of that library sits
-under, or a tag nothing carries, fails every request with an error that says
-what is there instead, and a client that cannot connect says why.
+that names a library the config does not declare, a category no plugin has, or
+a tag nothing carries, fails every request with an error that says what is
+there instead, and a client that cannot connect says why.
 
-The error names libraries, folders and tags. That is not a leak: a scope is the
-operator's choice of what a client is given, not a boundary the model is kept
-behind, and the operator reading this error is the one who wrote the config.
+The error names libraries, categories and tags. That is not a leak: a scope is
+the operator's choice of what a client is given, not a boundary the model is
+kept behind, and the operator reading this error is the one who wrote the
+config.
 
 A scope is refused for what it *names*, never for what happens to be served at
-the moment. A library whose every source is down right now, or up with nothing
+the moment. A library whose every plugin is down right now, or up with nothing
 in it yet, is still a library; it is empty, and a client pinned to it connects
 and sees nothing until something arrives, which ``/health`` explains. Only a
-folder or a tag combination is checked against the served catalogue, and only
-when that library is serving.
+category or a tag combination is checked against the served catalogue, and
+only when that library is serving.
 """
 
 from __future__ import annotations
@@ -29,7 +30,6 @@ from fastmcp.server.middleware import Middleware
 from mcp.shared.exceptions import MCPError
 from mcp_types import INVALID_PARAMS
 
-from ..catalogue.uris import _children, _in
 from .prompts import PromptProvider
 from .request import requested_scope
 from .scope import EVERYTHING, Scope
@@ -38,107 +38,99 @@ if TYPE_CHECKING:
     from ..catalogue.snapshot import Snapshot
     from ..config import Config
 
+FOLDER_IN_LIBRARY = (
+    "A scope names a library, not a folder: use ?categories= or ?tags= to narrow"
+    " inside it."
+)
+
+COMMA_IN_CATEGORY = (
+    "A plugin has one category, so 'a,b' matches nothing; repeat ?categories= to"
+    " mean any of them."
+)
+
 
 def what_is_wrong(scope: Scope, config: Config, snapshot: Snapshot) -> str | None:
     """Why ``scope`` names nothing in this catalogue, or None if it names something."""
     if not scope:
         return None
-    libraries = sorted(
-        {lib.name for lib in config.libraries}
-        | {source.library_name for source in config.sources}
-    )
-    if scope.library and scope.library_name not in libraries:
+    if "/" in scope.library:
+        return FOLDER_IN_LIBRARY
+    if scope.library and config.library(scope.library) is None:
+        libraries = ", ".join(sorted(lib.name for lib in config.libraries))
         return (
-            f"The scope names library {scope.library_name!r}, and there is no"
-            f" such library. The libraries are: {', '.join(libraries)}."
+            f"The scope names library {scope.library!r}, and there is no"
+            f" such library. The libraries are: {libraries}."
         )
+    if any("," in category for category in scope.categories):
+        return COMMA_IN_CATEGORY
 
-    tags = _declared_tags(config)
-    unknown = sorted(scope.tags - tags)
+    # Before the categories and the tags, which are read off the snapshot: a
+    # declared library that is serving nothing right now has none of either,
+    # and refusing a client for what its library does not *currently* carry is
+    # refusing it for what happens to be served. See the module note.
+    if scope.library and not _up(snapshot, scope.library):
+        return None
+
+    # What the plugins declare, in the library if one is named and anywhere
+    # otherwise -- from the snapshot, since a marketplace's plugins are not in
+    # the config to be read from.
+    plugins = [
+        entry
+        for entry in snapshot.status.get("plugins", {}).values()
+        if not scope.library or scope.library in entry.get("libraries", [])
+    ]
+    categories = {e["category"] for e in plugins if e.get("category")}
+    unknown = sorted(scope.categories - categories)
+    if unknown:
+        return (
+            f"The scope names categor{'ies' if len(unknown) > 1 else 'y'}"
+            f" {', '.join(map(repr, unknown))}, which no plugin declares. The"
+            f" categories are: {_listed(categories)}."
+        )
+    tags = {t for e in plugins for t in (*e.get("tags", ()), *e.get("keywords", ()))}
+    unknown = sorted({tag for group in scope.tags for tag in group} - tags)
     if unknown:
         return (
             f"The scope names tag{'s' if len(unknown) > 1 else ''}"
             f" {', '.join(map(repr, unknown))}, which nothing carries. The tags"
-            f" are: {', '.join(sorted(tags))}."
+            f" are: {_listed(tags)}."
         )
 
-    # Checked against what the scope's own tags admit, so the answer never
-    # confirms a skill the scope could not see.
-    tagged = Scope(library=scope.library_name, tags=scope.tags)
-    in_library = snapshot.index.visible(tagged)
-    if scope.folder and _up(snapshot, scope.library_name):
-        address = scope.library
-        if snapshot.index.get(address, tagged) is not None:
-            return (
-                f"The scope names {address!r}, which is a skill, not a folder."
-                " A scope is a library or a folder of one."
-            )
-        if not any(
-            s.folder == scope.folder or s.folder.startswith(f"{scope.folder}/")
-            for s in in_library
-        ):
-            # What is in the deepest folder of the path that does exist, so a
-            # typo at the third level is answered at the third level.
-            parent = scope.folder
-            while parent and not any(_in(s, parent) for s in in_library):
-                parent = parent.rpartition("/")[0]
-            folders = ", ".join(_children(in_library, parent))
-            if not parent:
-                there = " It has no folders."
-                if folders:
-                    there = f" Its folders are: {folders}."
-            else:
-                where = f"{scope.library_name}/{parent}"
-                there = (
-                    f" The folders in {where} are: {folders}."
-                    if folders
-                    else f" {where} has no folders in it."
-                )
-            return (
-                f"The scope names folder {scope.folder!r} of library"
-                f" {scope.library_name!r}, which has no such folder.{there}"
-            )
-
-    if scope.library and not _up(snapshot, scope.library_name):
-        # Named correctly and serving nothing right now: see the module note.
-        return None
     if not scope.library and not _serving(snapshot, EVERYTHING):
         return None
-    if scope.tags and not _serving(snapshot, scope):
+    if (scope.categories or scope.tags) and not _serving(snapshot, scope):
         where = f"library {scope.library!r}" if scope.library else "any library"
         return (
-            f"The scope names tags that exist, but nothing in {where} carries"
-            f" any of them: {', '.join(sorted(scope.tags))}."
+            f"The scope names things that exist, but nothing in {where} carries"
+            f" the combination: {_asked(scope)}."
         )
     return None
 
 
+def _listed(names: set[str]) -> str:
+    return ", ".join(sorted(names)) or "none"
+
+
+def _asked(scope: Scope) -> str:
+    """The scope's categories and tag groups, as the request spelt them."""
+    parts = [f"category {c}" for c in sorted(scope.categories)]
+    parts += [
+        f"tags {','.join(sorted(group))}" for group in sorted(scope.tags, key=sorted)
+    ]
+    return "; ".join(parts)
+
+
 def _up(snapshot: Snapshot, library: str) -> bool:
-    """Whether any source of ``library`` is serving, however little.
+    """Whether any plugin of ``library`` is serving, however little.
 
-    Not whether it serves skills: a library of prompts or files is up and has
-    no folders, and a folder scope on it names nothing.
+    Not whether it serves skills: a library of prompts or files is up, and a
+    category scope on it can still name nothing.
     """
+    entry = snapshot.status.get("libraries", {}).get(library, {})
+    plugins = snapshot.status.get("plugins", {})
     return any(
-        entry.get("library") == library and entry.get("status") in ("ok", "stale")
-        for entry in snapshot.status.values()
+        plugins.get(pid, {}).get("status") == "ok" for pid in entry.get("plugins", ())
     )
-
-
-def _declared_tags(config: Config) -> set[str]:
-    """Every tag anything can carry, whether or not it is serving.
-
-    Which is every tag there is: a skill's and a prompt's tags are made from the
-    config alone -- its library and source names, ``skill`` or ``prompt``, and
-    the tags the library and source declare -- never from a file. So this needs
-    no walk of the catalogue, which matters on a check made for every request.
-    """
-    tags = {"skill", "prompt"}
-    for lib in config.libraries:
-        tags |= {lib.name, *lib.tags}
-    for source in config.sources:
-        tags |= {source.name, source.library_name, *source.tags}
-    return tags
 
 
 def _serving(snapshot: Snapshot, scope: Scope) -> bool:

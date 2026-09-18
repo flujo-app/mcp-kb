@@ -44,27 +44,19 @@ def register(mcp: FastMCP, knowledge_base: KnowledgeBase) -> None:
 
     def report() -> dict:
         snapshot = knowledge_base.snapshot
-        # A stale source is still being served from its last good harvest, so
-        # its library is still here; only a failed one has nothing to list.
-        libraries = sorted(
-            {
-                s["library"]
-                for s in snapshot.status.values()
-                if s.get("status") in ("ok", "stale")
-            }
-        )
         return {
             "status": "ok",
             "generation": snapshot.generation,
             "built": snapshot.built,
-            "libraries": libraries,
             "skills": len(snapshot.index),
             "prompts": len(snapshot.prompts),
+            "libraries": snapshot.status.get("libraries", {}),
+            "plugins": snapshot.status.get("plugins", {}),
             # The counters are read at report time, not at build time: a
-            # live source's reads happen long after its snapshot was made.
-            "sources": {
-                name: {**info, **snapshot.stats(name)}
-                for name, info in snapshot.status.items()
+            # live fetch's reads happen long after its snapshot was made.
+            "fetches": {
+                key: {**info, **snapshot.stats(key)}
+                for key, info in snapshot.status.get("fetches", {}).items()
             },
         }
 
@@ -79,33 +71,34 @@ def register(mcp: FastMCP, knowledge_base: KnowledgeBase) -> None:
 
     @mcp.custom_route("/health", methods=["GET"])
     async def health(_request: Request) -> JSONResponse:
-        """Readiness probe, and the fastest way to tell which sources loaded.
+        """Readiness probe, and the fastest way to tell which fetches loaded.
 
         Reports the catalogue as *loaded*, ignoring any ``X-Skill-Library``
         header, because an operator asking what this pod serves wants the real
         answer.
-        ``status`` is ``"ok"`` even when a source failed to materialise --
-        readiness stays green for whatever did load, and the failure shows up in
-        ``sources`` instead, keyed by source name. Each source also carries the
-        ``built`` timestamp and ``fingerprint`` of the harvest being served, so
-        "is this pod stale?" is answerable without an MCP client.
+        ``status`` is ``"ok"`` even when a fetch failed to materialise --
+        readiness stays green for whatever did load, and the failure shows up
+        in ``fetches`` instead, keyed by fetch key, and on every plugin that
+        reads it. Each fetch also carries the ``built`` timestamp and
+        ``fingerprint`` of the tree being served, so "is this pod stale?" is
+        answerable without an MCP client.
         """
         return JSONResponse(report())
 
     @mcp.custom_route("/reindex", methods=["POST"])
     async def reindex(_request: Request) -> JSONResponse:
-        """Rebuild every source now, and report the catalogue that results.
+        """Rebuild every fetch now, and report the catalogue that results.
 
         Unauthenticated on purpose. This server is read-only, and the endpoint
-        takes no input: it re-reads exactly the sources the config already
+        takes no input: it re-reads exactly the fetches the config already
         names, which the background loop would re-read on its own anyway. There
         is nothing here to authorise that the config has not already decided.
-        The response is ``/health`` plus ``rebuilt``, the source names actually
-        rebuilt this pass -- with ``force=True`` that is every source that did
+        The response is ``/health`` plus ``rebuilt``, the fetch keys actually
+        rebuilt this pass -- with ``force=True`` that is every fetch that did
         not fail identically to how it already had, changed or not, not only
         the ones whose content moved.
 
-        A rebuild that raises something ``build_source`` did not already turn
+        A rebuild that raises something ``build_fetch`` did not already turn
         into a failed record must still answer: this is the only manual
         recovery lever the server has, and an unhandled 500 would take it away
         for good.

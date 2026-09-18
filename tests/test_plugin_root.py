@@ -1,0 +1,331 @@
+"""The plugin root as the fallback ceiling, read back through a running server.
+
+A skill kit factors shared material up out of its skills and cites it from the
+plugin root -- ``${CLAUDE_PLUGIN_ROOT}/shared/x.md`` in Claude Code, and
+``shared/x.md`` written as if the reader were standing at the repository root.
+Neither address is a harvested library file, and both have to read: at the
+skill, because that is where a relative citation resolves, and at the library,
+because that is what the plugin root's own placeholder becomes.
+
+What the fallback must *not* reach is the point of the rest of this module: a
+dotfile, a path that leaves the root, and a file inside a skill's own directory,
+whose address is the skill's.
+
+Scope only exists inside an HTTP request, so this runs against a real server on
+a loopback port, like ``test_address_space.py``.
+"""
+
+import threading
+
+import pytest
+import uvicorn
+from fastmcp import Client
+from fastmcp.client.transports import StreamableHttpTransport
+
+from kubed.mcp_kb import KnowledgeBase
+from kubed.mcp_kb.config import Config
+from tests.test_header_scope import _free_port
+
+pytestmark = pytest.mark.integration
+
+
+def _write(root, rel, text):
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+def _build(base):
+    kit = base / "kit"
+    _write(
+        kit,
+        "skills/writing/SKILL.md",
+        "---\nname: writing\ndescription: Write things.\n---\n\nSee shared/x.md.\n",
+    )
+    _write(kit, "skills/writing/notes.md", "skill notes\n")
+    _write(
+        kit,
+        "skills/reading/SKILL.md",
+        "---\nname: reading\ndescription: Read things.\n---\n\nSibling.\n",
+    )
+    # Harvested as a skill and then skipped: `Upper` is not one URI segment.
+    _write(
+        kit,
+        "skills/Upper/SKILL.md",
+        "---\nname: Upper\ndescription: Skipped.\n---\n\nUNSERVED SKILL\n",
+    )
+    _write(kit, "skills/Upper/leak.md", "UNSERVED FILE\n")
+    _write(kit, "shared/x.md", "shared bytes\n")
+    _write(kit, "shared/.env", "SHARED_SECRET=1\n")
+    _write(kit, "docs/guide.md", "the guide\n")
+    _write(base, "outside.md", "not in any plugin\n")
+    (kit / "shared" / "escape.md").symlink_to(base / "outside.md")
+
+    extra = base / "extra"
+    _write(
+        extra,
+        "skills/ops/SKILL.md",
+        "---\nname: ops\ndescription: Run things.\n---\n\nBody.\n",
+    )
+    _write(extra, "ops-notes.md", "ops notes\n")
+
+    return Config.model_validate(
+        {
+            "plugins": [
+                {
+                    "name": "kit",
+                    "source": f"file://{kit}",
+                    "tags": ["core"],
+                    "files": ["docs/**"],
+                },
+                {
+                    "name": "kit-extra",
+                    "source": f"file://{extra}",
+                    "tags": ["extra"],
+                    "files": [],
+                },
+            ],
+            "libraries": [{"name": "kit", "plugins": ["kit", "kit-extra"]}],
+        }
+    )
+
+
+@pytest.fixture(scope="module")
+def url(tmp_path_factory):
+    base = tmp_path_factory.mktemp("plugin-root")
+    app = KnowledgeBase(_build(base), base / "_cache").mcp.http_app()
+    port = _free_port()
+    server = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    for _ in range(100):
+        if server.started:
+            break
+        threading.Event().wait(0.05)
+    yield f"http://127.0.0.1:{port}/mcp"
+    server.should_exit = True
+    thread.join(timeout=5)
+
+
+def _client(url, tags=None):
+    headers = {"X-Skill-Tags": tags} if tags else {}
+    return Client(StreamableHttpTransport(url, headers=headers))
+
+
+async def _read(url, uri, tags=None):
+    async with _client(url, tags) as client:
+        return (await client.read_resource(uri))[0].text
+
+
+async def _tool(url, uri, tags=None):
+    """The mirror's answer, as text, whether it is a body or an error result."""
+    async with _client(url, tags) as client:
+        result = await client.call_tool(
+            "read_resource", {"uri": uri}, raise_on_error=False
+        )
+    return result.content[0].text
+
+
+async def _missing(url, uri, tags=None):
+    """Whether both surfaces report nothing at ``uri``."""
+    async with _client(url, tags) as client:
+        with pytest.raises(Exception) as caught:
+            await client.read_resource(uri)
+        mirrored = await client.call_tool(
+            "read_resource", {"uri": uri}, raise_on_error=False
+        )
+    return "not found" in str(caught.value) and mirrored.is_error
+
+
+SHARED = "shared bytes\n"
+
+
+async def test_a_file_at_the_plugin_root_reads_at_the_skill_and_at_the_library(url):
+    """The two addresses a kit's own text points at, both answered by one file."""
+    for uri in ("skill://kit/writing/shared/x.md", "skill://kit/shared/x.md"):
+        assert await _read(url, uri) == SHARED
+        assert await _tool(url, uri) == SHARED
+
+
+async def test_the_files_listing_names_only_the_harvested_files(url):
+    """The fallback reads are unlisted: ``files:`` is still what ``_files.md`` is."""
+    listing = await _read(url, "skill://kit/_files.md")
+    assert "skill://kit/docs/guide.md" in listing
+    assert "shared/x.md" not in listing
+    assert await _read(url, "skill://kit/docs/guide.md") == "the guide\n"
+
+
+async def test_a_hidden_file_at_the_plugin_root_is_not_readable_either_way(url):
+    for uri in ("skill://kit/shared/.env", "skill://kit/writing/shared/.env"):
+        assert await _missing(url, uri)
+        assert "SHARED_SECRET" not in await _tool(url, uri)
+
+
+async def test_a_symlink_out_of_the_plugin_root_is_refused(url):
+    for uri in ("skill://kit/shared/escape.md", "skill://kit/writing/shared/escape.md"):
+        assert await _missing(url, uri)
+        assert "not in any plugin" not in await _tool(url, uri)
+
+
+async def test_a_path_inside_a_skill_is_refused_at_the_library_base(url):
+    """That address is the skill's, and the skill is where it is answered."""
+    assert await _read(url, "skill://kit/writing/notes.md") == "skill notes\n"
+    for uri in (
+        "skill://kit/skills/writing/notes.md",
+        "skill://kit/skills/writing/SKILL.md",
+    ):
+        assert await _missing(url, uri)
+        assert "skill notes" not in await _tool(url, uri)
+
+
+async def test_a_sibling_skills_file_is_not_readable_through_this_skill(url):
+    """One file, one address. The plugin root holds the other skills too, and
+    reaching one through a sibling's address would serve its bytes twice --
+    unsubstituted the second time. A real sibling citation is
+    ``../reading/SKILL.md``, which is the sibling's own address by the time a
+    read happens."""
+    assert "Sibling." in await _read(url, "skill://kit/reading/SKILL.md")
+    alias = "skill://kit/writing/skills/reading/SKILL.md"
+    assert await _missing(url, alias)
+    assert "Sibling." not in await _tool(url, alias)
+
+
+async def test_a_skipped_skills_files_are_not_readable_through_a_served_one(url):
+    """A skill the snapshot would not serve is still a skill directory: its
+    files are nobody's to read, at any address."""
+    assert await _missing(url, "skill://kit/Upper/SKILL.md")
+    for rel in ("skills/Upper/SKILL.md", "skills/Upper/leak.md"):
+        for uri in (f"skill://kit/{rel}", f"skill://kit/writing/{rel}"):
+            assert await _missing(url, uri)
+            assert "UNSERVED" not in await _tool(url, uri)
+
+
+async def test_the_plugin_roots_are_tried_in_the_librarys_order(url):
+    """A library is fed by several plugins, so the fallback walks all of them."""
+    assert await _read(url, "skill://kit/ops-notes.md") == "ops notes\n"
+
+
+async def test_a_scope_that_excludes_the_plugin_reaches_nothing_under_its_root(url):
+    assert await _read(url, "skill://kit/shared/x.md", tags="core") == SHARED
+    assert await _missing(url, "skill://kit/shared/x.md", tags="extra")
+    assert await _missing(url, "skill://kit/writing/shared/x.md", tags="extra")
+    assert await _read(url, "skill://kit/ops-notes.md", tags="extra") == "ops notes\n"
+    assert await _missing(url, "skill://kit/ops-notes.md", tags="core")
+
+
+def _build_shared_root(base, helper_files=("shared/**/*",)):
+    """Two plugins on one root: a kit, and a helper shipping its shared files.
+
+    ``penpot-shared``'s shape, and what ``wiki/Plugins.md`` tells an operator to
+    write when somebody else's kit needs files beside it. ``helper_files`` is
+    the helper's ``files:`` glob, because how wide it is decides whether the
+    kit's skill files are merely *reachable* under the helper's root or are
+    harvested into the helper's own list.
+    """
+    kit = base / "kit"
+    _write(
+        kit,
+        "skills/loki/SKILL.md",
+        "---\nname: loki\ndescription: Query Loki.\n---\n\n"
+        "See ${CLAUDE_SKILL_DIR}/ref.md.\n",
+    )
+    _write(kit, "skills/loki/ref.md", "LOKI REF\n")
+    _write(kit, "shared/x.md", "shared bytes\n")
+
+    return Config.model_validate(
+        {
+            "plugins": [
+                {"name": "a", "source": f"file://{kit}", "tags": ["core"]},
+                {
+                    "name": "b",
+                    "source": f"file://{kit}",
+                    "tags": ["extra"],
+                    "skills": [],
+                    "files": list(helper_files),
+                },
+            ],
+            "libraries": [{"name": "lib", "plugins": ["a", "b"]}],
+        }
+    )
+
+
+def _serve(base, config):
+    """A uvicorn server over ``config``, yielded as its ``/mcp`` URL."""
+    app = KnowledgeBase(config, base / "_cache").mcp.http_app()
+    port = _free_port()
+    server = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    for _ in range(100):
+        if server.started:
+            break
+        threading.Event().wait(0.05)
+    yield f"http://127.0.0.1:{port}/mcp"
+    server.should_exit = True
+    thread.join(timeout=5)
+
+
+@pytest.fixture(scope="module")
+def shared_root_url(tmp_path_factory):
+    base = tmp_path_factory.mktemp("shared-root")
+    yield from _serve(base, _build_shared_root(base))
+
+
+@pytest.fixture(scope="module")
+def globbed_root_url(tmp_path_factory):
+    """The same pair, with the helper globbing the whole root it shares."""
+    base = tmp_path_factory.mktemp("globbed-root")
+    yield from _serve(base, _build_shared_root(base, helper_files=("**/*",)))
+
+
+async def test_a_sibling_plugins_skill_is_not_readable_through_a_shared_root(
+    shared_root_url,
+):
+    """The ceiling excludes every skill directory of the *library*.
+
+    Two plugins on one root: ``a`` ships the skills, ``b`` only the shared
+    files. ``b`` has no skill directories of its own, so a per-plugin exclusion
+    let its root answer for ``a``'s skills -- and a client scoped to ``extra``,
+    which may not see skill ``loki`` at its own address, read the skill's
+    instructions and references at the library base, unsubstituted.
+    """
+    url = shared_root_url
+    for uri in ("skill://lib/skills/loki/SKILL.md", "skill://lib/skills/loki/ref.md"):
+        assert await _missing(url, uri, tags="extra")
+        assert "LOKI" not in await _tool(url, uri, tags="extra")
+        assert "Query Loki" not in await _tool(url, uri, tags="extra")
+    # The skill's own addresses still answer the scope that admits it, and the
+    # placeholder resolves there -- the point of keeping one address per file.
+    body = await _read(url, "skill://lib/loki/SKILL.md", tags="core")
+    assert "See skill://lib/loki/ref.md." in body
+    assert await _read(url, "skill://lib/loki/ref.md", tags="core") == "LOKI REF\n"
+
+
+async def test_a_helper_globbing_the_shared_root_neither_lists_nor_serves_its_skills(
+    globbed_root_url,
+):
+    """The same exclusion on the harvested list, which is the other half of it.
+
+    A helper with ``files: ["**/*"]`` over a root it shares with a kit harvests
+    the kit's skill files: harvest and ``add`` each see one plugin, and the
+    helper declares no skills of its own, so nothing below the library can
+    refuse them. Listing them would advertise an address the read refuses, and
+    serving them would hand a scope that hides the skill its instructions. The
+    library excludes them from both, and its own files are untouched.
+    """
+    url = globbed_root_url
+    listing = await _read(url, "skill://lib/_files.md", tags="extra")
+    assert "skill://lib/shared/x.md" in listing
+    assert "skills/loki" not in listing
+    assert await _read(url, "skill://lib/shared/x.md", tags="extra") == SHARED
+
+    for uri in ("skill://lib/skills/loki/SKILL.md", "skill://lib/skills/loki/ref.md"):
+        assert await _missing(url, uri, tags="extra")
+        assert "LOKI" not in await _tool(url, uri, tags="extra")
+        assert "Query Loki" not in await _tool(url, uri, tags="extra")
+
+    assert await _read(url, "skill://lib/loki/ref.md", tags="core") == "LOKI REF\n"

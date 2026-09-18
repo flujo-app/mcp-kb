@@ -16,6 +16,7 @@ Two quirks of the server under test:
 """
 
 import json
+import logging
 import socket
 import threading
 import time
@@ -24,14 +25,16 @@ import httpx
 import pytest
 
 from kubed.mcp_kb import KnowledgeBase
-from kubed.mcp_kb.config import Config, WebdavSource
+from kubed.mcp_kb.config import BasicAuth, Config, EnvRef
 from kubed.mcp_kb.mcp.prompts import PromptProvider
+from kubed.mcp_kb.plugins import Fetch
 from kubed.mcp_kb.sources import live
-from tests.webdav_server import PASSWORD, USERNAME
+from tests.webdav_server import FOLDER, PASSWORD, USERNAME
 
 pytestmark = pytest.mark.unit
 
 ENV = "WEBDAV_PASSWORD"
+KEY = f"notes://{FOLDER}"
 SKILL = "skill://notes/x"
 URI = f"{SKILL}/SKILL.md"
 GUIDE = "skill://notes/docs/guide.md"
@@ -59,13 +62,18 @@ def _knowledge_base(webdav, tmp_path, cache="live"):
                     "url": webdav.url,
                     "auth": {"username": USERNAME, "password": {"env": ENV}},
                     "cache": cache,
-                    "include": {
-                        "skills": ["skills/*/SKILL.md"],
-                        "prompts": ["prompts/*.md"],
-                        "files": ["docs/**/*"],
-                    },
                 }
-            ]
+            ],
+            "plugins": [
+                {
+                    "name": "notes",
+                    "source": KEY,
+                    "skills": ["skills/*/SKILL.md"],
+                    "prompts": ["prompts/*.md"],
+                    "files": ["docs/**/*"],
+                }
+            ],
+            "libraries": [{"name": "notes", "plugins": ["notes"]}],
         }
     )
     return KnowledgeBase(config, tmp_path / "cache")
@@ -111,6 +119,35 @@ async def test_a_live_prompt_renders_the_edited_body(webdav, tmp_path):
     assert "the second body" in await prompt.render({})
 
 
+async def test_a_live_prompt_saved_mid_edit_serves_the_last_good_body(
+    webdav, tmp_path, caplog
+):
+    """A frontmatter block that does not parse raises `yaml.YAMLError`, which
+    is not a `ValueError`: left out of the fallback, a file somebody is
+    halfway through saving turns `prompts/get` into an internal error instead
+    of serving the body last harvested, which is what live mode promises."""
+    webdav.write("prompts/p.md", PROMPT.format(body="the harvested body"))
+    knowledge_base = _knowledge_base(webdav, tmp_path)
+    provider = PromptProvider(lambda: knowledge_base.snapshot)
+
+    # An unquoted `[a] [b]` is two flow sequences in a row, which no YAML
+    # parser accepts -- the mistake `wiki/Prompts.md` warns about, and exactly
+    # what a half-typed hint looks like.
+    webdav.write(
+        "prompts/p.md",
+        "---\ndescription: A prompt.\nargument-hint: [a] [b]\n---\n\nthe edited body\n",
+    )
+
+    # `get_prompt` is what revalidates, so the invalid file is on disk by the
+    # time `render` re-reads it -- the shape the test above establishes.
+    with caplog.at_level(logging.WARNING, logger="kubed.mcp_kb.catalogue.prompts"):
+        prompt = await provider.get_prompt("notes_p")
+        rendered = await prompt.render({})
+
+    assert "the harvested body" in rendered
+    assert "re-reading prompt" in caplog.text
+
+
 # -- and what it does not ------------------------------------------------------
 
 
@@ -138,7 +175,7 @@ def test_a_new_upstream_file_needs_a_refresh(webdav, tmp_path):
     assert knowledge_base.catalogue.read("skill://notes/y/SKILL.md") is None
     assert [s.name for s in knowledge_base.index.visible()] == ["x"]
 
-    assert knowledge_base.refresh() == ["notes"]
+    assert knowledge_base.refresh() == [KEY]
     assert "a skill added after" in knowledge_base.catalogue.read("skill://notes/y/SKILL.md")
 
 
@@ -209,8 +246,8 @@ def test_a_failed_revalidation_says_nothing_about_the_credentials(
 
 
 def test_a_failed_revalidation_names_the_source_once(webdav, tmp_path, caplog):
-    """fetch_file's error already carries the source, and the log line adds it:
-    `notes: revalidating … failed: notes: …` reads as two sources."""
+    """fetch_file's error already carries the fetch, and the log line adds it:
+    `notes://kb: revalidating … failed: notes://kb: …` reads as two fetches."""
     knowledge_base = _knowledge_base(webdav, tmp_path)
     knowledge_base.catalogue.read(URI)
     webdav.stop()
@@ -218,7 +255,7 @@ def test_a_failed_revalidation_names_the_source_once(webdav, tmp_path, caplog):
     with caplog.at_level("WARNING"):
         knowledge_base.catalogue.read(URI)
 
-    assert caplog.text.count("notes:") == 1
+    assert caplog.text.count(f"{KEY}:") == 1
     assert caplog.text.count("skills/x/SKILL.md") == 1
 
 
@@ -262,7 +299,7 @@ async def test_health_says_a_live_source_is_cooling_after_a_failure(
     async with httpx.AsyncClient(transport=transport, base_url="http://knowledge_base") as http:
         body = (await http.get("/health")).json()
 
-    assert body["sources"]["notes"]["cooling"] is True
+    assert body["fetches"][KEY]["cooling"] is True
 
 
 def test_a_source_that_answers_again_stops_cooling(webdav, tmp_path, monkeypatch):
@@ -272,13 +309,13 @@ def test_a_source_that_answers_again_stops_cooling(webdav, tmp_path, monkeypatch
     answering = live.fetch_file
     monkeypatch.setattr(live, "fetch_file", _wedged)
     knowledge_base.catalogue.read(URI)
-    assert knowledge_base.snapshot.stats("notes")["cooling"] is True
+    assert knowledge_base.snapshot.stats(KEY)["cooling"] is True
 
     monkeypatch.setattr(live, "fetch_file", answering)
     time.sleep(0.1)
     knowledge_base.catalogue.read(URI)
 
-    assert "cooling" not in knowledge_base.snapshot.stats("notes")
+    assert "cooling" not in knowledge_base.snapshot.stats(KEY)
 
 
 def test_the_ttl_runs_from_the_answer_and_not_from_the_question(
@@ -319,7 +356,7 @@ def test_the_revalidator_follows_the_export_a_refresh_created(webdav, tmp_path):
     knowledge_base = _knowledge_base(webdav, tmp_path)
     retired = knowledge_base.index.get("notes/x").path
     webdav.skill("y", "a second skill, which moves the whole folder's digest")
-    assert knowledge_base.refresh() == ["notes"]
+    assert knowledge_base.refresh() == [KEY]
     current = knowledge_base.index.get("notes/x").path
     assert current != retired
 
@@ -335,9 +372,9 @@ def test_one_client_serves_every_live_read(webdav, tmp_path, monkeypatch):
     built = []
     original = live.client
 
-    def counted(source, **kwargs):
-        built.append(source.name)
-        return original(source, **kwargs)
+    def counted(fetch, **kwargs):
+        built.append(fetch.key)
+        return original(fetch, **kwargs)
 
     monkeypatch.setattr(live, "client", counted)
 
@@ -345,7 +382,7 @@ def test_one_client_serves_every_live_read(webdav, tmp_path, monkeypatch):
     knowledge_base.catalogue.read(URI)
     knowledge_base.catalogue.read(GUIDE)
 
-    assert built == ["notes"]
+    assert built == [KEY]
 
 
 async def test_health_reports_what_a_live_source_revalidated(webdav, tmp_path):
@@ -358,10 +395,10 @@ async def test_health_reports_what_a_live_source_revalidated(webdav, tmp_path):
     async with httpx.AsyncClient(transport=transport, base_url="http://knowledge_base") as http:
         body = (await http.get("/health")).json()
 
-    source = body["sources"]["notes"]
-    assert source["live"] is True
-    assert source["revalidated"] == 2
-    assert source["fetched"] == 1
+    fetch = body["fetches"][KEY]
+    assert fetch["live"] is True
+    assert fetch["revalidated"] == 2
+    assert fetch["fetched"] == 1
 
 
 async def test_health_says_nothing_about_the_backend_or_the_credentials(
@@ -383,7 +420,7 @@ async def test_health_says_nothing_about_the_backend_or_the_credentials(
 def test_a_snapshot_source_reports_no_live_fields(webdav, tmp_path):
     knowledge_base = _knowledge_base(webdav, tmp_path, cache="snapshot")
 
-    assert "live" not in knowledge_base.status["notes"]
+    assert "live" not in knowledge_base.status["fetches"][KEY]
 
 
 # -- helpers -------------------------------------------------------------------
@@ -426,10 +463,12 @@ def black_hole(webdav, monkeypatch):
                     return
 
         threading.Thread(target=accept, daemon=True).start()
-        void = WebdavSource(
-            name="notes",
-            url=f"webdav+http://127.0.0.1:{listener.getsockname()[1]}",
-            auth={"username": USERNAME, "password": {"env": ENV}},
+        void = Fetch(
+            key=KEY,
+            backend="webdav",
+            url=f"http://127.0.0.1:{listener.getsockname()[1]}/{FOLDER}",
+            auth=BasicAuth(username=USERNAME, password=EnvRef(env=ENV)),
+            cache="live",
         )
         answering = live.client
         monkeypatch.setattr(live, "client", lambda _, **kwargs: answering(void, **kwargs))

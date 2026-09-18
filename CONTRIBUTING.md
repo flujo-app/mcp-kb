@@ -39,9 +39,10 @@ out as anything reaches.
 | Path | Holds |
 |---|---|
 | `kubed/mcp_kb/` | `server.py` composes it and owns which snapshot is current, `main.py` starts it, `routes.py` is the plain-HTTP surface, `config.py` is the config model and the published schema |
-| `kubed/mcp_kb/catalogue/` | what is served and how it is found: `harvest.py` decides what counts, `skills.py` is the domain, `uris.py` is the `skill://` address space, `prompts.py` parses a prompt file with no FastMCP in it, `index.py` persists it, `snapshot.py` builds one immutable view, `refresh.py` decides when to look again |
-| `kubed/mcp_kb/sources/` | where bytes come from: `file.py`, `git.py`, `webdav.py`, the shared `export.py`, and `live.py` because revalidation is a source concern |
-| `kubed/mcp_kb/mcp/` | what an agent sees: `resources.py` is the interface, `tools.py` and `prompts.py` the mirrors, `request.py` and `scope.py` the per-request scope, `announce.py` the list-changed notification |
+| `kubed/mcp_kb/plugins/` | what the config declares and a marketplace publishes, resolved: `address.py` is the address grammar, `marketplace.py` reads somebody else's catalogue, `manifest.py` a plugin's own `plugin.json`, `select.py` the category and tag query |
+| `kubed/mcp_kb/catalogue/` | what is served and how it is found: `harvest.py` decides what counts, `skills.py` is the domain, `uris.py` is the `skill://` address space, `prompts/` parses a prompt file in any of three dialects with no FastMCP in it, `placeholders.py` resolves the two `${CLAUDE_*}` this server knows, `index.py` persists it, `snapshot.py` builds one immutable view, `refresh.py` decides when to look again |
+| `kubed/mcp_kb/sources/` | where bytes come from, one fetch at a time: `file.py`, `git.py`, `webdav.py`, the shared `export.py`, and `live.py` because revalidation is a source concern |
+| `kubed/mcp_kb/mcp/` | what an agent sees: `resources.py` is the interface, `tools.py` and `prompts.py` the mirrors, `request.py` and `scope.py` the per-request scope, `pins.py` the refusal of a scope that names nothing, `announce.py` the list-changed notification |
 | `kubed/mcp_kb/spec/` | the OpenAPI document for the HTTP surface |
 | `examples/config.yaml` | the worked config the image ships, and what `tests/test_example_config.py` validates |
 | `wiki/` | the GitHub wiki, as a submodule — depth the README has no room for |
@@ -76,9 +77,9 @@ Staleness is caught by `tests/test_wiki.py`, not by that workflow: `test.yml`
 checks out the submodule so those tests run, and a pull request that forgot to
 regenerate fails the suite where a contributor is already looking.
 
-The other pages — Home, Installing, Deployment, Sources, Skills, Prompts,
-Scoping, Operations — are hand-written in full and the generator never touches
-them. Prose a schema cannot carry that belongs to a *generated* page goes in
+The other pages — Home, Installing, Deployment, Sources, Plugins, Skills,
+Prompts, Scoping, Operations — are hand-written in full and the generator never
+touches them. Prose a schema cannot carry that belongs to a *generated* page goes in
 `wiki/notes/<page>.notes.md` and is folded in. The suffix is load-bearing: a wiki
 page is addressed by basename regardless of directory, so `wiki/notes/Tools.md`
 and `wiki/Tools.md` would both answer to `/wiki/Tools` and GitHub would serve the
@@ -101,7 +102,8 @@ introspect — and `tests/test_openapi.py` is what catches them drifting from wh
 `routes.py` actually returns.
 
 `config.schema.json` is the same kind of thing for the config models, except that
-it *is* committed: regenerate it with `mcp-kb schema > config.schema.json` and a
+it *is* committed: regenerate it with `python -m kubed.mcp_kb schema >
+config.schema.json` (`mcp-kb schema` once the console script is installed) and a
 test fails when it and the models disagree.
 
 ## Changing what a client sees

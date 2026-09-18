@@ -19,6 +19,8 @@ from .scope import Scope
 # one deployment serves several narrowly-scoped agents.
 LIBRARY_PARAM = "library"
 LIBRARY_HEADER = "x-skill-library"
+CATEGORIES_PARAM = "categories"
+CATEGORIES_HEADER = "x-skill-categories"
 TAGS_PARAM = "tags"
 TAGS_HEADER = "x-skill-tags"
 
@@ -38,11 +40,14 @@ LISTING_HEADER = "x-skill-listing"
 _FULL = "full"
 
 
-def http_request() -> tuple[dict, dict] | None:
+def http_request() -> tuple[dict[str, list[str]], dict[str, list[str]]] | None:
     """(query params, headers) for the current request, or None off HTTP.
 
     Both are looked up through FastMCP's dependency helpers, which read the
-    request from a context variable set by the ASGI stack.
+    request from a context variable set by the ASGI stack. Every value is a
+    *list*, because repeating a parameter or a header is how a client says
+    "any of these" -- and a reader that took `dict(query_params)` would keep
+    the last one and silently narrow the scope it was handed.
     """
     try:
         from fastmcp.server.dependencies import get_http_headers, get_http_request
@@ -60,47 +65,54 @@ def http_request() -> tuple[dict, dict] | None:
             return None
         if not headers:
             return None
-        return {}, {k.lower(): v for k, v in headers.items()}
+        # A plain mapping: one value per name, which is a one-item list here.
+        return {}, {k.lower(): [v] for k, v in headers.items()}
     return (
-        dict(request.query_params),
-        {k.lower(): v for k, v in request.headers.items()},
+        {k: request.query_params.getlist(k) for k in request.query_params},
+        {k.lower(): request.headers.getlist(k) for k in request.headers},
     )
 
 
-def _read(header: str, param: str, *aliases: str) -> str | None:
-    """What this request says for one setting, or None when it says nothing.
+def _read(header: str, param: str, *aliases: str) -> list[str]:
+    """What this request says for one setting: every value, or none at all.
 
     Headers first, in the order given, then the query parameter: the header is
     set in a credential, by an admin, where the parameter rides on a URL
-    somebody may paste without it. Off HTTP there is neither, and None is what
-    every caller reads as "not narrowed, not declared".
+    somebody may paste without it. Off HTTP there is neither, and an empty list
+    is what every caller reads as "not narrowed, not declared".
     """
     http = http_request()
     if http is None:
-        return None
+        return []
     params, headers = http
     for name in (header, *aliases):
-        if headers.get(name):
-            return headers[name]
-    return params.get(param)
+        found = [value for value in headers.get(name, []) if value]
+        if found:
+            return found
+    return [value for value in params.get(param, []) if value]
 
 
 def requested_scope() -> Scope:
     """The slice of the catalogue this request is restricted to.
 
-    Read from the MCP URL (``?library=grafana&tags=observability``) or headers
-    (``X-Skill-Library``, ``X-Skill-Tags``). It is a ceiling set by whoever
-    configured the client, not a suggestion the model can widen.
+    Read from the MCP URL (``?library=grafana&categories=observability``) or
+    headers (``X-Skill-Library``, ``X-Skill-Categories``, ``X-Skill-Tags``). It
+    is a ceiling set by whoever configured the client, not a suggestion the
+    model can widen. One library: it is the URI's first segment, so several
+    would be a different request.
     """
-    library = _read(LIBRARY_HEADER, LIBRARY_PARAM) or ""
-    tags = _read(TAGS_HEADER, TAGS_PARAM) or ""
-    return Scope.parse(library, tags)
+    library = _read(LIBRARY_HEADER, LIBRARY_PARAM)
+    return Scope.parse(
+        library[0] if library else "",
+        _read(CATEGORIES_HEADER, CATEGORIES_PARAM),
+        _read(TAGS_HEADER, TAGS_PARAM),
+    )
 
 
 def _declared_on(header: str, param: str) -> bool:
     """True unless the client said ``off`` for this capability."""
     declared = _read(header, param)
-    return declared is None or str(declared).strip().lower() not in _OFF
+    return not declared or declared[0].strip().lower() not in _OFF
 
 
 def client_uses_prompts() -> bool:
@@ -132,5 +144,5 @@ def full_listing() -> bool:
     tokens per listing for rows it was going to narrow down anyway, which is why
     this is opt-in: ``?skills=full``, or an ``X-Skill-Listing: full`` header.
     """
-    declared = _read(LISTING_HEADER, LISTING_PARAM) or ""
-    return str(declared).strip().lower() == _FULL
+    declared = _read(LISTING_HEADER, LISTING_PARAM)
+    return bool(declared) and declared[0].strip().lower() == _FULL

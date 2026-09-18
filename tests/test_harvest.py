@@ -1,4 +1,4 @@
-"""Turning a source's include globs into skill dirs, prompt files and library files."""
+"""Turning a plugin's globs into skill dirs, prompt files and library files."""
 
 from pathlib import Path
 
@@ -11,7 +11,7 @@ from kubed.mcp_kb.catalogue.harvest import (
     prompt_files,
     skill_dirs,
 )
-from kubed.mcp_kb.config import Include
+from kubed.mcp_kb.plugins import Globs
 
 
 @pytest.fixture
@@ -38,7 +38,7 @@ def rel(root: Path, paths) -> set[str]:
 
 
 def test_conventions_find_nested_skills_and_never_a_root_template(tree):
-    assert rel(tree, skill_dirs(tree, Include())) == {
+    assert rel(tree, skill_dirs(tree, Globs())) == {
         "skills/grafana-lgtm/loki",
         "skills/flat",
         ".github/skills/gh",
@@ -46,40 +46,40 @@ def test_conventions_find_nested_skills_and_never_a_root_template(tree):
 
 
 def test_a_dot_directory_is_skipped_unless_it_is_a_convention(tree):
-    found = rel(tree, skill_dirs(tree, Include(skills=["**/SKILL.md"])))
+    found = rel(tree, skill_dirs(tree, Globs(skills=["**/SKILL.md"])))
     assert ".github/skills/gh" in found
     assert ".git" not in found
 
 
 def test_setting_a_kind_replaces_its_defaults(tree):
-    assert rel(tree, skill_dirs(tree, Include(skills=["template/SKILL.md"]))) == {
+    assert rel(tree, skill_dirs(tree, Globs(skills=["template/SKILL.md"]))) == {
         "template"
     }
 
 
 def test_an_empty_list_turns_a_kind_off(tree):
-    assert prompt_files(tree, Include(prompts=[])) == []
+    assert prompt_files(tree, Globs(prompts=[])) == []
 
 
 def test_conventions_find_both_prompt_layouts(tree):
-    assert rel(tree, prompt_files(tree, Include())) == {
+    assert rel(tree, prompt_files(tree, Globs())) == {
         ".github/prompts/review.prompt.md",
         "prompts/grafana/debug-logs.md",
     }
 
 
 def test_files_are_served_only_when_asked_for(tree):
-    dirs = skill_dirs(tree, Include())
-    assert library_files(tree, Include(), dirs) == []
-    assert library_files(tree, Include(files=["shared/**"]), dirs) == ["shared/tokens.md"]
+    dirs = skill_dirs(tree, Globs())
+    assert library_files(tree, Globs(), dirs) == []
+    assert library_files(tree, Globs(files=["shared/**"]), dirs) == ["shared/tokens.md"]
 
 
 def test_a_file_inside_a_skill_is_never_a_library_file(tree):
     # library_files only excludes files inside a skill dir (per its docstring); a
     # broad "**/*.md" also legitimately matches the fixture's prompt files,
     # which live outside every skill dir returned by skill_dirs().
-    dirs = skill_dirs(tree, Include())
-    assert library_files(tree, Include(files=["**/*.md"]), dirs) == [
+    dirs = skill_dirs(tree, Globs())
+    assert library_files(tree, Globs(files=["**/*.md"]), dirs) == [
         ".github/prompts/review.prompt.md",
         "prompts/grafana/debug-logs.md",
         "shared/tokens.md",
@@ -87,13 +87,12 @@ def test_a_file_inside_a_skill_is_never_a_library_file(tree):
     ]
 
 
-def test_a_glob_cannot_escape_the_source(tree, tmp_path):
-    # config.py's Include validator already refuses "../**" at construction;
-    # model_construct bypasses it so this test exercises harvest.files()'s own
-    # defence-in-depth guard directly, independent of that outer validation.
+def test_a_glob_cannot_escape_the_plugin_root(tree, tmp_path):
+    # PluginConfig's glob validator already refuses "../**" at construction; a
+    # Globs built by hand carries no validation, so this exercises
+    # harvest.files()'s own defence-in-depth guard directly.
     (tmp_path.parent / "outside.md").write_text("no\n")
-    include = Include.model_construct(files=["../**"])
-    assert library_files(tree, include, []) == []
+    assert library_files(tree, Globs(files=("../**",)), []) == []
 
 
 def test_the_folder_is_the_path_below_the_deepest_skill_root(tree):
@@ -119,10 +118,10 @@ def test_a_trailing_globstar_means_everything_underneath(tmp_path):
     (tree / "shared" / "tokens.md").write_text("t")
     (tree / "shared" / "deep" / "more.md").write_text("m")
 
-    assert library_files(tree, Include(files=["shared/**"]), []) == library_files(
-        tree, Include(files=["shared/**/*"]), []
+    assert library_files(tree, Globs(files=["shared/**"]), []) == library_files(
+        tree, Globs(files=["shared/**/*"]), []
     )
-    assert library_files(tree, Include(files=["shared/**"]), []) == [
+    assert library_files(tree, Globs(files=["shared/**"]), []) == [
         "shared/deep/more.md",
         "shared/tokens.md",
     ]
@@ -136,10 +135,10 @@ def test_a_trailing_globstar_is_normalised_before_it_reaches_glob():
     assert the old behaviour on an old interpreter. This one pins the
     normalisation itself, and fails everywhere if it is dropped.
     """
-    assert patterns("files", Include(files=["shared/**"])) == ("shared/**/*",)
-    assert patterns("files", Include(files=["shared/**/*"])) == ("shared/**/*",)
-    assert patterns("files", Include(files=["shared/*"])) == ("shared/*",)
-    assert patterns("skills", Include(skills=["skills/*/SKILL.md"])) == (
+    assert patterns("files", Globs(files=["shared/**"])) == ("shared/**/*",)
+    assert patterns("files", Globs(files=["shared/**/*"])) == ("shared/**/*",)
+    assert patterns("files", Globs(files=["shared/*"])) == ("shared/*",)
+    assert patterns("skills", Globs(skills=["skills/*/SKILL.md"])) == (
         "skills/*/SKILL.md",
     )
 
@@ -160,7 +159,7 @@ def test_a_configmap_style_symlink_farm_is_harvested(tmp_path):
     (root / "..data").symlink_to(data)
     (root / "debug-logs.md").symlink_to(root / "..data" / "debug-logs.md")
 
-    found = prompt_files(root, Include(skills=[], prompts=["*.md"]))
+    found = prompt_files(root, Globs(skills=[], prompts=["*.md"]))
 
     assert [p.name for p in found] == ["debug-logs.md"]
     assert found[0].read_text().endswith("body")
@@ -176,7 +175,7 @@ def test_a_symlink_out_of_the_root_is_still_refused(tmp_path):
     root.mkdir()
     (root / "secret.md").symlink_to(outside / "secret.md")
 
-    assert prompt_files(root, Include(skills=[], prompts=["*.md"])) == []
+    assert prompt_files(root, Globs(skills=[], prompts=["*.md"])) == []
 
 
 @pytest.mark.unit
@@ -186,10 +185,10 @@ def test_only_a_whole_trailing_component_is_a_globstar():
     Rewriting it to `logs**/*` would silently change it to mean the descendants
     of those names instead — a different set, and empty for a plain file.
     """
-    assert patterns("files", Include(files=["logs**"])) == ("logs**",)
-    assert patterns("files", Include(files=["a/logs**"])) == ("a/logs**",)
-    assert patterns("files", Include(files=["**"])) == ("**/*",)
-    assert patterns("files", Include(files=["a/**"])) == ("a/**/*",)
+    assert patterns("files", Globs(files=["logs**"])) == ("logs**",)
+    assert patterns("files", Globs(files=["a/logs**"])) == ("a/logs**",)
+    assert patterns("files", Globs(files=["**"])) == ("**/*",)
+    assert patterns("files", Globs(files=["a/**"])) == ("a/**/*",)
 
 
 @pytest.mark.unit
@@ -205,8 +204,8 @@ def test_a_skills_glob_may_name_the_directory(tmp_path):
         d.mkdir(parents=True)
         (d / "SKILL.md").write_text(f"---\nname: {name}\n---\nbody")
 
-    by_dir = skill_dirs(root, Include(skills=["skills/*"]))
-    by_file = skill_dirs(root, Include(skills=["skills/*/SKILL.md"]))
+    by_dir = skill_dirs(root, Globs(skills=["skills/*"]))
+    by_file = skill_dirs(root, Globs(skills=["skills/*/SKILL.md"]))
 
     assert by_dir == by_file
     assert [p.name for p in by_dir] == ["alpha", "beta"]
@@ -225,12 +224,12 @@ def test_a_composite_folder_registers_every_skill_beneath_it(tmp_path):
         d.mkdir(parents=True)
         (d / "SKILL.md").write_text(f"---\nname: {name}\n---\nbody")
 
-    assert [p.name for p in skill_dirs(root, Include(skills=["skills/lgtm"]))] == [
+    assert [p.name for p in skill_dirs(root, Globs(skills=["skills/lgtm"]))] == [
         "loki",
         "tempo",
     ]
     # sorted by path, so the lgtm pair precedes sdk/plugins
-    assert [p.name for p in skill_dirs(root, Include(skills=["skills"]))] == [
+    assert [p.name for p in skill_dirs(root, Globs(skills=["skills"]))] == [
         "loki",
         "tempo",
         "plugins",
@@ -247,7 +246,7 @@ def test_a_directory_glob_does_not_reach_outside_the_root(tmp_path):
     (root / "skills").mkdir(parents=True)
     (root / "skills" / "linked").symlink_to(outside)
 
-    assert skill_dirs(root, Include(skills=["skills/*"])) == []
+    assert skill_dirs(root, Globs(skills=["skills/*"])) == []
 
 
 @pytest.mark.unit
@@ -271,7 +270,7 @@ def test_a_symlink_loop_fails_that_link_not_the_harvest(tmp_path, monkeypatch):
 
     monkeypatch.setattr(Path, "resolve", resolve)
 
-    assert [p.name for p in skill_dirs(root, Include(skills=["skills/*"]))] == ["good"]
+    assert [p.name for p in skill_dirs(root, Globs(skills=["skills/*"]))] == ["good"]
 
 
 @pytest.mark.unit
@@ -285,7 +284,7 @@ def test_a_skill_md_symlinked_out_of_the_root_does_not_register(tmp_path):
     leak.mkdir(parents=True)
     (leak / "SKILL.md").symlink_to(outside / "SKILL.md")
 
-    assert skill_dirs(root, Include(skills=["skills"])) == []
+    assert skill_dirs(root, Globs(skills=["skills"])) == []
 
 
 @pytest.mark.unit
@@ -301,6 +300,6 @@ def test_a_link_back_to_an_ancestor_does_not_loop_a_directory_glob(tmp_path):
     (skills / "a" / "SKILL.md").write_text("---\nname: a\n---\nbody")
     (skills / "a" / "up").symlink_to(skills)
 
-    found = skill_dirs(tmp_path / "src", Include(skills=["skills"]))
+    found = skill_dirs(tmp_path / "src", Globs(skills=["skills"]))
 
     assert [p.name for p in found] == ["a"]

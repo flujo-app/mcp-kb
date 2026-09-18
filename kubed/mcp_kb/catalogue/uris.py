@@ -23,7 +23,7 @@ API::
     skill://<library>/_files.md                   files outside every skill
     skill://<library>/<file>                      one of those
 
-``<folder>`` is the skill's directory below its source's skill root, and may
+``<folder>`` is the skill's directory below its plugin's skill root, and may
 be empty or several segments deep; the last segment before the file is always
 the skill's name. A skill is found by the longest prefix of the path that
 names one, so a nested skill wins over the skill whose directory holds it.
@@ -50,10 +50,11 @@ import json
 import mimetypes
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from ..mcp.scope import EVERYTHING, Scope
-from .harvest import hidden
+from . import placeholders
+from .harvest import hidden, readable
 from .skills import LibraryFiles, Skill, SkillIndex
 
 SCHEME = "skill://"
@@ -61,6 +62,10 @@ MAIN_FILE = "SKILL.md"
 MANIFEST = "_manifest"
 INDEX = "_index.md"
 LIBRARY_FILES = "_files.md"
+# Names the server generates at any folder. A file called one of these is
+# skipped by the harvest and never served by the plugin-root fallback: where
+# there is a generated body it answers first, and ``/health`` says as much.
+RESERVED_NAMES = frozenset({INDEX, LIBRARY_FILES})
 # Distinct scopes a catalogue remembers listings for before starting over.
 MEMO_LIMIT = 64
 
@@ -83,7 +88,7 @@ class Entry:
     onto the ``TextResource`` it builds; it is not one of the four and never
     appears in ``as_dict``. An index row is tagged with its library and
     ``"index"``; a full row (one skill, in the ``full=True`` listing) carries
-    that skill's own tags.
+    its library and its plugin's labels.
     """
 
     uri: str
@@ -165,6 +170,14 @@ def _manifest_json(skill: Skill) -> str:
     The same dot-file rule the harvest applies, so what a manifest advertises is
     what the skill ships: a client that syncs a skill to disk must not be sent
     after an editor's swap file.
+
+    Size and hash describe the bytes on disk, ``SKILL.md`` included -- and a
+    read of ``SKILL.md`` resolves ``${CLAUDE_PLUGIN_ROOT}`` and
+    ``${CLAUDE_SKILL_DIR}`` into addresses, so a client that hashes what it read
+    finds that one file differs. That is by design: the manifest describes the
+    skill as it was published, and the substitution is this server answering
+    the two placeholders it is the authority on (§C1.37). Every other file is
+    served verbatim and hashes equal.
     """
     files = []
     for path in sorted(_manifest_files(skill)):
@@ -300,13 +313,9 @@ class Catalogue:
             index_tags = tuple(sorted({library, "index"}))
             rows: list[Entry] = []
             # The listing is the top of the same tree the indexes are: the
-            # library's index and its top-level folders, or -- under a folder
-            # pin -- that folder's index and the folders directly in it. The
-            # library's own row is dropped there, since it would list only the
-            # pinned folder, whose row this already is.
-            here = scope.folder
-            children = _children(in_library, here)
-            if in_library and not here:
+            # library's index and its top-level folders.
+            children = _children(in_library, "")
+            if in_library:
                 summary = _count(len(in_library))
                 if children:
                     summary += (
@@ -322,7 +331,6 @@ class Catalogue:
                         index_tags,
                     )
                 )
-            folders = ([here] if here and in_library else []) + list(children)
             rows += [
                 Entry(
                     index_uri(library, folder),
@@ -332,7 +340,7 @@ class Catalogue:
                     "text/markdown",
                     index_tags,
                 )
-                for folder in folders
+                for folder in children
             ]
             if self._library_files(library, scope):
                 rows.append(
@@ -355,7 +363,7 @@ class Catalogue:
                     f"{skill.address}/{MAIN_FILE}",
                     skill.description,
                     "text/markdown",
-                    tuple(sorted(skill.tags)),
+                    tuple(sorted({skill.library, *skill.tags})),
                 )
                 entries.setdefault(row.uri, row)
         return list(entries.values())
@@ -368,12 +376,12 @@ class Catalogue:
         Both halves of the library-files rule in one place: the listing offers
         a ``_files.md`` row exactly when reading one would return a body, and a
         library out of scope entirely has neither. ``LibraryFiles`` checks each
-        root's tags and source; which library and which sources this caller
-        was given is decided here.
+        root's plugin against the scope's categories and tags; whether the
+        library itself is in scope is decided here.
         """
-        if scope.library and scope.library_name != library:
+        if scope.library and scope.library != library:
             return []
-        return self._resources.files(library, scope.tags, self._index.sources(scope))
+        return self._resources.files(library, scope)
 
     def _in_library(self, library: str, scope: Scope) -> list[Skill]:
         return [s for s in self._index.visible(scope) if s.library == library]
@@ -393,6 +401,23 @@ class Catalogue:
                 return skill, "/".join(segments[cut:])
         return None
 
+    def _unclaimed(self, library: str, path: str) -> bool:
+        """Whether the library-wide fallback may answer ``path`` at all.
+
+        Two addresses it may not, and they are the two the harvest already
+        refuses to serve a library file at (``snapshot._admit``), so that
+        ``/health``'s ``skipped`` stays true and one URI keeps one answer:
+
+        - one inside a skill's address, *whoever* may see that skill -- the
+          skill branch above owns it, and a scope that hides the skill must not
+          uncover something else at the same URI;
+        - one named like an index the server generates, which answers first
+          wherever there is one.
+        """
+        if PurePosixPath(path).name in RESERVED_NAMES:
+            return False
+        return self._skill_at(library, path, EVERYTHING) is None
+
     # -- reading ------------------------------------------------------------
 
     def read(self, uri: str, scope: Scope = EVERYTHING) -> str | None:
@@ -406,8 +431,14 @@ class Catalogue:
         A skill is tried first, then the indexes, then the library's own files.
         The order never arbitrates between two things at one address, because
         the snapshot serves no such pair: a library file inside a skill of its
-        own source, or named like an index, is skipped, and one inside another
-        source's skill fails that source.
+        own plugin, or named like an index, is skipped, and one inside another
+        plugin's skill fails that plugin.
+
+        Either kind of miss falls back to the plugin root -- the skill's own,
+        then every one the library has -- because that is where a kit's shared
+        material actually sits and what its citations and
+        ``${CLAUDE_PLUGIN_ROOT}`` point at. The fallback reads what it is asked
+        for and lists nothing.
         """
         parsed = parse(uri)
         if parsed is None:
@@ -418,6 +449,8 @@ class Catalogue:
         found = self._skill_at(library, path, scope)
         if found is not None and found[1]:
             body = self._skill_file(*found)
+            if body is None:
+                body = self._root_file(*found)
             if body is not None:
                 return body
         if path == INDEX:
@@ -429,20 +462,20 @@ class Catalogue:
             body = self._index_body(library, folder, scope)
             if body is not None:
                 return body
-        if scope.library and scope.library_name != library:
+        if scope.library and scope.library != library:
             return None
-        sources = self._index.sources(scope)
-        return self._resources.read(library, path, scope.tags, sources)
+        body = self._resources.read(library, path, scope)
+        if body is None and self._unclaimed(library, path):
+            body = self._resources.read_any(library, path, scope)
+        return body
 
     def hint(self, uri: str, scope: Scope = EVERYTHING) -> str | None:
         """What to read instead of an address that serves nothing, or None.
 
-        Two kinds of miss get one. A directory -- a library, a folder, a skill's
-        root -- names the file to read in its place. And a path under a skill
-        that is really one of the library's own files: skills that factor
-        material up out of themselves cite it from the repository root
-        (``shared/tokens.md``), which resolved against the skill's directory
-        is an address with nothing at it.
+        One kind of miss gets one: a directory -- a library, a folder, a skill's
+        root -- which names the file to read in its place. A path under a skill
+        that is really the library's own material needs no hint any more; the
+        plugin-root fallback in ``read`` serves it where it was asked for.
 
         Answered from what ``scope`` can see, so a hint never confirms an
         address the caller could not list.
@@ -471,13 +504,6 @@ class Catalogue:
                 f" read {uri_for(skill)} for its instructions, or"
                 f" {uri_for(skill, MANIFEST)} for the files it ships."
             )
-        if found is not None:
-            skill, rest = found
-            if rest in files:
-                return (
-                    f"The {skill.name} skill ships no {rest}, but its library"
-                    f" does: read {SCHEME}{library}/{rest}."
-                )
         folder = path.strip("/")
         if any(s.folder == folder or s.folder.startswith(f"{folder}/") for s in skills):
             return (
@@ -556,16 +582,43 @@ class Catalogue:
         # beside a SKILL.md is not served to whoever guesses its name.
         if hidden(Path(file)):
             return None
-        # Resolve before comparing, which is what blocks ../ and a symlink
-        # pointing out of the skill directory.
-        target = (skill.path / file).resolve()
-        if not target.is_relative_to(skill.path.resolve()) or not target.is_file():
+        target = readable(skill.path, file)
+        if target is None:
             return None
         # A live source's file may have moved since it was copied, and this
         # is where that is noticed -- a read is the only thing that asks.
         if self._revalidate is not None:
             self._revalidate(target)
-        return target.read_text(encoding="utf-8", errors="replace")
+        text = target.read_text(encoding="utf-8", errors="replace")
+        if file != MAIN_FILE:
+            # Instructions are substituted; everything else is bytes on disk,
+            # which is what `_manifest`'s size and hash describe.
+            return text
+        return placeholders.substitute(
+            text,
+            plugin_root=f"{SCHEME}{skill.library}",
+            skill_dir=f"{SCHEME}{skill.address}",
+        )
+
+    def _root_file(self, skill: Skill, file: str) -> str | None:
+        """One file of the skill's plugin root, addressed below the skill.
+
+        A skill that factors material up out of itself cites it from the
+        repository root (``shared/tokens.md``), and resolved against the skill's
+        own directory that is an address with nothing at it. The plugin root is
+        the ceiling -- what ``${CLAUDE_PLUGIN_ROOT}`` reaches in Claude Code --
+        so the citation reads, at the address the skill's text produced.
+
+        ``LibraryFiles`` owns the rest of the rule, because it is the one that
+        knows the plugin's skill directories: a sibling skill's file is not
+        readable through this skill's address, however the two are spelled. A
+        legitimate sibling citation is ``../other/reference.md``, which the
+        dot-segment removal in ``parse`` turns into the sibling's own address
+        before any of this runs.
+        """
+        if hidden(Path(file)) or PurePosixPath(file).name in RESERVED_NAMES:
+            return None
+        return self._resources.read_under(skill.library, skill.root, file)
 
     def _library_files_body(self, library: str, scope: Scope) -> str | None:
         files = self._library_files(library, scope)
