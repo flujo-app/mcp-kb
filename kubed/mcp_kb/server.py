@@ -44,6 +44,7 @@ from pathlib import Path
 from fastmcp import FastMCP
 
 from . import routes
+from .catalogue.harvest import inside
 from .catalogue.index import (
     INDEX_VERSION,
     FetchRecord,
@@ -277,9 +278,10 @@ class KnowledgeBase:
             if not _serving(record):
                 errors[name] = record.error or "the marketplace could not be fetched"
                 continue
-            root = Path(record.root or "")
-            if address.subdir:
-                root = root / address.subdir
+            root = _root(Path(record.root or ""), address.subdir)
+            if root is None:
+                errors[name] = _not_in(address.subdir, fetch)
+                continue
             if find_marketplace(root) is None:
                 errors[name] = f"no marketplace.json under {address.subdir or '/'}"
                 continue
@@ -343,13 +345,9 @@ class KnowledgeBase:
         """
         if not _serving(fetch):
             return plugin, failed_plugin(plugin, fetch.error or "the fetch failed")
-        root = Path(fetch.root or "")
-        if plugin.subdir:
-            root = root / plugin.subdir
-        if not root.is_dir():
-            return plugin, failed_plugin(
-                plugin, f"{plugin.subdir or '/'} is not a directory in {fetch.key}"
-            )
+        root = _root(Path(fetch.root or ""), plugin.subdir)
+        if root is None:
+            return plugin, failed_plugin(plugin, _not_in(plugin.subdir, plugin.fetch))
         try:
             plugin, globs = with_manifest(plugin, root)
         except ValueError as exc:
@@ -493,6 +491,38 @@ class KnowledgeBase:
                 show_banner=False,
                 uvicorn_config={"log_config": None},
             )
+
+
+def _root(fetch_root: Path, subdir: str) -> Path | None:
+    """The plugin or marketplace root inside a materialised fetch, or None.
+
+    ``inside`` is the guard the harvest and every read use, and it belongs
+    here too: a subdir that is a *symlink* out of the fetch makes ``is_dir()``
+    true for an arbitrary directory, which then becomes the harvest's base --
+    so everything under it is "contained" relative to the escaped root and is
+    served. ``..`` never gets this far (``parse_address`` refuses it), and a
+    link inside the fetch still resolves, which is what makes a ConfigMap
+    mount -- every path of which is a symlink -- servable.
+
+    The path handed back is the one that was asked for rather than its
+    target, because that is what a ``skill://`` address and an index row are
+    built from; containment is decided on the resolved one and nothing else.
+    """
+    root = fetch_root / subdir
+    if inside(root, fetch_root.resolve()) is None or not root.is_dir():
+        return None
+    return root
+
+
+def _not_in(subdir: str, fetch: Fetch) -> str:
+    """Why a root was refused: the subdir and the fetch, and no cache path.
+
+    One message for both refusals, because from outside they are one thing --
+    the fetch holds no directory this plugin or marketplace can be served
+    from, whether because there is nothing there or because what is there
+    leads out of the tree.
+    """
+    return f"{subdir or '/'} is not a directory in {fetch.key}"
 
 
 def _serving(record: FetchRecord | PluginRecord) -> bool:

@@ -440,3 +440,149 @@ async def test_a_cold_start_reuses_the_index_and_re_reads_the_marketplace(
 
     assert second.status["libraries"]["obs"]["plugins"] == ["lgtm@obs", "k6@obs"]
     assert await _skills(second) == await _skills(first)
+
+
+# -- the containment guard on a plugin or marketplace root ---------------------
+
+
+@pytest.fixture
+def linked(tmp_path):
+    """A ``file://`` tree holding symlinks: three out of it, two inside it.
+
+    A `git` export cannot carry one -- it writes a symlink as a regular file
+    holding its target text -- so a local tree is the reachable case, and a
+    ConfigMap mount, which is symlinks the whole way down, is the reason the
+    in-root ones have to keep working.
+    """
+    outside = tmp_path / "outside"
+    _skill(outside, "skills/leak", "leak")
+    _catalog(outside, {"name": "foreign", "source": "./"})
+    _write(outside, "plugin.json", json.dumps({"keywords": ["foreign"]}))
+
+    tree = tmp_path / "tree"
+    _skill(tree, "good/skills/ok", "ok")
+    _skill(tree, "manifested/skills/m", "m")
+    (tree / "manifested" / "plugin.json").symlink_to(outside / "plugin.json")
+    # A ConfigMap mount, in the shape Kubernetes writes it: the key is a link
+    # to `..data`, which is a link to the current timestamped directory.
+    _skill(tree, "mounted/skills/mine", "mine")
+    _write(tree, "mounted/..2026_09_18/plugin.json", json.dumps({"keywords": ["m"]}))
+    (tree / "mounted" / "..data").symlink_to("..2026_09_18")
+    (tree / "mounted" / "plugin.json").symlink_to("..data/plugin.json")
+    _write(tree, "market/.gitkeep", "")
+    (tree / "market" / ".claude-plugin").mkdir(parents=True)
+    (tree / "market" / ".claude-plugin" / "marketplace.json").symlink_to(
+        outside / ".claude-plugin" / "marketplace.json"
+    )
+    (tree / "link").symlink_to(outside)
+    (tree / "inner").symlink_to(tree / "good")
+    return tree
+
+
+def _linked_config(tree, **extra):
+    return Config.model_validate(
+        {
+            "plugins": [
+                {"name": "good", "source": f"file://{tree}//good"},
+                {"name": "escaped", "source": f"file://{tree}//link"},
+            ],
+            "libraries": [{"name": "kit", "plugins": ["good", "escaped"]}],
+            **extra,
+        }
+    )
+
+
+async def test_a_subdir_symlinked_out_of_the_tree_fails_that_plugin(linked, tmp_path):
+    """The escape is the plugin's own failure, named, and the library serves on.
+
+    Reachable only through a link: `..` is refused by ``parse_address``. Left
+    unguarded, ``root.is_dir()`` is true for the link's target and everything
+    under it becomes "contained" relative to it -- so the tree next door is
+    served as this plugin.
+    """
+    kb = KnowledgeBase(_linked_config(linked), tmp_path / "cache")
+    health = await _health(kb)
+
+    assert health["plugins"]["escaped"]["status"] == "failed"
+    assert health["plugins"]["escaped"]["error"] == (
+        f"link is not a directory in file://{linked}"
+    )
+    assert await _skills(kb) == ["skill://kit/ok/SKILL.md"]
+    assert "leak" not in json.dumps(await _health(kb))
+
+
+async def test_a_marketplace_subdir_symlinked_out_of_the_tree_is_the_librarys_error(
+    linked, tmp_path
+):
+    """The same guard on the other root, where an escape would have this server
+    ingest somebody else's whole catalogue as a library of ours."""
+    config = _linked_config(
+        linked, libraries=[{"name": "far", "source": f"file://{linked}//link"}]
+    )
+    kb = KnowledgeBase(config, tmp_path / "cache")
+    health = await _health(kb)
+
+    assert health["libraries"]["far"] == {
+        "description": "",
+        "plugins": [],
+        "skills": 0,
+        "prompts": 0,
+        "files": 0,
+        "error": f"link is not a directory in file://{linked}",
+    }
+    assert await _skills(kb) == []
+
+
+async def test_a_marketplace_json_symlinked_out_of_the_tree_is_not_read(
+    linked, tmp_path
+):
+    """``is_file()`` follows a link, so a tree could point at a catalogue it
+    does not hold. The library reports no marketplace rather than reading it."""
+    config = _linked_config(
+        linked, libraries=[{"name": "near", "source": f"file://{linked}//market"}]
+    )
+    kb = KnowledgeBase(config, tmp_path / "cache")
+    health = await _health(kb)
+
+    assert health["libraries"]["near"]["error"] == "no marketplace.json under market"
+    assert health["libraries"]["near"]["plugins"] == []
+
+
+async def test_a_plugin_json_symlinked_out_of_the_root_is_not_read(linked, tmp_path):
+    """The plugin serves what it holds, uncompleted: an external manifest's
+    description and keywords are not its publisher's word on it."""
+    config = Config.model_validate(
+        {
+            "plugins": [{"name": "m", "source": f"file://{linked}//manifested"}],
+            "libraries": [{"name": "kit", "plugins": ["m"]}],
+        }
+    )
+    kb = KnowledgeBase(config, tmp_path / "cache")
+    health = await _health(kb)
+
+    assert health["plugins"]["m"]["status"] == "ok"
+    assert health["plugins"]["m"]["keywords"] == []
+    assert await _skills(kb) == ["skill://kit/m/SKILL.md"]
+
+
+async def test_an_in_root_symlinked_subdir_and_manifest_still_serve(linked, tmp_path):
+    """The ConfigMap case, which the guard must not cost: every path of a
+    mounted volume is a symlink, and both roots resolve inside the tree."""
+    config = Config.model_validate(
+        {
+            "plugins": [
+                {"name": "inner", "source": f"file://{linked}//inner"},
+                {"name": "mounted", "source": f"file://{linked}//mounted"},
+            ],
+            "libraries": [{"name": "kit", "plugins": ["inner", "mounted"]}],
+        }
+    )
+    kb = KnowledgeBase(config, tmp_path / "cache")
+    health = await _health(kb)
+
+    assert health["plugins"]["inner"]["status"] == "ok"
+    assert health["plugins"]["mounted"]["keywords"] == ["m"]
+    assert await _skills(kb) == [
+        "skill://kit/mine/SKILL.md",
+        "skill://kit/ok/SKILL.md",
+    ]

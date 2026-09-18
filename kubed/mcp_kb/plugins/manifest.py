@@ -17,6 +17,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from ..catalogue.harvest import readable
+
 MANIFEST_FILES = (".claude-plugin/plugin.json", "plugin.json")
 
 
@@ -31,10 +33,17 @@ class Manifest:
 
 
 def read_manifest(root: Path) -> Manifest | None:
-    """The plugin's manifest, or None when it ships none."""
+    """The plugin's manifest, or None when it ships none.
+
+    Found through ``readable``, the guard every read shares: a ``plugin.json``
+    that is a symlink out of the root is not this plugin's manifest, and
+    ``is_file()`` alone would follow it and let a foreign file's description
+    and keywords into the catalogue. A link inside the root still resolves,
+    which is the ConfigMap case.
+    """
     for name in MANIFEST_FILES:
-        path = root / name
-        if path.is_file():
+        path = readable(root, name)
+        if path is not None:
             break
     else:
         return None

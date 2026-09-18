@@ -171,9 +171,11 @@ def test_catalogue_imports_no_fastmcp():
 def test_plugins_import_no_fastmcp():
     """And every module of the resolution layer, which is checked on its own.
 
-    Two promises, two tests: ``plugins/`` is reachable from ``catalogue/`` but
-    not the reverse, and a layer that has to wait for the other one to be
-    fixed before its own boundary can be proved is not a boundary.
+    Two promises, two tests: neither layer imports FastMCP, and a layer that
+    has to wait for the other one to be fixed before its own boundary can be
+    proved is not a boundary. ``plugins/`` does import ``catalogue/harvest``
+    -- the containment guard is defined once and shared -- so what is proved
+    here is the protocol library, not the direction of that import.
     """
     result = imports_clean(PLUGINS_MODULES)
     assert result.returncode == 0, result.stderr

@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
+from ..catalogue.harvest import readable
 from ..config import NAME
 from . import Fetch, Globs, Plugin, fetch_for
 from .address import Address, parse_address
@@ -50,10 +51,16 @@ class _Skip(ValueError):
 
 
 def find_marketplace(root: Path) -> Path | None:
-    """The catalog file in a tree, in the order the conventions are published."""
+    """The catalog file in a tree, in the order the conventions are published.
+
+    Through ``readable``, the guard every read shares: ``is_file()`` follows a
+    symlink, so a tree whose ``.claude-plugin/marketplace.json`` points out of
+    itself would have a foreign catalogue read as its own. A link *inside* the
+    tree still resolves, which is what makes a ConfigMap mount servable.
+    """
     for name in MARKETPLACE_FILES:
-        path = root / name
-        if path.is_file():
+        path = readable(root, name)
+        if path is not None:
             return path
     return None
 
