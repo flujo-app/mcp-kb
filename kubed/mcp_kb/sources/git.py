@@ -113,10 +113,10 @@ def _repository(fetch: Fetch, cache: Path) -> tuple[pygit2.Repository, bool]:
     """
     bare = cache / "git" / fetch.slug
     if bare.exists():
-        try:
-            return pygit2.Repository(str(bare)), False
-        except pygit2.GitError:
-            shutil.rmtree(bare, ignore_errors=True)
+        repo = _reusable(bare, fetch.url)
+        if repo is not None:
+            return repo, False
+        shutil.rmtree(bare, ignore_errors=True)
 
     tmp = bare.with_name(bare.name + ".tmp")
     shutil.rmtree(tmp, ignore_errors=True)
@@ -135,6 +135,32 @@ def _repository(fetch: Fetch, cache: Path) -> tuple[pygit2.Repository, bool]:
         raise _failed(fetch, "clone failed", exc) from exc
     tmp.rename(bare)
     return pygit2.Repository(str(bare)), True
+
+
+def _reusable(bare: Path, url: str) -> pygit2.Repository | None:
+    """The clone at ``bare``, when it opens *and* is a clone of ``url``.
+
+    The slug is a digest of the fetch key -- ``<source>://<path>[?ref=]`` --
+    and the key says nothing about where that source points: change a
+    source's ``url`` from ``git+https://github.com`` to another host and the
+    same key resolves to a different repository at the same slug. Opening what
+    is there would then go on serving the old one, silently, for as long as the
+    cache volume lives. A clone whose ``origin`` is not this fetch's URL is
+    therefore thrown away exactly as an unopenable one is, and re-cloned; the
+    cache is derived data and re-cloning is the cheapest correct answer.
+    """
+    try:
+        repo = pygit2.Repository(str(bare))
+    except pygit2.GitError:
+        return None
+    try:
+        origin = repo.remotes["origin"].url
+    except (KeyError, pygit2.GitError):
+        origin = None
+    if origin != url:
+        repo.free()
+        return None
+    return repo
 
 
 # How libgit2 words a remote refusing the credentials it was given ("too many

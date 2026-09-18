@@ -399,6 +399,61 @@ def test_an_export_is_not_repeated_for_a_commit_already_exported(origin, tmp_pat
     assert _body(root) == "proof this file was not rewritten"
 
 
+def _repository_holding(root, name):
+    """A one-commit repository at ``root`` whose only skill is ``name``."""
+    skill = root / "skills" / name
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: The {name} repository.\n---\n\n{name}\n"
+    )
+    repo = pygit2.init_repository(str(root), bare=False, initial_head="main")
+    repo.index.add_all()
+    repo.index.write()
+    repo.create_commit(
+        "refs/heads/main", SIGNATURE, SIGNATURE, "one", repo.index.write_tree(), []
+    )
+    return root
+
+
+def _pointing_at(base):
+    """A config whose `lab` source is ``base``: same plugin, same fetch key."""
+    return Config.model_validate(
+        {
+            "sources": [{"name": "lab", "url": f"git+file://{base}"}],
+            "plugins": [
+                {
+                    "name": "library",
+                    "source": "lab://repo",
+                    "skills": ["skills/*/SKILL.md"],
+                }
+            ],
+            "libraries": [{"name": "library", "plugins": ["library"]}],
+        }
+    )
+
+
+@pytest.mark.unit
+def test_a_source_remapped_to_another_repository_serves_the_new_one(tmp_path):
+    """The slug is a digest of the fetch key, and the key -- `lab://repo` --
+    says nothing about where `lab` points. Change the source's url and the
+    same key resolves to a different repository at the same slug, so opening
+    whatever clone is there went on serving the old one for as long as the
+    cache volume lived. Both repositories are named `repo` under a different
+    parent, which is exactly what remapping a host looks like."""
+    _repository_holding(tmp_path / "a" / "repo", "alpha")
+    _repository_holding(tmp_path / "b" / "repo", "beta")
+    cache = tmp_path / "cache"
+
+    first = KnowledgeBase(_pointing_at(tmp_path / "a"), cache)
+    assert [s.name for s in first.index.visible()] == ["alpha"]
+
+    second = KnowledgeBase(_pointing_at(tmp_path / "b"), cache)
+
+    assert [s.name for s in second.index.visible()] == ["beta"]
+    assert "beta" in second.catalogue.read("skill://library/beta/SKILL.md")
+    assert second.status["plugins"]["library"]["status"] == "ok"
+
+
 # -- fingerprint ---------------------------------------------------------------
 
 
