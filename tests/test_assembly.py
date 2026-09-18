@@ -321,6 +321,45 @@ async def test_a_refresh_of_a_marketplace_fetch_serves_an_entry_it_gained(
     assert kb.generation == 1
 
 
+async def _reindex(knowledge_base):
+    transport = httpx.ASGITransport(app=knowledge_base.mcp.http_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://kb") as http:
+        return (await http.post("/reindex")).json()
+
+
+def _elsewhere(name, tmp_path):
+    """An entry on another repository under the same declared source."""
+    return {
+        "name": name,
+        "source": {"source": "url", "url": f"file://{tmp_path / name}"},
+    }
+
+
+async def test_a_refresh_reports_the_fetch_a_gained_entry_brought(market, tmp_path):
+    """`rebuilt` was appended to only inside the loop over *this* generation's
+    fetches, and the repository a new entry points at is materialised after it,
+    by `_assemble`. It was cloned, so it is reported: `/reindex`'s `rebuilt`
+    and one log line are the only places an operator sees that it was."""
+    for name in ("other", "third"):
+        _skill(tmp_path / name, f"skills/{name}", name)
+        _commit(tmp_path / name)
+    config = _config(tmp_path, libraries=[{"name": "obs", "source": "lab://market"}])
+    kb = KnowledgeBase(config, tmp_path / "cache")
+    assert kb.refresh() == []
+
+    lgtm = {"name": "lgtm", "source": "./lgtm"}
+    _catalog(market, lgtm, _elsewhere("other", tmp_path))
+    _commit(market, "add other")
+    assert kb.refresh() == ["lab://market", "lab://other"]
+    assert "other." in await _read(kb, "skill://obs/other/SKILL.md")
+
+    _catalog(market, lgtm, _elsewhere("other", tmp_path), _elsewhere("third", tmp_path))
+    _commit(market, "add third")
+    body = await _reindex(kb)
+    assert body["rebuilt"] == ["lab://market", "lab://other", "lab://third"]
+    assert "third." in await _read(kb, "skill://obs/third/SKILL.md")
+
+
 @pytest.fixture
 def manifested(tmp_path):
     """A repository whose one entry is bare -- no tags, no category -- while

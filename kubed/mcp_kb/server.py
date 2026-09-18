@@ -441,7 +441,14 @@ class KnowledgeBase:
                 for pid, record in self._records.items()
                 if record.fetch not in rebuilt
             }
+            known = set(fetches)
             plugins, libraries, records = self._assemble(fetches, reusable)
+            # A marketplace re-read above may have gained an entry on another
+            # repository, which `_assemble` materialises -- after the loop,
+            # which only ever sees the fetches this generation already had. It
+            # was built, so it belongs in what was rebuilt; otherwise
+            # `/reindex` and the log both omit a clone that really happened.
+            rebuilt += [key for key in fetches if key not in known]
             self._fetches, self._plugins = fetches, plugins
             self._libraries, self._records = libraries, records
             snapshot = self._build(generation=self.snapshot.generation + 1)
