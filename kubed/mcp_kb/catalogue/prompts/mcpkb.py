@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from .shape import Argument, Parsed, description_of, dropped_keys
+from .shape import Argument, Parsed, description_of, dropped_keys, objects, text
 
 NAME = "mcp-kb"
 
@@ -26,27 +26,27 @@ def parse(meta: dict, body: str) -> Parsed:
     """The arguments as declared, refusing a file that contradicts itself."""
     arguments: list[Argument] = []
     defaults: dict[str, str] = {}
-    for raw in meta.get("arguments") or []:
-        if not isinstance(raw, dict) or not raw.get("name"):
-            raise ValueError(f"argument without a name: {raw!r}")
-        name = str(raw["name"])
+    for raw in objects(meta.get("arguments"), "arguments"):
+        name = text(raw.get("name"), "an argument's name")
+        if not name:
+            raise ValueError(f"argument without a name: {sorted(raw)}")
+        about = text(raw.get("description"), f"argument {name}'s description")
         required = bool(raw.get("required", False))
         if required and "default" in raw:
             raise ValueError(f"required argument '{name}' cannot have a default")
         arguments.append(
-            Argument(name=name, description=raw.get("description"), required=required)
+            Argument(name=name, description=about, required=required)
         )
         if "default" in raw:
-            defaults[name] = str(raw["default"])
+            defaults[name] = text(raw["default"], f"argument {name}'s default") or ""
 
     undeclared = sorted(set(PLACEHOLDER.findall(body)) - {a.name for a in arguments})
     if undeclared:
         raise ValueError(f"placeholders with no argument: {', '.join(undeclared)}")
 
-    title = meta.get("title")
     return Parsed(
         description=description_of(meta),
-        title=None if title is None else str(title),
+        title=text(meta.get("title"), "title"),
         arguments=arguments,
         defaults=defaults,
         dropped=dropped_keys(meta, MEANINGFUL),

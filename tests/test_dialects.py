@@ -566,3 +566,104 @@ def test_a_prompt_md_in_a_commands_tree_is_copilots(tmp_path):
     (prompt,) = kb.snapshot.prompts
     assert prompt.dialect == "copilot"
     assert prompt.render({"who": "you"}) == "Hi you."
+
+
+# -- a wrong-typed field is one file's defect -----------------------------------
+
+# (label, dialect, the frontmatter, the field the reason must name).
+#
+# Frontmatter is fetched content: `arguments: true` is a file somebody will
+# publish one day, and every one of these was a `TypeError` or a Python repr
+# in a served description before the readers in `shape.py` existed. What the
+# table holds is the *class* -- every field each dialect reads, in the wrong
+# shapes YAML can hand it -- because the failure is not any one field.
+MALFORMED = [
+    ("own-arguments-boolean", "mcp-kb", "description: d\narguments: true\n", "arguments"),
+    ("own-arguments-number", "mcp-kb", "description: d\narguments: 3\n", "arguments"),
+    # A string iterates one character at a time: four arguments named a, p, p.
+    ("own-arguments-scalar", "mcp-kb", "description: d\narguments: app\n", "arguments"),
+    ("own-arguments-numbers", "mcp-kb", "description: d\narguments:\n- 1\n- 2\n", "arguments"),
+    ("own-arguments-mapping", "mcp-kb", "description: d\narguments:\n  a: b\n", "arguments"),
+    (
+        "own-argument-name-mapping",
+        "mcp-kb",
+        "description: d\narguments:\n- name:\n    a: b\n",
+        "an argument's name",
+    ),
+    (
+        "own-argument-description-list",
+        "mcp-kb",
+        "description: d\narguments:\n- name: app\n  description: [a, b]\n",
+        "argument app's description",
+    ),
+    (
+        "own-argument-default-mapping",
+        "mcp-kb",
+        "description: d\narguments:\n- name: app\n  default:\n    a: b\n",
+        "argument app's default",
+    ),
+    ("own-description-mapping", "mcp-kb", "description:\n  a: b\n", "description"),
+    ("own-title-list", "mcp-kb", "description: d\ntitle: [a, b]\n", "title"),
+    ("claude-arguments-boolean", "claude", "description: d\narguments: true\n", "arguments"),
+    ("claude-arguments-number", "claude", "description: d\narguments: 3\n", "arguments"),
+    ("claude-arguments-numbers", "claude", "description: d\narguments:\n- 1\n- 2\n", "arguments"),
+    ("claude-arguments-mapping", "claude", "description: d\narguments:\n  a: b\n", "arguments"),
+    (
+        "claude-hint-mapping",
+        "claude",
+        "description: d\narguments: [app]\nargument-hint:\n  a: b\n",
+        "argument-hint",
+    ),
+    ("claude-description-list", "claude", "description: [a, b]\n", "description"),
+    ("copilot-description-mapping", "copilot", "description:\n  a: b\n", "description"),
+    ("copilot-hint-mapping", "copilot", "argument-hint:\n  a: b\n", "argument-hint"),
+    # A hint written as a list is a line of hints, so it is the *items* that
+    # have to be text: `[file] [board]` is two of them.
+    ("copilot-hint-mappings", "copilot", "argument-hint:\n- a: b\n", "argument-hint"),
+]
+
+
+def _both(base, dialect, frontmatter):
+    """A server over one plugin holding a malformed prompt beside a good one."""
+    root = base / "src"
+    write(root / "bad.md", frontmatter, "Text.")
+    write(root / "good.md", "description: Still here.\n", "Fine.")
+    config = Config.model_validate(
+        {
+            "plugins": [
+                {
+                    "name": "src",
+                    "source": f"file://{root}",
+                    "skills": [],
+                    "prompts": ["*.md"],
+                    "dialect": dialect,
+                }
+            ],
+            "libraries": [{"name": "lib", "plugins": ["src"]}],
+        }
+    )
+    return KnowledgeBase(config, base / "c")
+
+
+@pytest.mark.parametrize(
+    ("dialect", "frontmatter", "field"),
+    [row[1:] for row in MALFORMED],
+    ids=[row[0] for row in MALFORMED],
+)
+def test_a_wrong_typed_field_skips_that_file_and_nothing_else(
+    tmp_path, dialect, frontmatter, field
+):
+    """Through a real server, because the half that matters is that it starts.
+
+    `load_prompts` catches `ValueError`, so a field refused as one is a
+    skipped row in `/health`; a `TypeError` out of the same field escapes
+    `build_plugin`, `_assemble` and `_cold_start` and the process dies over
+    one file in somebody else's repository."""
+    kb = _both(tmp_path, dialect, frontmatter)
+
+    (prompt,) = kb.snapshot.prompts
+    assert prompt.name == "lib_good"
+    assert prompt.render() == "Fine."
+    skipped = kb.snapshot.status["plugins"]["src"]["skipped"]
+    assert [s["path"] for s in skipped] == ["bad.md"]
+    assert field in skipped[0]["reason"]

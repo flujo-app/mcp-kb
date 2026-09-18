@@ -6,6 +6,16 @@ dialect at the top of the file, where imports belong, and a dialect importing
 back from the half-initialised package would not find them yet. Both are
 re-exported from ``kubed.mcp_kb.catalogue.prompts``, which stays the import
 path everything outside this package uses.
+
+The readers below -- ``text``, ``names``, ``objects`` -- are why no dialect
+indexes or iterates a frontmatter value directly. Frontmatter is *fetched
+content*: a field is whatever YAML made of whatever somebody wrote, so
+``arguments: true`` is a file that will be published one day, and a dialect
+that iterated it would raise ``TypeError`` out of ``load_prompts`` -- which
+catches ``ValueError`` -- and take the cold start down over one file in
+somebody else's repository. Every wrong type is refused as a ``ValueError``
+naming the field instead, so that file is skipped with a reason an operator
+can read in ``/health`` and every other prompt of the plugin still serves.
 """
 
 from __future__ import annotations
@@ -46,9 +56,76 @@ class Parsed:
     dropped: tuple[str, ...] = ()
 
 
+def kind(value: object) -> str:
+    """What a field holds, in the words whoever wrote the file would use."""
+    if isinstance(value, dict):
+        return "a mapping"
+    if isinstance(value, list):
+        return "a list"
+    if isinstance(value, bool):
+        return "a boolean"
+    if isinstance(value, int | float):
+        return "a number"
+    return "text"
+
+
+def text(value: object, field: str) -> str | None:
+    """``value`` as one string, refusing a mapping or a list by naming ``field``.
+
+    A scalar is taken as written -- ``version: 2`` and an unquoted date are
+    what YAML made of them, and refusing those would be refusing the file over
+    a quote mark. A mapping or a list is a different shape entirely, and
+    ``str()`` over one publishes a Python repr as somebody's description.
+    """
+    if value is None:
+        return None
+    if isinstance(value, dict | list):
+        raise ValueError(f"{field} must be text, not {kind(value)}")
+    return str(value)
+
+
+def names(value: object, field: str) -> list[str]:
+    """``value`` as a list of names: one whitespace-separated string, or a list.
+
+    Claude's ``arguments``, which declares names and nothing about them.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return value.split()
+    if not isinstance(value, list):
+        raise ValueError(f"{field} must be a list of names, not {kind(value)}")
+    for item in value:
+        if not isinstance(item, str):
+            raise ValueError(
+                f"{field} must be a list of names, and one item is {kind(item)}"
+            )
+    return list(value)
+
+
+def objects(value: object, field: str) -> list[dict]:
+    """``value`` as a list of mappings: this server's own ``arguments``.
+
+    Absent and empty both mean "none declared". Everything else is refused,
+    including a bare string: iterating one would read an argument per
+    character and declare four arguments for ``arguments: app``.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{field} must be a list of objects, not {kind(value)}")
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"{field} must be a list of objects, and one item is {kind(item)}"
+            )
+    return value
+
+
 def description_of(meta: dict) -> str | None:
     """The description as one line: a folded YAML string arrives with newlines."""
-    return " ".join(str(meta.get("description", "")).split()) or None
+    one_line = text(meta.get("description"), "description") or ""
+    return " ".join(one_line.split()) or None
 
 
 def dropped_keys(meta: dict, meaningful: Sequence[str]) -> tuple[str, ...]:
@@ -65,8 +142,9 @@ def hint_of(meta: dict) -> str | None:
     """
     hint = meta.get("argument-hint")
     if isinstance(hint, list):
-        return " ".join(str(item) for item in hint)
-    return None if hint is None else str(hint)
+        parts = [text(item, "argument-hint") or "" for item in hint]
+        return " ".join(parts)
+    return text(hint, "argument-hint")
 
 
 def free_text(hint: str | None) -> Argument:

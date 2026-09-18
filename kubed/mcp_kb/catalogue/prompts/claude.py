@@ -25,6 +25,10 @@ from .shape import (
     hint_of,
 )
 
+# `substitute` keeps a local `names`, which is the declaration order of one
+# file; the reader is the module-wide one. Renamed so neither shadows the other.
+from .shape import names as declared_names
+
 NAME = "claude"
 
 MEANINGFUL = ("description", "arguments", "argument-hint")
@@ -47,11 +51,15 @@ TOKEN = re.compile(
 
 def parse(meta: dict, body: str) -> Parsed:
     """The declared names in order, plus the free text when the body wants it."""
-    names = _names(meta.get("arguments"))
-    arguments = [Argument(name=name) for name in names]
+    declared = declared_names(meta.get("arguments"), "arguments")
+    arguments = [Argument(name=name) for name in declared]
 
-    if FREE_TEXT not in names and (not names or POSITIONAL.search(body)):
-        arguments.append(free_text(hint_of(meta)))
+    # Read whether or not it is published: a wrong-typed field is the file's
+    # defect either way, and one refused only when the body happens to need it
+    # is a file that serves today and is skipped the day a `$1` is added.
+    hint = hint_of(meta)
+    if FREE_TEXT not in declared and (not declared or POSITIONAL.search(body)):
+        arguments.append(free_text(hint))
 
     return Parsed(
         description=description_of(meta),
@@ -107,14 +115,3 @@ def substitute(body: str, values: dict[str, str]) -> str:
         # arguments: hand them to the model rather than drop them.
         return f"{filled}\n\nARGUMENTS: {free}"
     return filled
-
-
-def _names(raw: object) -> list[str]:
-    """The declared names: a list of them, or one whitespace-separated string."""
-    if raw is None:
-        return []
-    if isinstance(raw, str):
-        return raw.split()
-    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
-        raise ValueError(f"arguments must be a list of names: {raw!r}")
-    return list(raw)
