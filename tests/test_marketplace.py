@@ -285,6 +285,31 @@ def test_a_sha_wins_over_a_ref(tmp_path):
     assert plugin.fetch.ref == "dead"
 
 
+@pytest.mark.parametrize("field", ["sha", "ref"])
+@pytest.mark.parametrize("value", [123, 1.5, True, ["main"], {"name": "main"}])
+def test_a_pin_that_is_not_text_is_skipped_rather_than_dropped(tmp_path, field, value):
+    """`sha: 1234567` is a number in YAML and in JSON, and `_fetch` appends
+    `?ref=` only for a string -- so the entry used to fall through to the
+    default branch, losing the pin its publisher wrote with no word anywhere.
+    A pin that cannot be honoured is the entry skipped."""
+    catalog = read(
+        tmp_path, entry(source={"source": "github", "repo": "o/r", field: value})
+    )
+
+    assert skip_reason(catalog) == f"{field} must be text naming a commit or a ref"
+
+
+def test_a_bad_ref_is_refused_even_when_a_good_sha_would_win(tmp_path):
+    """Both are read before either is chosen: a `ref` the publisher meant and
+    this server cannot use is not made harmless by a `sha` beside it."""
+    catalog = read(
+        tmp_path,
+        entry(source={"source": "github", "repo": "o/r", "sha": "dead", "ref": 7}),
+    )
+
+    assert skip_reason(catalog) == "ref must be text naming a commit or a ref"
+
+
 def test_a_github_entry_with_no_github_source_declared_is_skipped(tmp_path):
     gitlab_only = Config.model_validate(
         {"sources": [{"name": "gitlab", "url": "git+https://gitlab.com"}]}

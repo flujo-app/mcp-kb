@@ -168,7 +168,7 @@ def _where(
         raise _Skip("an entry needs a source")
 
     kind = source["source"]
-    ref = source.get("sha") or source.get("ref")  # a sha is the pinned one
+    ref = _pin(source)
     if kind == "github":
         repo = source.get("repo")
         if not isinstance(repo, str) or not repo:
@@ -195,6 +195,23 @@ def _where(
             subdir = _join("", path_in_repo)
         return _fetch(config, declared, path, ref), subdir
     raise _Skip(f"source type {kind} is not supported")
+
+
+def _pin(source: dict) -> object:
+    """The commit or ref an entry pins itself to: a ``sha`` first, then a ``ref``.
+
+    Both are checked before either is chosen, and a non-string is a skip
+    rather than a shrug: ``_fetch`` appends ``?ref=`` only for a string, so
+    ``sha: 1234567`` -- which YAML and JSON both read as a number -- used to
+    fall through to the default branch, serving a tree the publisher did not
+    ask for and saying nothing about it. An empty string stays what it always
+    was, the field unwritten.
+    """
+    for field in ("sha", "ref"):
+        value = source.get(field)
+        if value is not None and not isinstance(value, str):
+            raise _Skip(f"{field} must be text naming a commit or a ref")
+    return source.get("sha") or source.get("ref")
 
 
 def _host(url: str) -> str:
