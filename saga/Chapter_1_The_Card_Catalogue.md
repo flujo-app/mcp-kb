@@ -2772,6 +2772,39 @@ Everything older keeps #20's behaviour: -32602 naming the argument. One
 capability check, two tests (the modern path asks and then renders; the older
 path still errors), and the server is ready for the clients that arrive.
 
+### §C1.38 — Two rulings from the whole-branch review (2026-09-18)
+
+**1. The plugin-root fallback's ceiling excludes every skill directory of the
+*library*, not of the plugin.** §C1.35 point 3 locked the plugin root as the
+ceiling, and the first fix round read that as one plugin's root minus one
+plugin's skills. That is a plugin's-eye view of a library, and a library is not
+made of one plugin. Put two on the same root — which is precisely the shape
+§C1.32 blessed and the wiki recommends, a kit as the marketplace published it
+beside a plugin of your own for the files it cites — and the helper has no
+skill directories at all. Its root then answers for the kit's, so a client
+scoped to the helper's tags, which may not see skill `loki` at `skill://lib/loki`,
+reads `skill://lib/skills/loki/SKILL.md` and its references through the helper:
+the instructions arrive unsubstituted, at an address the skill's own scope
+refuses. The rule the address space rests on is one URI, one answer, under every
+scope; two answers depending on who asks is the same bug the D2 round closed
+inside a single plugin, escaped one level up. So the exclusion is computed over
+the union of every root registered for the library. It costs nothing — a plugin
+that conflicted was never registered, so that union is exactly the library's
+served and skipped skills — and it is now what the fallback means.
+
+**2. A marketplace library's ref must be one at which the marketplace file
+exists.** A ref is not a decoration; pinning one asserts that the thing being
+pinned is there. Penpot's `.claude-plugin/marketplace.json` arrived *after* the
+commit the old config pinned, so the library resolved to a repository with no
+catalogue in it — the server said so in one WARNING line and served zero skills
+and zero prompts, and the cluster, having no helper plugin of its own, would
+have dropped the library entirely on its next restart. Nobody had booted it. The
+example and the cluster now pin `efbefc93…`, verified live: 13 skills, 7 prompts,
+33 files, one clone for both plugins. The general lesson costs ten seconds and
+is worth writing down: a config that pins refs is only as true as the last boot,
+so a ref that moves gets a boot and a read of `/health` before it is committed,
+and a review of one repeats it.
+
 ## Closing questions for Dr K
 
 *Superseded by §C1.22 — the name, here and in question 1, is `mcp-kb`. What was
