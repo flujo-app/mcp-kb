@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-18
+
 The first release. **mcp-kb** is an MCP knowledge base: skills, prompts and agent
 material collected from git, WebDAV and folders into one catalogue, served as MCP
 resources — or as tools, for the clients that have none.
