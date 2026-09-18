@@ -54,7 +54,7 @@ from pathlib import Path, PurePosixPath
 
 from ..mcp.scope import EVERYTHING, Scope
 from . import placeholders
-from .harvest import hidden
+from .harvest import hidden, readable
 from .skills import LibraryFiles, Skill, SkillIndex
 
 SCHEME = "skill://"
@@ -170,6 +170,14 @@ def _manifest_json(skill: Skill) -> str:
     The same dot-file rule the harvest applies, so what a manifest advertises is
     what the skill ships: a client that syncs a skill to disk must not be sent
     after an editor's swap file.
+
+    Size and hash describe the bytes on disk, ``SKILL.md`` included -- and a
+    read of ``SKILL.md`` resolves ``${CLAUDE_PLUGIN_ROOT}`` and
+    ``${CLAUDE_SKILL_DIR}`` into addresses, so a client that hashes what it read
+    finds that one file differs. That is by design: the manifest describes the
+    skill as it was published, and the substitution is this server answering
+    the two placeholders it is the authority on (§C1.37). Every other file is
+    served verbatim and hashes equal.
     """
     files = []
     for path in sorted(_manifest_files(skill)):
@@ -574,10 +582,8 @@ class Catalogue:
         # beside a SKILL.md is not served to whoever guesses its name.
         if hidden(Path(file)):
             return None
-        # Resolve before comparing, which is what blocks ../ and a symlink
-        # pointing out of the skill directory.
-        target = (skill.path / file).resolve()
-        if not target.is_relative_to(skill.path.resolve()) or not target.is_file():
+        target = readable(skill.path, file)
+        if target is None:
             return None
         # A live source's file may have moved since it was copied, and this
         # is where that is noticed -- a read is the only thing that asks.
@@ -602,16 +608,17 @@ class Catalogue:
         own directory that is an address with nothing at it. The plugin root is
         the ceiling -- what ``${CLAUDE_PLUGIN_ROOT}`` reaches in Claude Code --
         so the citation reads, at the address the skill's text produced.
+
+        ``LibraryFiles`` owns the rest of the rule, because it is the one that
+        knows the plugin's skill directories: a sibling skill's file is not
+        readable through this skill's address, however the two are spelled. A
+        legitimate sibling citation is ``../other/reference.md``, which the
+        dot-segment removal in ``parse`` turns into the sibling's own address
+        before any of this runs.
         """
         if hidden(Path(file)) or PurePosixPath(file).name in RESERVED_NAMES:
             return None
-        root = skill.root.resolve()
-        target = (root / file).resolve()
-        if not target.is_relative_to(root) or not target.is_file():
-            return None
-        if self._revalidate is not None:
-            self._revalidate(target)
-        return target.read_text(encoding="utf-8", errors="replace")
+        return self._resources.read_under(skill.library, skill.root, file)
 
     def _library_files_body(self, library: str, scope: Scope) -> str | None:
         files = self._library_files(library, scope)

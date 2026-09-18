@@ -43,6 +43,18 @@ def _build(base):
         "---\nname: writing\ndescription: Write things.\n---\n\nSee shared/x.md.\n",
     )
     _write(kit, "skills/writing/notes.md", "skill notes\n")
+    _write(
+        kit,
+        "skills/reading/SKILL.md",
+        "---\nname: reading\ndescription: Read things.\n---\n\nSibling.\n",
+    )
+    # Harvested as a skill and then skipped: `Upper` is not one URI segment.
+    _write(
+        kit,
+        "skills/Upper/SKILL.md",
+        "---\nname: Upper\ndescription: Skipped.\n---\n\nUNSERVED SKILL\n",
+    )
+    _write(kit, "skills/Upper/leak.md", "UNSERVED FILE\n")
     _write(kit, "shared/x.md", "shared bytes\n")
     _write(kit, "shared/.env", "SHARED_SECRET=1\n")
     _write(kit, "docs/guide.md", "the guide\n")
@@ -166,6 +178,28 @@ async def test_a_path_inside_a_skill_is_refused_at_the_library_base(url):
     ):
         assert await _missing(url, uri)
         assert "skill notes" not in await _tool(url, uri)
+
+
+async def test_a_sibling_skills_file_is_not_readable_through_this_skill(url):
+    """One file, one address. The plugin root holds the other skills too, and
+    reaching one through a sibling's address would serve its bytes twice --
+    unsubstituted the second time. A real sibling citation is
+    ``../reading/SKILL.md``, which is the sibling's own address by the time a
+    read happens."""
+    assert "Sibling." in await _read(url, "skill://kit/reading/SKILL.md")
+    alias = "skill://kit/writing/skills/reading/SKILL.md"
+    assert await _missing(url, alias)
+    assert "Sibling." not in await _tool(url, alias)
+
+
+async def test_a_skipped_skills_files_are_not_readable_through_a_served_one(url):
+    """A skill the snapshot would not serve is still a skill directory: its
+    files are nobody's to read, at any address."""
+    assert await _missing(url, "skill://kit/Upper/SKILL.md")
+    for rel in ("skills/Upper/SKILL.md", "skills/Upper/leak.md"):
+        for uri in (f"skill://kit/{rel}", f"skill://kit/writing/{rel}"):
+            assert await _missing(url, uri)
+            assert "UNSERVED" not in await _tool(url, uri)
 
 
 async def test_the_plugin_roots_are_tried_in_the_librarys_order(url):

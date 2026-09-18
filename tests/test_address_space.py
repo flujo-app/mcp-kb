@@ -276,7 +276,10 @@ async def test_every_other_file_of_the_skill_is_served_verbatim(url):
 
 async def test_a_prompt_body_names_the_plugin_root_in_every_dialect(tmp_path):
     """A prompt is not a skill and has no directory of its own, so
-    ``${CLAUDE_SKILL_DIR}`` stays as written; the plugin root is answered."""
+    ``${CLAUDE_SKILL_DIR}`` stays as written; the plugin root is answered.
+
+    Through both surfaces: the mirror renders the same prompt, so a client
+    with no prompts of its own reads the same addresses."""
     root = tmp_path / "plugin"
     cite = "Read ${CLAUDE_PLUGIN_ROOT}/shared/x.md, not ${CLAUDE_SKILL_DIR}.\n"
     _write(root, "prompts/own.md", f"---\ndescription: Ours.\n---\n{cite}")
@@ -300,12 +303,16 @@ async def test_a_prompt_body_names_the_plugin_root_in_every_dialect(tmp_path):
             name: (await client.get_prompt(name)).messages[0].content.text
             for name in ("kit_own", "kit_theirs", "kit_vscode")
         }
+        mirrored = await client.call_tool("get_prompt", {"name": "kit_own"})
     assert {p.dialect for p in knowledge_base.prompts} == {
         "mcp-kb",
         "claude",
         "copilot",
     }
     assert set(rendered.values()) == {expected}
+    assert json.loads(mirrored.content[0].text)["messages"] == [
+        {"role": "user", "content": expected}
+    ]
 
 
 # -- dot segments ---------------------------------------------------------------

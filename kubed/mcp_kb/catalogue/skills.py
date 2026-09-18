@@ -135,15 +135,15 @@ class _Root:
         return scope.admits_labels(self.plugin.category, self.plugin.labels)
 
     def holds(self, rel: str) -> Path | None:
-        """``rel`` as a file inside this root that the fallback may serve, or None.
+        """``rel`` as a file inside this root that a fallback may serve, or None.
 
-        Containment is decided on the resolved path, which is what refuses a
-        ``..`` and a symlink pointing out of the tree; a path inside one of the
-        plugin's skills is refused because that file already has an address,
-        the skill's.
+        ``harvest.readable`` decides containment; on top of it, a path inside
+        one of the plugin's skills is refused because that file already has an
+        address -- the skill's -- whether or not the skill is one the snapshot
+        went on to serve.
         """
-        target = (self.base / rel).resolve()
-        if not target.is_relative_to(self.base) or not target.is_file():
+        target = harvest.readable(self.base, rel)
+        if target is None:
             return None
         if any(target == d or d in target.parents for d in self.skills):
             return None
@@ -271,6 +271,25 @@ class LibraryFiles:
             return None
         for entry in self._roots.get(library, ()):
             if not entry.admits(scope):
+                continue
+            target = entry.holds(rel)
+            if target is not None:
+                return self._serve(target)
+        return None
+
+    def read_under(self, library: str, root: Path, rel: str) -> str | None:
+        """Read ``rel`` under one plugin root of ``library``, or None.
+
+        What ``read_any`` does for every root, for the one root a caller
+        already has: ``uris.py``'s skill-level fallback, where the root is the
+        skill's own plugin's and the scope was decided by that skill being
+        visible at all. Same rule, so a path inside any of that plugin's skill
+        directories is refused here too -- reaching one through a sibling's
+        address would serve one file at two addresses.
+        """
+        base = root.resolve()
+        for entry in self._roots.get(library, ()):
+            if entry.base != base:
                 continue
             target = entry.holds(rel)
             if target is not None:
