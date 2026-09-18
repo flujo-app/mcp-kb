@@ -146,10 +146,24 @@ class _Root:
         target = harvest.readable(self.base, rel)
         if target is None:
             return None
-        blocked = (*self.skills, *excluded)
-        if any(target == d or d in target.parents for d in blocked):
+        if _inside(target, (*self.skills, *excluded)):
             return None
         return target
+
+    def shadowed(self, rel: str, excluded: Iterable[Path] = ()) -> bool:
+        """Whether ``rel`` under this root belongs to a skill rather than here.
+
+        The same rule ``holds`` applies, on the path alone: a listing asks
+        whose address this is, not whether the bytes are there this second --
+        a live tree's file may come and go between a listing and a read, and
+        that is not this question.
+        """
+        return _inside((self.base / rel).resolve(), (*self.skills, *excluded))
+
+
+def _inside(target: Path, dirs: Iterable[Path]) -> bool:
+    """Whether ``target`` is one of ``dirs`` or sits under one."""
+    return any(target == d or d in target.parents for d in dirs)
 
 
 class LibraryFiles:
@@ -172,7 +186,12 @@ class LibraryFiles:
 
     Nothing here scans a directory. ``harvest.py`` already applied the globs,
     the dotfile rule and the skill-directory exclusion to produce ``files``;
-    this class only stores and serves what it is handed.
+    this class only stores and serves what it is handed -- with one correction
+    it is the only place that can make. Harvest and ``add`` both see one plugin
+    at a time, so a helper plugin globbing ``**/*`` over a root it shares with a
+    kit arrives holding the kit's skill files. Only a library knows all its
+    roots, so every method here excludes ``_skill_dirs(library)``: the listing
+    and the read agree, and neither answers for a skill.
 
     ``read_any`` is the one read that is not the harvested list: the plugin
     root as a fallback, for the paths a kit's own text points at. It lists
@@ -204,8 +223,7 @@ class LibraryFiles:
         base = root.resolve()
         dirs = [d.resolve() for d in skill_dirs]
         for rel in files:
-            target = (base / rel).resolve()
-            if any(target == d or d in target.parents for d in dirs):
+            if _inside((base / rel).resolve(), dirs):
                 raise ValueError(f"{rel!r} lies inside a skill directory")
         entry = _Root(base=base, files=tuple(files), plugin=plugin, skills=tuple(dirs))
         self._roots.setdefault(library, []).append(entry)
@@ -223,11 +241,21 @@ class LibraryFiles:
         ``scope``'s category and tags decide which plugins' roots count; its
         library is the caller's to have checked, since ``library`` is the one
         being asked about.
+
+        A path inside any skill directory of the library is left out, the same
+        exclusion ``read`` and the fallback apply: ``add`` could only refuse
+        the registering plugin's own skills, and a helper plugin globbing
+        ``**/*`` over a root it shares with a kit harvests the kit's skill
+        files. Listing them would advertise an address this does not answer.
         """
+        excluded = self._skill_dirs(library)
         found: list[str] = []
         for entry in self._roots.get(library, ()):
-            if entry.admits(scope):
-                found.extend(entry.files)
+            if not entry.admits(scope):
+                continue
+            found.extend(
+                rel for rel in entry.files if not entry.shadowed(rel, excluded)
+            )
         return found
 
     def read(self, library: str, rel: str, scope: Scope = EVERYTHING) -> str | None:
@@ -239,16 +267,19 @@ class LibraryFiles:
         file outside every configured ``files`` glob) is refused even though
         nothing here walks the directory to find that out. A registered path
         is still resolved and checked against its root before being read, as
-        defence in depth against a symlink pointing outside the tree; ``add``
-        already refused any path inside a skill directory, so none can be
-        registered here. Tries each root added for ``library`` in order and
-        returns the first hit.
+        defence in depth against a symlink pointing outside the tree, and
+        against every skill directory of the library -- ``add`` could only
+        refuse the registering plugin's own, and ``files`` leaves out exactly
+        the same paths, so nothing listed here cannot be read and nothing
+        readable belongs to a skill a scope hides. Tries each root added for
+        ``library`` in order and returns the first hit.
         """
         target_rel = PurePosixPath(rel).as_posix()
+        excluded = self._skill_dirs(library)
         for entry in self._roots.get(library, ()):
             if target_rel not in entry.files or not entry.admits(scope):
                 continue
-            target = entry.holds(rel)
+            target = entry.holds(rel, excluded)
             if target is not None:
                 return self._serve(target)
         return None
@@ -303,12 +334,16 @@ class LibraryFiles:
     def _skill_dirs(self, library: str) -> tuple[Path, ...]:
         """Every skill directory of every plugin registered for ``library``.
 
-        The ceiling on a fallback read is the library's, not the answering
-        plugin's. Two plugins on one root -- the shape ``penpot-shared`` has,
-        and the one an operator writes to add files beside somebody else's kit
-        -- would otherwise let a scope that admits only the file-shipping
-        plugin read the other's skill files at the library base, at an address
-        the skill's own scope refuses. One URI, one answer, under every scope.
+        What ``files``, ``read``, ``read_any`` and ``read_under`` all exclude:
+        the ceiling is the library's, not the answering plugin's. Two plugins
+        on one root -- the shape ``penpot-shared`` has, and the one an operator
+        writes to add files beside somebody else's kit -- would otherwise let a
+        scope that admits only the file-shipping plugin list and read the
+        other's skill files at the library base, at an address the skill's own
+        scope refuses. One URI, one answer, under every scope.
+
+        Computed per call rather than at ``add``: a library's roots arrive one
+        plugin at a time, so only a reader sees them all.
         """
         return tuple(d for entry in self._roots.get(library, ()) for d in entry.skills)
 

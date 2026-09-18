@@ -215,11 +215,14 @@ async def test_a_scope_that_excludes_the_plugin_reaches_nothing_under_its_root(u
     assert await _missing(url, "skill://kit/ops-notes.md", tags="core")
 
 
-def _build_shared_root(base):
+def _build_shared_root(base, helper_files=("shared/**/*",)):
     """Two plugins on one root: a kit, and a helper shipping its shared files.
 
     ``penpot-shared``'s shape, and what ``wiki/Plugins.md`` tells an operator to
-    write when somebody else's kit needs files beside it.
+    write when somebody else's kit needs files beside it. ``helper_files`` is
+    the helper's ``files:`` glob, because how wide it is decides whether the
+    kit's skill files are merely *reachable* under the helper's root or are
+    harvested into the helper's own list.
     """
     kit = base / "kit"
     _write(
@@ -240,7 +243,7 @@ def _build_shared_root(base):
                     "source": f"file://{kit}",
                     "tags": ["extra"],
                     "skills": [],
-                    "files": ["shared/**/*"],
+                    "files": list(helper_files),
                 },
             ],
             "libraries": [{"name": "lib", "plugins": ["a", "b"]}],
@@ -248,10 +251,9 @@ def _build_shared_root(base):
     )
 
 
-@pytest.fixture(scope="module")
-def shared_root_url(tmp_path_factory):
-    base = tmp_path_factory.mktemp("shared-root")
-    app = KnowledgeBase(_build_shared_root(base), base / "_cache").mcp.http_app()
+def _serve(base, config):
+    """A uvicorn server over ``config``, yielded as its ``/mcp`` URL."""
+    app = KnowledgeBase(config, base / "_cache").mcp.http_app()
     port = _free_port()
     server = uvicorn.Server(
         uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
@@ -265,6 +267,19 @@ def shared_root_url(tmp_path_factory):
     yield f"http://127.0.0.1:{port}/mcp"
     server.should_exit = True
     thread.join(timeout=5)
+
+
+@pytest.fixture(scope="module")
+def shared_root_url(tmp_path_factory):
+    base = tmp_path_factory.mktemp("shared-root")
+    yield from _serve(base, _build_shared_root(base))
+
+
+@pytest.fixture(scope="module")
+def globbed_root_url(tmp_path_factory):
+    """The same pair, with the helper globbing the whole root it shares."""
+    base = tmp_path_factory.mktemp("globbed-root")
+    yield from _serve(base, _build_shared_root(base, helper_files=("**/*",)))
 
 
 async def test_a_sibling_plugins_skill_is_not_readable_through_a_shared_root(
@@ -287,4 +302,30 @@ async def test_a_sibling_plugins_skill_is_not_readable_through_a_shared_root(
     # placeholder resolves there -- the point of keeping one address per file.
     body = await _read(url, "skill://lib/loki/SKILL.md", tags="core")
     assert "See skill://lib/loki/ref.md." in body
+    assert await _read(url, "skill://lib/loki/ref.md", tags="core") == "LOKI REF\n"
+
+
+async def test_a_helper_globbing_the_shared_root_neither_lists_nor_serves_its_skills(
+    globbed_root_url,
+):
+    """The same exclusion on the harvested list, which is the other half of it.
+
+    A helper with ``files: ["**/*"]`` over a root it shares with a kit harvests
+    the kit's skill files: harvest and ``add`` each see one plugin, and the
+    helper declares no skills of its own, so nothing below the library can
+    refuse them. Listing them would advertise an address the read refuses, and
+    serving them would hand a scope that hides the skill its instructions. The
+    library excludes them from both, and its own files are untouched.
+    """
+    url = globbed_root_url
+    listing = await _read(url, "skill://lib/_files.md", tags="extra")
+    assert "skill://lib/shared/x.md" in listing
+    assert "skills/loki" not in listing
+    assert await _read(url, "skill://lib/shared/x.md", tags="extra") == SHARED
+
+    for uri in ("skill://lib/skills/loki/SKILL.md", "skill://lib/skills/loki/ref.md"):
+        assert await _missing(url, uri, tags="extra")
+        assert "LOKI" not in await _tool(url, uri, tags="extra")
+        assert "Query Loki" not in await _tool(url, uri, tags="extra")
+
     assert await _read(url, "skill://lib/loki/ref.md", tags="core") == "LOKI REF\n"
