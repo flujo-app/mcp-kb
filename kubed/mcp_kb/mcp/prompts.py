@@ -42,6 +42,8 @@ from .scope import EVERYTHING, Scope
 from .tools import READ_ONLY
 
 if TYPE_CHECKING:
+    from fastmcp.server.context import Context
+
     from ..catalogue.snapshot import Snapshot
 
 # The key the one form elicitation is minted and read back under. A prompt asks
@@ -133,7 +135,7 @@ def _refused(exc: MissingArguments) -> ValidationError:
     return ValidationError(str(exc), log_level=logging.DEBUG)
 
 
-def _context():
+def _context() -> Context | None:
     """The active FastMCP context, or None when there is no request."""
     try:
         return get_context()
