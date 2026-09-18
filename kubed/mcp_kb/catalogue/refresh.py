@@ -63,12 +63,18 @@ class Schedule:
     def due(self, fetches: Iterable[Fetch]) -> list[str]:
         """The fetch keys whose refresh interval has elapsed since the last look.
 
-        A fetch never checked (``-inf``) is due immediately.
+        A fetch never checked (``-inf``) is due immediately. ``fetches`` is the
+        current generation's whole set, so a key no longer in it -- a
+        marketplace entry that went away -- is forgotten here rather than
+        remembered forever.
         """
+        current = list(fetches)
+        keys = {fetch.key for fetch in current}
+        self._checked = {k: at for k, at in self._checked.items() if k in keys}
         now = time.monotonic()
         return [
             fetch.key
-            for fetch in fetches
+            for fetch in current
             if fetch.refresh_seconds is not None
             and now - self._checked.get(fetch.key, float("-inf"))
             >= fetch.refresh_seconds

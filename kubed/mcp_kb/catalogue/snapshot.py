@@ -31,7 +31,7 @@ its error.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 
@@ -188,11 +188,13 @@ def build_plugin(plugin: Plugin, root: Path, *, globs: Globs) -> PluginRecord:
         skills = load_skills(dirs, library="", plugin=plugin, root=root)
         files = harvest.library_files(root, globs, dirs)
         unloadable: list[tuple[Path, str]] = []
-        prompts = _load_prompts(
-            plugin, root, harvest.prompt_files(root, globs), skipped=unloadable
-        )
+        found = harvest.prompt_files(root, globs)
+        groups: dict[str, list[Path]] = {}
+        for path in found:
+            groups.setdefault(_dialect(plugin, path, root), []).append(path)
+        prompts = _load_prompts(plugin, groups, skipped=unloadable)
     except OSError as exc:
-        return failed_plugin(plugin, _unrooted(str(exc), root))
+        return failed_plugin(plugin, unrooted(str(exc), root))
 
     return PluginRecord(
         id=plugin.id,
@@ -206,7 +208,7 @@ def build_plugin(plugin: Plugin, root: Path, *, globs: Globs) -> PluginRecord:
         files=tuple(files),
         skill_dirs=tuple(str(d) for d in dirs),
         skipped=tuple(
-            {"path": _relative(path, root), "reason": _unrooted(reason, root)}
+            {"path": _relative(path, root), "reason": unrooted(reason, root)}
             for path, reason in unloadable
         ),
     )
@@ -214,23 +216,19 @@ def build_plugin(plugin: Plugin, root: Path, *, globs: Globs) -> PluginRecord:
 
 def _load_prompts(
     plugin: Plugin,
-    root: Path,
-    files: Sequence[Path],
+    groups: dict[str, list[Path]],
     *,
     skipped: list[tuple[Path, str]],
     library: str = "",
     live: bool = False,
 ) -> list[FilePrompt]:
-    """``load_prompts`` per dialect: a file under a commands directory is Claude's.
+    """``load_prompts`` once per dialect group.
 
-    The dialect is decided here rather than in ``detect.py`` because it is the
-    one signal that lives in the path and not the file: a ``commands/`` tree is
-    Claude's convention, and a description-only command in it renders the same
-    in every dialect until it carries an ``argument-hint``.
+    At harvest the groups come from ``_dialect``; at snapshot time from the
+    rows, whose recorded dialect is the authority -- the same file is read
+    the same way on every rebuild and every restart, whatever the path rule
+    would say today.
     """
-    groups: dict[str, list[Path]] = {}
-    for path in files:
-        groups.setdefault(_dialect(plugin, path, root), []).append(path)
     prompts: list[FilePrompt] = []
     for dialect, paths in groups.items():
         prompts += load_prompts(
@@ -247,6 +245,14 @@ def _load_prompts(
 
 
 def _dialect(plugin: Plugin, path: Path, root: Path) -> str:
+    """The dialect a harvested file is read in: the plugin's, else by its path.
+
+    Decided here rather than in ``detect.py`` because it is the one signal
+    that lives in the path and not the file: a ``commands/`` tree is Claude's
+    convention, and a description-only command in it renders the same in
+    every dialect until it carries an ``argument-hint``. ``"auto"`` leaves the
+    rest to ``detect``, and what it decides is what the row records.
+    """
     if plugin.dialect != "auto":
         return plugin.dialect
     rel = _relative(path, root)
@@ -321,11 +327,12 @@ def build_snapshot(
     """Live objects from rows: the cheap half, run on every rebuild.
 
     Skills are rebuilt from their rows without touching disk. Prompts are
-    re-parsed from the paths their rows name -- a handful of small files, and
-    parsing them is far less code than serialising a rendered template and its
-    arguments into the index. A prompt file that vanished since the record was
-    written is logged and skipped by ``load_prompts``, so it simply stops being
-    served rather than taking the plugin down.
+    re-parsed from the paths their rows name, in the dialect their rows
+    record -- a handful of small files, and parsing them is far less code than
+    serialising a rendered template and its arguments into the index. A
+    prompt file that vanished since the record was written is logged and
+    skipped by ``load_prompts``, so it simply stops being served rather than
+    taking the plugin down.
 
     Within a plugin, what the address space has no room for is left out and
     listed under the plugin's ``skipped`` in ``/health`` (see ``_admit``);
@@ -350,85 +357,25 @@ def build_snapshot(
         for pid, record in records.items()
         if record.status == "ok" and record.root is not None
     }
-    vanished: dict[str, list[dict[str, str]]] = {}
-    memberships: dict[str, list[str]] = {pid: [] for pid in by_id}
+    # Filled by the first library that serves each plugin: the plugin's own
+    # counts, and the prompt files its rows name that are no longer there.
     served: dict[str, dict[str, int]] = {}
+    vanished: dict[str, list[dict[str, str]]] = {}
     status_libraries: dict[str, dict] = {}
 
     for lib in libraries:
-        claims = _Claims()
-        entry: dict = {
-            "description": lib.description,
-            "plugins": list(lib.plugins),
-            "skills": 0,
-            "prompts": 0,
-            "files": 0,
-        }
-        conflicts: dict[str, str] = {}
-        for pid in lib.plugins:
-            memberships.setdefault(pid, []).append(lib.name)
-            plugin = by_id[pid]
-            if pid not in admitted:
-                continue
-            root = Path(records[pid].root or "")
-            own = [
-                row.to_skill(
-                    library=lib.name,
-                    plugin=pid,
-                    root=root,
-                    category=plugin.category,
-                    tags=plugin.labels,
-                )
-                for row in admitted[pid].skills
-            ]
-            gone: list[tuple[Path, str]] = []
-            loaded = _load_prompts(
-                plugin,
-                root,
-                [Path(row.path) for row in admitted[pid].prompts],
-                skipped=gone,
-                library=lib.name,
-                live=is_live(plugin.fetch),
-            )
-            vanished.setdefault(
-                pid,
-                [
-                    {"path": _relative(p, root), "reason": _unrooted(r, root)}
-                    for p, r in gone
-                ],
-            )
-            files = admitted[pid].files
-            conflict = claims.conflict(lib.name, own, files, loaded)
-            if conflict is not None:
-                conflicts[pid] = conflict
-                continue
-            claims.claim(lib.name, pid, own, files, loaded)
-            skills += own
-            resources.add(
-                lib.name,
-                root,
-                files,
-                [Path(d) for d in records[pid].skill_dirs],
-                plugin=plugin,
-            )
-            prompts += loaded
-            counts = {"skills": len(own), "prompts": len(loaded), "files": len(files)}
-            served.setdefault(pid, counts)
-            for key, count in counts.items():
-                entry[key] += count
-        if lib.error:
-            entry["error"] = lib.error
-        if lib.skipped:
-            entry["skipped"] = list(lib.skipped)
-        if conflicts:
-            entry["conflicts"] = conflicts
+        entry, own, loaded = _serve_library(
+            lib, by_id, records, admitted, resources, served, vanished
+        )
+        skills += own
+        prompts += loaded
         status_libraries[lib.name] = entry
 
     status_plugins = {
         plugin.id: _plugin_status(
             plugin,
             records.get(plugin.id),
-            memberships.get(plugin.id, []),
+            [lib.name for lib in libraries if plugin.id in lib.plugins],
             admitted.get(plugin.id),
             served.get(plugin.id),
             vanished.get(plugin.id, []),
@@ -457,6 +404,89 @@ def build_snapshot(
     )
 
 
+def _serve_library(
+    lib: Library,
+    by_id: dict[str, Plugin],
+    records: dict[str, PluginRecord],
+    admitted: dict[str, _Admitted],
+    resources: LibraryFiles,
+    served: dict[str, dict[str, int]],
+    vanished: dict[str, list[dict[str, str]]],
+) -> tuple[dict, list[Skill], list[FilePrompt]]:
+    """One library's plugins in order: its ``/health`` entry, skills and prompts.
+
+    Registers the library's files on ``resources`` as it goes. ``served`` and
+    ``vanished`` are written for a plugin the first time any library serves
+    it, since both are the plugin's own and the same in every library.
+    """
+    claims = _Claims()
+    entry: dict = {
+        "description": lib.description,
+        "plugins": list(lib.plugins),
+        "skills": 0,
+        "prompts": 0,
+        "files": 0,
+    }
+    conflicts: dict[str, str] = {}
+    skills: list[Skill] = []
+    prompts: list[FilePrompt] = []
+    for pid in lib.plugins:
+        plugin = by_id[pid]
+        if pid not in admitted:
+            continue
+        root = Path(records[pid].root or "")
+        own = [
+            row.to_skill(
+                library=lib.name,
+                plugin=pid,
+                root=root,
+                category=plugin.category,
+                tags=plugin.labels,
+            )
+            for row in admitted[pid].skills
+        ]
+        groups: dict[str, list[Path]] = {}
+        for row in admitted[pid].prompts:
+            groups.setdefault(row.dialect, []).append(Path(row.path))
+        gone: list[tuple[Path, str]] = []
+        loaded = _load_prompts(
+            plugin, groups, skipped=gone, library=lib.name, live=is_live(plugin.fetch)
+        )
+        vanished.setdefault(
+            pid,
+            [
+                {"path": _relative(p, root), "reason": unrooted(r, root)}
+                for p, r in gone
+            ],
+        )
+        files = admitted[pid].files
+        conflict = claims.conflict(lib.name, own, files, loaded)
+        if conflict is not None:
+            conflicts[pid] = conflict
+            continue
+        claims.claim(lib.name, pid, own, files, loaded)
+        skills += own
+        resources.add(
+            lib.name,
+            root,
+            files,
+            [Path(d) for d in records[pid].skill_dirs],
+            plugin=plugin,
+        )
+        prompts += loaded
+        counts = {"skills": len(own), "prompts": len(loaded), "files": len(files)}
+        served.setdefault(pid, counts)
+        for key, count in counts.items():
+            entry[key] += count
+    if lib.error:
+        entry["error"] = lib.error
+    if lib.skipped:
+        entry["skipped"] = list(lib.skipped)
+    if conflicts:
+        entry["conflicts"] = conflicts
+    return entry, skills, prompts
+
+
 def _plugin_status(
     plugin: Plugin,
     record: PluginRecord | None,
@@ -477,7 +507,11 @@ def _plugin_status(
         "libraries": libraries,
     }
     if record is None or admitted is None:
-        entry["error"] = record.error if record is not None else "not built"
+        # A record that is not ok carries why; one that never got a root has
+        # nothing to say, and the key is typed as a string.
+        entry["error"] = (record.error if record is not None else None) or (
+            "not harvested"
+        )
         return entry
     # The plugin's own counts, library-independent: what a library gets from
     # it. Served once by some library, its prompts are the ones that parsed;
@@ -655,11 +689,13 @@ def _admit(record: PluginRecord) -> _Admitted:
     return _Admitted(list(served.values()), files, list(names.values()), skipped)
 
 
-def _unrooted(text: str, root: Path) -> str:
+def unrooted(text: str, root: Path) -> str:
     """``text`` with the plugin's root taken out of any path it quotes.
 
     A parse or read error names the file it failed on, absolutely; in ``/health``
     that would be the cache path ``_relative`` keeps out of every other row.
+    Public because the server reads a marketplace off the same kind of root
+    and publishes what went wrong the same way.
     """
     for base in (root.resolve(), root):
         text = text.replace(f"{base}/", "")

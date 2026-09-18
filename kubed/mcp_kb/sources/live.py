@@ -115,7 +115,7 @@ class Revalidator:
         ttl: float | None = None,
         cooldown: float | None = None,
     ):
-        self._sources = [
+        self._fetches = [
             _Live(fetch=fetch, root=root.resolve(), etags=recorded_etags(root))
             for fetch, root in fetches
         ]
@@ -180,7 +180,7 @@ class Revalidator:
         state where those two counters stop moving for a reason that is not
         "nothing changed".
         """
-        for live in self._sources:
+        for live in self._fetches:
             if live.fetch.key == key:
                 return {
                     "revalidated": live.revalidated,
@@ -196,7 +196,7 @@ class Revalidator:
     def _owner(self, path: Path) -> tuple[_Live, str] | None:
         """The live fetch ``path`` sits under, and its path within it."""
         resolved = path.resolve()
-        for live in self._sources:
+        for live in self._fetches:
             if resolved.is_relative_to(live.root):
                 return live, resolved.relative_to(live.root).as_posix()
         return None
