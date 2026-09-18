@@ -127,9 +127,27 @@ class _Root:
     # The plugin whose files these are: what a scope's category and tags are
     # checked against, since a file has no row of its own to carry them.
     plugin: Plugin
+    # The plugin's skill directories, resolved: what the root-wide fallback
+    # must not reach, since those paths are the skills' own addresses.
+    skills: tuple[Path, ...] = ()
 
     def admits(self, scope: Scope) -> bool:
         return scope.admits_labels(self.plugin.category, self.plugin.labels)
+
+    def holds(self, rel: str) -> Path | None:
+        """``rel`` as a file inside this root that a fallback may serve, or None.
+
+        ``harvest.readable`` decides containment; on top of it, a path inside
+        one of the plugin's skills is refused because that file already has an
+        address -- the skill's -- whether or not the skill is one the snapshot
+        went on to serve.
+        """
+        target = harvest.readable(self.base, rel)
+        if target is None:
+            return None
+        if any(target == d or d in target.parents for d in self.skills):
+            return None
+        return target
 
 
 class LibraryFiles:
@@ -153,6 +171,10 @@ class LibraryFiles:
     Nothing here scans a directory. ``harvest.py`` already applied the globs,
     the dotfile rule and the skill-directory exclusion to produce ``files``;
     this class only stores and serves what it is handed.
+
+    ``read_any`` is the one read that is not the harvested list: the plugin
+    root as a fallback, for the paths a kit's own text points at. It lists
+    nothing -- see its docstring.
     """
 
     def __init__(self, revalidate: Callable[[Path], None] | None = None) -> None:
@@ -183,7 +205,7 @@ class LibraryFiles:
             target = (base / rel).resolve()
             if any(target == d or d in target.parents for d in dirs):
                 raise ValueError(f"{rel!r} lies inside a skill directory")
-        entry = _Root(base=base, files=tuple(files), plugin=plugin)
+        entry = _Root(base=base, files=tuple(files), plugin=plugin, skills=tuple(dirs))
         self._roots.setdefault(library, []).append(entry)
 
     @property
@@ -224,13 +246,62 @@ class LibraryFiles:
         for entry in self._roots.get(library, ()):
             if target_rel not in entry.files or not entry.admits(scope):
                 continue
-            target = (entry.base / rel).resolve()
-            if not target.is_relative_to(entry.base) or not target.is_file():
-                continue
-            if self._revalidate is not None:
-                self._revalidate(target)
-            return target.read_text(encoding="utf-8", errors="replace")
+            target = entry.holds(rel)
+            if target is not None:
+                return self._serve(target)
         return None
+
+    def read_any(self, library: str, rel: str, scope: Scope = EVERYTHING) -> str | None:
+        """Read anything else under a plugin root of ``library``, or None.
+
+        The fallback for the addresses a kit's own text points at: a skill that
+        factors material up out of itself cites it from the plugin root, which
+        is what ``${CLAUDE_PLUGIN_ROOT}`` names, and neither the citation nor
+        the placeholder knows anything about a ``files:`` glob. So the plugin
+        root -- not the harvested list -- is the ceiling here, and everything
+        the harvest leaves out of a *listing* stays out of one: what this reads
+        is unlisted, and ``files()`` is unchanged.
+
+        Hidden paths are refused as everywhere else, and ``_Root.holds`` decides
+        containment. Roots are tried in the order the library declares its
+        plugins, so a file two plugins ship is the first one's, as it is for a
+        harvested file.
+        """
+        if harvest.hidden(Path(rel)):
+            return None
+        for entry in self._roots.get(library, ()):
+            if not entry.admits(scope):
+                continue
+            target = entry.holds(rel)
+            if target is not None:
+                return self._serve(target)
+        return None
+
+    def read_under(self, library: str, root: Path, rel: str) -> str | None:
+        """Read ``rel`` under one plugin root of ``library``, or None.
+
+        What ``read_any`` does for every root, for the one root a caller
+        already has: ``uris.py``'s skill-level fallback, where the root is the
+        skill's own plugin's and the scope was decided by that skill being
+        visible at all. Same rule, so a path inside any of that plugin's skill
+        directories is refused here too -- reaching one through a sibling's
+        address would serve one file at two addresses.
+        """
+        base = root.resolve()
+        for entry in self._roots.get(library, ()):
+            if entry.base != base:
+                continue
+            target = entry.holds(rel)
+            if target is not None:
+                return self._serve(target)
+        return None
+
+    def _serve(self, target: Path) -> str:
+        # A live fetch's file may have moved since it was copied, and a read is
+        # the only thing that asks.
+        if self._revalidate is not None:
+            self._revalidate(target)
+        return target.read_text(encoding="utf-8", errors="replace")
 
 
 class SkillIndex:

@@ -132,6 +132,19 @@ def inside(path: Path, base: Path) -> Path | None:
     return target if target.is_relative_to(base) else None
 
 
+def readable(base: Path, rel: str | Path) -> Path | None:
+    """``base / rel`` resolved, when it is a regular file inside ``base``.
+
+    The guard every read shares -- a skill's own file, its plugin root's, and a
+    library file (``uris.py``, ``skills.py``). Resolving before comparing is
+    what refuses a ``..`` that climbs out and a symlink pointing out of the
+    tree; a directory and a missing path are refused because neither is a body.
+    """
+    root = base.resolve()
+    target = inside(root / rel, root)
+    return target if target is not None and target.is_file() else None
+
+
 def files(root: Path, kind: str, globs: Globs) -> list[Path]:
     """Every regular file matching the kind's globs, inside root, sorted."""
     base = root.resolve()
