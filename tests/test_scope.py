@@ -115,6 +115,20 @@ def test_admits_labels_asks_only_the_category_and_tag_halves():
     assert not scope.admits("n8n", "design", [])
 
 
+def test_one_bare_string_is_one_value_not_its_characters():
+    """A string is an iterable, so a caller writing the scalar form used to get
+    a scope of one group per *character* -- a decision about who sees what,
+    taken silently. One string is one value, and the comma rule applies to it
+    as to any other."""
+    assert Scope.parse(tags="runbooks,oncall") == Scope.parse(tags=["runbooks,oncall"])
+    assert Scope.parse(categories="design") == Scope.parse(categories=["design"])
+
+    scope = Scope.parse(tags="a,b")
+    assert scope.tags == frozenset({frozenset({"a", "b"})})
+    assert scope.admits("any", None, ["a", "b"])
+    assert not scope.admits("any", None, ["a"])
+
+
 def test_a_scope_that_says_nothing_at_all_is_everything():
     assert Scope.parse("", [], []) == EVERYTHING
     assert Scope.parse(" ", ["", "  "], [",", ""]) == EVERYTHING

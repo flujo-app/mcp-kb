@@ -57,15 +57,28 @@ class Scope:
     def parse(
         cls,
         library: str = "",
-        categories: Iterable[str] = (),
-        tags: Iterable[str] = (),
+        categories: str | Iterable[str] = (),
+        tags: str | Iterable[str] = (),
     ) -> Scope:
         """Build one from request text: each item may carry commas."""
         return cls(
             library=library.strip(),
-            categories=frozenset(c.strip() for c in categories if c.strip()),
-            tags=parse_groups(tags),
+            categories=frozenset(c.strip() for c in _values(categories) if c.strip()),
+            tags=parse_groups(_values(tags)),
         )
+
+
+def _values(items: str | Iterable[str]) -> tuple[str, ...]:
+    """The repeated form, accepting one bare string as one value.
+
+    A request states a selector as a list because a parameter and a header may
+    both be repeated, but a caller in Python writes ``tags="runbooks,oncall"``
+    sooner or later -- and a string *is* an iterable, so without this it is
+    iterated a character at a time into the scope ``{{r}, {u}, {n}, ...}``: a
+    decision about who sees what, made silently, with no error anywhere. One
+    string is one value, and the comma rule then applies to it as to any other.
+    """
+    return (items,) if isinstance(items, str) else tuple(items)
 
 
 # The unscoped default. Frozen, so one shared instance is safe as a default.
