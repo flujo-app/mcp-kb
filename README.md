@@ -139,16 +139,109 @@ Double braces, because prompt bodies here are full of LogQL and JSON. A Claude c
 
 ## 🚀 Running it
 
-```bash
-docker run -p 8000:8000 \
-  -v mcp-kb-cache:/var/cache/mcp-kb \
-  -v "$PWD/examples/config.yaml:/etc/mcp-kb/config.yaml:ro" \
-  kubed/mcp-kb:latest
+### Docker
+
+
+Docker must be installed and running. This single-line command works in
+PowerShell, Command Prompt, and POSIX shells, from any directory:
+
+```text
+docker run --name mcp-kb -d -p 127.0.0.1:8000:8000 --mount type=volume,source=mcp-kb-cache,target=/var/cache/mcp-kb kubed/mcp-kb:latest
 ```
 
-Two mounts and that is the deployment. `examples/config.yaml` serves four pinned GitHub libraries out of the box. Then point an MCP client at `http://localhost:8000/mcp`.
+No clone or host config is needed. The image includes the example config with
+four pinned public GitHub libraries. The first start downloads those libraries
+before binding its port. `docker logs -f mcp-kb` shows progress; once ready,
+`http://localhost:8000/health` reports what loaded and the MCP URL is
+`http://localhost:8000/mcp`.
 
-The cache wants to be writable by uid **65534**, which the container runs as: a named Docker volume needs nothing, a Kubernetes `emptyDir` needs `fsGroup: 65534`.
+Stop it with `docker stop mcp-kb`; restart that same container with
+`docker start mcp-kb`. To replace its startup options, stop it and remove the
+container with `docker rm mcp-kb` before running a new command. Its named cache
+volume is retained.
+
+#### Use your own config
+
+Clone the repository and run the following commands from its root, where
+`examples/config.yaml` exists. Edit that file to choose your libraries, or use
+the path to your own existing YAML file. Stop and remove the quick-start
+container first if you used the name `mcp-kb` above.
+
+**PowerShell:**
+
+```powershell
+if (-not (Test-Path -LiteralPath ./examples/config.yaml -PathType Leaf)) { throw 'Create a config YAML file first, or run from the repository root.' }
+$configPath = (Resolve-Path -LiteralPath ./examples/config.yaml).Path
+docker run --name mcp-kb -d -p 127.0.0.1:8000:8000 --mount type=volume,source=mcp-kb-cache,target=/var/cache/mcp-kb --mount "type=bind,source=$configPath,target=/etc/mcp-kb/config.yaml,readonly" kubed/mcp-kb:latest
+```
+
+**Bash / POSIX shell:**
+
+```bash
+if [ -f ./examples/config.yaml ]; then
+  docker run --name mcp-kb -d -p 127.0.0.1:8000:8000 \
+    --mount type=volume,source=mcp-kb-cache,target=/var/cache/mcp-kb \
+    --mount "type=bind,source=$PWD/examples/config.yaml,target=/etc/mcp-kb/config.yaml,readonly" \
+    kubed/mcp-kb:latest
+else
+  printf '%s\n' 'Create a config YAML file first, or run from the repository root.' >&2
+fi
+```
+
+The host config must be a **file**. Docker's `-v` creates a missing source as a
+directory, even when its name ends in `.yaml`; mounting that directory over the
+image's config file then fails with "not a directory". `--mount` instead reports
+a missing source immediately. If a previous attempt created a directory called
+`config.yaml`, use a real YAML file at the intended path.
+
+The config is read-only; the cache is not, and wants to be a **named volume**
+rather than a bind mount — a named volume inherits the image's ownership of
+`/var/cache/mcp-kb` and needs nothing further, where a host directory arrives
+owned by whoever made it.
+
+The container runs as uid **65534**; a custom cache directory must be writable
+by that user. A named volume handles this automatically.
+
+For private sources, add `-e GITHUB_TOKEN` before the image name to pass a
+variable through for an `{env: GITHUB_TOKEN}` reference in the config. The
+public example needs no token. Never put a credential in a source URL; the
+server refuses one that carries it.
+
+### Python without Docker
+
+Use Python 3.11 or newer. Clone the repository and create an isolated environment
+(skip the first two commands if you are already in the checkout):
+
+```text
+git clone https://github.com/kubed-io/mcp-kb.git
+cd mcp-kb
+python -m venv .venv
+```
+
+In **PowerShell** (no environment activation required):
+
+```powershell
+./.venv/Scripts/python.exe -m pip install .
+./.venv/Scripts/mcp-kb.exe --config ./examples/config.yaml --cache-dir ./.cache/mcp-kb --host 127.0.0.1
+```
+
+In a **POSIX shell**:
+
+```bash
+./.venv/bin/python -m pip install .
+./.venv/bin/mcp-kb --config ./examples/config.yaml --cache-dir ./.cache/mcp-kb --host 127.0.0.1
+```
+
+If you already installed the release wheel, run `mcp-kb` with those same
+`--config`, `--cache-dir`, and `--host` arguments. If you copied the config to
+the checkout root, use `--config ./config.yaml` instead. The CLI does not search
+the current directory: its defaults remain `/etc/mcp-kb/config.yaml` and
+`/var/cache/mcp-kb`, including on Windows. Both flags are therefore explicit in
+the native commands.
+
+This serves the same HTTP endpoint as Docker. Stop the Docker instance first,
+or add `--port 8001` to the native command to run both. For a client that launches
+the server over pipes, add `--transport stdio` instead.
 
 📖 [Deployment](https://github.com/kubed-io/mcp-kb/wiki/Deployment) · [Installing](https://github.com/kubed-io/mcp-kb/wiki/Installing)
 

@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Docker quick start works without a checkout; native setup documents explicit config and cache paths on Windows and POSIX systems.
+
 ## [0.1.0] - 2026-09-18
 
 The first release. **mcp-kb** is an MCP knowledge base: skills, prompts and agent
