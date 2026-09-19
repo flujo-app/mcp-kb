@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Discover and load verified skills in MCP Skills clients through `skills/list` and `skills/get`.
+
 ## [0.1.0] - 2026-09-18
 
 The first release. **mcp-kb** is an MCP knowledge base: skills, prompts and agent

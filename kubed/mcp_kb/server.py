@@ -75,6 +75,7 @@ from .mcp import prompts, resources, tools
 from .mcp.announce import AnnounceChanges
 from .mcp.pins import RefuseEmptyScope, what_is_wrong
 from .mcp.request import client_reads_resources, client_uses_prompts
+from .mcp.skills import AdvertiseLegacySkills, SkillsExtension
 from .plugins import Fetch, Plugin, declared_plugins, marketplace_fetches
 from .plugins.marketplace import find_marketplace, read_marketplace
 
@@ -152,6 +153,13 @@ class KnowledgeBase:
         )
 
         resources.register(self.mcp, lambda: self.snapshot.catalogue)
+        self.mcp.add_extension(
+            SkillsExtension(
+                lambda: self.snapshot.catalogue,
+                lambda scope: what_is_wrong(scope, config, self.snapshot),
+            )
+        )
+        self.mcp.add_middleware(AdvertiseLegacySkills())
         resource_tools = tools.register(self.mcp, lambda: self.snapshot.catalogue)
         prompt_tools = prompts.register(self.mcp, lambda: self.snapshot)
         mirrors = dict.fromkeys(resource_tools, client_reads_resources)
