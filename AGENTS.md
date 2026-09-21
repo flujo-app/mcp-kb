@@ -165,6 +165,15 @@ Reads return **only** what was asked for. A skill body may cite
 `references/FOO.md`; citing it does not fetch it. That laziness is the point —
 keep it when changing this code.
 
+The **Skills extension** is a separate discovery surface in `mcp/skills.py`:
+`skills/list` and `skills/get` publish scoped entries from `Catalogue`, without
+expanding `resources/list` or adding mirror tools. Its complete manifests hash
+the bytes `resources/read` returns, after placeholder substitution and text
+normalization; the legacy `_manifest` continues to describe disk bytes. Both
+`server/discover` and legacy `initialize` must advertise the extension. Follow
+the snapshot getter, preserve raw frontmatter, and leave invalid skill metadata
+readable as ordinary resources without advertising an invalid extension entry.
+
 A client declares it cannot read resources with `?resources=off` or
 `X-MCP-Resources: off`, and only then is the resource mirror listed; prompts
 work the same way with `?prompts=off`. There is no protocol signal for either —

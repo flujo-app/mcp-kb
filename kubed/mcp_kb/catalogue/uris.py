@@ -52,6 +52,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+import frontmatter
+import yaml
+
 from ..mcp.scope import EVERYTHING, Scope
 from . import placeholders
 from .harvest import hidden, readable
@@ -369,6 +372,70 @@ class Catalogue:
         return list(entries.values())
 
     # -- what a scope may see -----------------------------------------------
+
+    def skill_uris(self, scope: Scope = EVERYTHING) -> list[str]:
+        """Canonical skill addresses, without generated resource indexes."""
+        return sorted(uri_for(skill) for skill in self._index.visible(scope))
+
+    def skill_entry(self, uri: str, scope: Scope = EVERYTHING) -> dict | None:
+        """A SEP-2640 entry, with digests of the content resources/read serves.
+
+        The legacy _manifest hashes disk bytes. That is not an integrity
+        manifest for the wire: SKILL.md placeholders and text newlines can
+        change on read. Read through the catalogue so scope, live revalidation,
+        substitutions and nested-skill resolution agree with resource reads.
+        Invalid frontmatter remains readable as an ordinary resource but is
+        not advertised as a conforming skill.
+        """
+        parsed = parse(uri)
+        if parsed is None:
+            return None
+        found = self._skill_at(*parsed, scope)
+        if found is None or found[1] != MAIN_FILE:
+            return None
+        skill = found[0]
+        if uri != uri_for(skill):
+            return None
+        text = self.read(uri, scope)
+        if text is None or not text.startswith("---\n"):
+            return None
+        try:
+            metadata = frontmatter.loads(text).metadata
+            # Frontmatter travels as JSON, without inventing string forms for
+            # YAML-only values that would fail a client's field-by-field check.
+            json.dumps(metadata, allow_nan=False)
+        except (yaml.YAMLError, TypeError, ValueError):
+            return None
+        description = metadata.get("description")
+        if (
+            metadata.get("name") != skill.name
+            or not isinstance(description, str)
+            or not 1 <= len(description) <= 1024
+        ):
+            return None
+
+        resources = []
+        for path in sorted(skill.path.rglob("*")):
+            relative = path.relative_to(skill.path)
+            if (
+                not path.is_file()
+                or hidden(relative)
+                or readable(skill.path, relative.as_posix()) is None
+            ):
+                continue
+            file_uri = uri_for(skill, relative.as_posix())
+            body = text if file_uri == uri else self.read(file_uri, scope)
+            if body is None:
+                continue
+            content = body.encode("utf-8")
+            resources.append(
+                {
+                    "uri": file_uri,
+                    "digest": f"sha256:{hashlib.sha256(content).hexdigest()}",
+                    "size": len(content),
+                }
+            )
+        return {"uri": uri, "frontmatter": metadata, "resources": resources}
 
     def _library_files(self, library: str, scope: Scope) -> list[str]:
         """The library-level files this caller may see, empty when none are.

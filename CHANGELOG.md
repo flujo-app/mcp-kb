@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Discover and load verified skills in MCP Skills clients through `skills/list` and `skills/get`.
+
 ### Fixed
 
 - Docker quick start works without a checkout; native setup documents explicit config and cache paths on Windows and POSIX systems.
