@@ -92,6 +92,7 @@ jobs:
         ref: ${{ inputs.tag }}
         # setuptools_scm derives the version from git history, not just HEAD.
         fetch-depth: 0
+        persist-credentials: false
 
     - name: Authenticate to GCP
       if: env.PUSH == 'true'
